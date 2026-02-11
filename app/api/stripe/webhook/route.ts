@@ -5,7 +5,7 @@ import { supabaseServer } from "@/lib/supabaseServer";
 export const runtime = "nodejs";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-01-27.acacia",
+  // apiVersion intentionally omitted to avoid TS mismatch across stripe package versions
 });
 
 function toIsoOrNull(unixSeconds?: number | null) {
@@ -70,12 +70,12 @@ export async function POST(req: Request) {
   }
 
   try {
-    // 1) Checkout completed => company_id in metadata
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
       const company_id = String(session.metadata?.company_id || "").trim();
-      const customerId = (typeof session.customer === "string" ? session.customer : session.customer?.id) || null;
+      const customerId =
+        (typeof session.customer === "string" ? session.customer : session.customer?.id) || null;
       const subscriptionId =
         (typeof session.subscription === "string" ? session.subscription : session.subscription?.id) || null;
 
@@ -99,7 +99,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     }
 
-    // 2) Subscription updated => sync status/period_end/price_id
     if (
       event.type === "customer.subscription.updated" ||
       event.type === "customer.subscription.created" ||
@@ -107,10 +106,10 @@ export async function POST(req: Request) {
     ) {
       const sub = event.data.object as Stripe.Subscription;
 
-      const customerId = (typeof sub.customer === "string" ? sub.customer : sub.customer?.id) || null;
+      const customerId =
+        (typeof sub.customer === "string" ? sub.customer : sub.customer?.id) || null;
       const priceId = sub.items.data?.[0]?.price?.id ?? null;
 
-      // Find company by subscription id (preferred) or customer id (fallback)
       let company_id: string | null = null;
 
       const bySub = await supabaseServer
@@ -130,7 +129,6 @@ export async function POST(req: Request) {
         if (byCustomer.data?.company_id) company_id = byCustomer.data.company_id;
       }
 
-      // If still missing, try metadata (if you add it later)
       if (!company_id) {
         company_id = String((sub as any).metadata?.company_id || "").trim() || null;
       }
@@ -149,7 +147,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     }
 
-    // ignore others
     return NextResponse.json({ received: true });
   } catch (err: any) {
     return NextResponse.json({ error: "webhook_handler_failed", details: err?.message }, { status: 500 });
