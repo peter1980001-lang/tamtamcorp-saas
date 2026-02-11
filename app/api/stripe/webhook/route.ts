@@ -86,13 +86,16 @@ export async function POST(req: Request) {
 
         const priceId = sub.items.data?.[0]?.price?.id ?? null;
 
+        // Stripe typings sometimes lag behind actual fields -> safe access
+        const currentPeriodEndUnix = (sub as any).current_period_end as number | undefined;
+
         await upsertCompanyBilling({
           company_id,
           stripe_customer_id: customerId,
           stripe_subscription_id: sub.id,
           stripe_price_id: priceId,
           status: sub.status,
-          current_period_end: toIsoOrNull(sub.current_period_end),
+          current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
         });
       }
 
@@ -133,6 +136,9 @@ export async function POST(req: Request) {
         company_id = String((sub as any).metadata?.company_id || "").trim() || null;
       }
 
+      // Stripe typings sometimes lag behind actual fields -> safe access
+      const currentPeriodEndUnix = (sub as any).current_period_end as number | undefined;
+
       if (company_id) {
         await upsertCompanyBilling({
           company_id,
@@ -140,7 +146,7 @@ export async function POST(req: Request) {
           stripe_subscription_id: sub.id,
           stripe_price_id: priceId,
           status: sub.status,
-          current_period_end: toIsoOrNull(sub.current_period_end),
+          current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
         });
       }
 
