@@ -37,12 +37,13 @@ export async function checkBillingGate(company_id: string): Promise<BillingDecis
     };
   }
 
-  const { data: plan, error: pErr } = await supabaseServer
-    .from("billing_plans")
-    ✅// IMPORTANT: we read entitlements_json.rate_limits
-    .select("plan_key, entitlements_json, is_active")
-    .eq("plan_key", plan_key)
-    .maybeSingle();
+// IMPORTANT: we read entitlements_json.rate_limits
+const { data: plan, error: pErr } = await supabaseServer
+  .from("billing_plans")
+  .select("plan_key, entitlements_json, is_active")
+  .eq("plan_key", plan_key)
+  .maybeSingle();
+
 
   if (pErr || !plan || !plan.is_active) {
     return {
