@@ -10,7 +10,22 @@ export async function GET(
 ) {
   const { id: companyId } = await ctx.params;
 
-  await requireOwner(companyId);
+  // Your project’s guard signature takes 0 args
+  await requireOwner();
+
+  // Extra safety: ensure company exists (and keep a clear error)
+  const { data: company, error: cErr } = await supabaseServer
+    .from("companies")
+    .select("id")
+    .eq("id", companyId)
+    .maybeSingle();
+
+  if (cErr) {
+    return NextResponse.json({ error: "db_company_failed", details: cErr.message }, { status: 500 });
+  }
+  if (!company) {
+    return NextResponse.json({ error: "company_not_found" }, { status: 404 });
+  }
 
   const { data, error } = await supabaseServer.rpc("get_company_usage", {
     p_company_id: companyId,
@@ -21,9 +36,10 @@ export async function GET(
   }
 
   const row = Array.isArray(data) ? data[0] : data;
+
   return NextResponse.json({
-    minute_count: row?.minute_count ?? 0,
-    day_count: row?.day_count ?? 0,
+    minute_count: Number(row?.minute_count ?? 0),
+    day_count: Number(row?.day_count ?? 0),
     reset_minute: row?.reset_minute ?? null,
     reset_day: row?.reset_day ?? null,
   });
