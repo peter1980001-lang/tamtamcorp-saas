@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 type Company = { id: string; name: string; status: string; created_at: string };
 type Keys = {
@@ -14,7 +14,7 @@ type Keys = {
 type Settings = { company_id: string; limits_json: any; branding_json: any };
 type DetailResponse = { company: Company; keys: Keys | null; settings: Settings };
 
-const tabs = ["overview", "keys", "domains", "limits", "embed", "test-chat", "knowledge"] as const;
+const tabs = ["overview", "keys", "domains", "limits", "embed", "test-chat", "knowledge", "leads"] as const;
 type Tab = (typeof tabs)[number];
 
 function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
@@ -59,11 +59,12 @@ function Chip({ text }: { text: string }) {
 function mask(s: string) {
   if (!s) return "";
   if (s.length <= 10) return "********";
-  return s.slice(0, 6) + "…" + s.slice(-4);
+  return s.slice(0, 6) + "..." + s.slice(-4);
 }
 
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const id = params?.id;
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -75,14 +76,14 @@ export default function CompanyDetailPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
-  // ===== Test Chat state =====
+  // Test Chat state
   const [testToken, setTestToken] = useState<string | null>(null);
   const [testConversationId, setTestConversationId] = useState<string | null>(null);
   const [testInput, setTestInput] = useState("Hello Nova");
   const [testLog, setTestLog] = useState<{ role: string; text: string }[]>([]);
   const [testSending, setTestSending] = useState(false);
 
-  // ===== Knowledge state =====
+  // Knowledge state
   const [kbTitle, setKbTitle] = useState("Manual Admin Entry");
   const [kbText, setKbText] = useState("");
   const [kbIngesting, setKbIngesting] = useState(false);
@@ -110,7 +111,7 @@ export default function CompanyDetailPage() {
   async function copy(text: string) {
     if (!text) return;
     await navigator.clipboard.writeText(text);
-    setToast("Copied ✅");
+    setToast("Copied");
   }
 
   async function rotateKeys() {
@@ -125,13 +126,11 @@ export default function CompanyDetailPage() {
       return;
     }
 
-    setToast("Keys rotated ✅");
+    setToast("Keys rotated");
     await load();
   }
 
-  // =========================
   // Test Chat actions
-  // =========================
   async function testGetToken() {
     const pk = data?.keys?.public_key;
     if (!pk) return setToast("No public key found. Rotate keys first.");
@@ -149,11 +148,11 @@ export default function CompanyDetailPage() {
     }
 
     setTestToken(json.token);
-    setToast("Token received ✅");
+    setToast("Token received");
   }
 
   async function testStartConversation() {
-    if (!testToken) return setToast("Missing token → click Get Token");
+    if (!testToken) return setToast("Missing token. Click Get Token.");
 
     const res = await fetch("/api/widget/conversation", {
       method: "POST",
@@ -168,12 +167,12 @@ export default function CompanyDetailPage() {
 
     setTestConversationId(json.conversation.id);
     setTestLog([]);
-    setToast("Conversation started ✅");
+    setToast("Conversation started");
   }
 
   async function testSend() {
-    if (!testToken) return setToast("Missing token → click Get Token");
-    if (!testConversationId) return setToast("Missing conversation → click Start Conversation");
+    if (!testToken) return setToast("Missing token. Click Get Token.");
+    if (!testConversationId) return setToast("Missing conversation. Click Start Conversation.");
     if (!testInput.trim()) return;
 
     setTestSending(true);
@@ -204,9 +203,7 @@ export default function CompanyDetailPage() {
     setTestInput("");
   }
 
-  // =========================
   // Knowledge actions
-  // =========================
   async function ingestKnowledge() {
     if (!id) return setToast("Missing company id");
     if (!kbText.trim()) return setToast("Paste some text first");
@@ -230,19 +227,23 @@ export default function CompanyDetailPage() {
       return;
     }
 
-    setToast(`Inserted ${json.chunks} chunks ✅`);
+    setToast(`Inserted ${json.chunks} chunks`);
     setKbText("");
+  }
+
+  function goLeads() {
+    if (!id) return;
+    router.push(`/admin/companies/${id}/leads`);
   }
 
   return (
     <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, opacity: 0.65 }}>Company</div>
             <h1 style={{ fontSize: 28, margin: "4px 0 0" }}>
-              {loading ? "Loading…" : data?.company?.name || "—"}
+              {loading ? "Loading..." : data?.company?.name || "-"}
             </h1>
 
             {!loading && data?.company && (
@@ -280,17 +281,19 @@ export default function CompanyDetailPage() {
                 cursor: "pointer",
               }}
             >
-              {rotating ? "Rotating…" : "Rotate Keys"}
+              {rotating ? "Rotating..." : "Rotate Keys"}
             </button>
           </div>
         </div>
 
-        {/* Tabs */}
         <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {tabs.map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => {
+                setTab(t);
+                if (t === "leads") goLeads();
+              }}
               style={{
                 padding: "10px 12px",
                 borderRadius: 999,
@@ -306,10 +309,9 @@ export default function CompanyDetailPage() {
           ))}
         </div>
 
-        {/* Body */}
         <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
           {loading || !data ? (
-            <Card title="Loading">Fetching data…</Card>
+            <Card title="Loading">Fetching data...</Card>
           ) : (
             <>
               {tab === "overview" && (
@@ -317,7 +319,7 @@ export default function CompanyDetailPage() {
                   <Card title="Quick Summary">
                     <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.8 }}>
                       <div>
-                        <b>Public Key:</b> {data.keys?.public_key ?? "—"}
+                        <b>Public Key:</b> {data.keys?.public_key ?? "-"}
                       </div>
                       <div>
                         <b>Allowed Domains:</b> {(data.keys?.allowed_domains ?? []).length}
@@ -369,7 +371,7 @@ export default function CompanyDetailPage() {
                       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Public Key</div>
                       <div style={{ display: "flex", gap: 10 }}>
                         <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>
-                          {data.keys?.public_key ?? "—"}
+                          {data.keys?.public_key ?? "-"}
                         </code>
                         <button
                           onClick={() => copy(data.keys?.public_key ?? "")}
@@ -384,7 +386,7 @@ export default function CompanyDetailPage() {
                       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Secret Key</div>
                       <div style={{ display: "flex", gap: 10 }}>
                         <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>
-                          {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "—"}
+                          {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "-"}
                         </code>
                         <button
                           onClick={() => copy(data.keys?.secret_key ?? "")}
@@ -396,7 +398,7 @@ export default function CompanyDetailPage() {
                     </div>
 
                     <div style={{ fontSize: 12, opacity: 0.7 }}>
-                      Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}
+                      Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "-"}
                     </div>
                   </div>
                 </Card>
@@ -415,7 +417,7 @@ export default function CompanyDetailPage() {
                     )}
                   </div>
                   <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-                    (Editing UI is next – for now set via DB.)
+                    (Editing UI is next - for now set via DB.)
                   </div>
                 </Card>
               )}
@@ -476,14 +478,14 @@ export default function CompanyDetailPage() {
                   </div>
 
                   <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10, lineHeight: 1.6 }}>
-                    <div>Token: {testToken ? "✅ set" : "—"}</div>
-                    <div>Conversation: {testConversationId ?? "—"}</div>
+                    <div>Token: {testToken ? "set" : "-"}</div>
+                    <div>Conversation: {testConversationId ?? "-"}</div>
                   </div>
 
                   <div style={{ border: "1px solid #eee", borderRadius: 16, padding: 12, background: "#fafafa" }}>
                     <div style={{ maxHeight: 260, overflow: "auto", padding: 8 }}>
                       {testLog.length === 0 ? (
-                        <div style={{ opacity: 0.65, fontSize: 13 }}>No messages yet. Get token → start conversation → send.</div>
+                        <div style={{ opacity: 0.65, fontSize: 13 }}>No messages yet. Get token, start conversation, then send.</div>
                       ) : (
                         testLog.map((m, idx) => (
                           <div key={idx} style={{ marginBottom: 10 }}>
@@ -498,7 +500,7 @@ export default function CompanyDetailPage() {
                       <input
                         value={testInput}
                         onChange={(e) => setTestInput(e.target.value)}
-                        placeholder="Type a message…"
+                        placeholder="Type a message..."
                         style={{ flex: 1, padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") testSend();
@@ -509,7 +511,7 @@ export default function CompanyDetailPage() {
                         disabled={testSending}
                         style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}
                       >
-                        {testSending ? "Sending…" : "Send"}
+                        {testSending ? "Sending..." : "Send"}
                       </button>
                     </div>
                   </div>
@@ -566,14 +568,14 @@ export default function CompanyDetailPage() {
                           cursor: "pointer",
                         }}
                       >
-                        {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
+                        {kbIngesting ? "Embedding..." : "Add to Knowledge Base"}
                       </button>
 
                       <button
                         onClick={() => setTab("test-chat")}
                         style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
                       >
-                        Go to Test-Chat →
+                        Go to Test-Chat
                       </button>
                     </div>
 
@@ -583,11 +585,31 @@ export default function CompanyDetailPage() {
                   </div>
                 </Card>
               )}
+
+              {tab === "leads" && (
+                <Card title="Leads">
+                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+                    Leads are managed on a dedicated page.
+                  </div>
+                  <button
+                    onClick={goLeads}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: 12,
+                      border: "1px solid #111",
+                      background: "#111",
+                      color: "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Open Leads
+                  </button>
+                </Card>
+              )}
             </>
           )}
         </div>
 
-        {/* Toast */}
         {toast && (
           <div
             onClick={() => setToast(null)}
