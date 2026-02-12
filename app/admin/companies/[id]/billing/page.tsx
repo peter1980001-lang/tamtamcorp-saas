@@ -1,6 +1,5 @@
 import BillingClient from "./BillingClient";
 import { supabaseServer } from "@/lib/supabaseServer";
-// optional, falls du es im Projekt hast:
 // import { requireOwner } from "@/lib/adminGuard";
 
 export default async function CompanyBillingPage(props: {
@@ -8,7 +7,6 @@ export default async function CompanyBillingPage(props: {
 }) {
   const { id: companyId } = await props.params;
 
-  // Falls du serverseitig Owner-Guard nutzt, hier aktivieren:
   // await requireOwner(companyId);
 
   const [{ data: plans }, { data: billing }] = await Promise.all([
@@ -18,7 +16,7 @@ export default async function CompanyBillingPage(props: {
       .eq("is_active", true),
     supabaseServer
       .from("company_billing")
-      .select("status,plan_key,stripe_price_id,current_period_end")
+      .select("status,plan_key,stripe_price_id,current_period_end,stripe_customer_id")
       .eq("company_id", companyId)
       .maybeSingle(),
   ]);
@@ -32,7 +30,11 @@ export default async function CompanyBillingPage(props: {
         </div>
       </div>
 
-      <BillingClient companyId={companyId} plans={(plans ?? []) as any} billing={(billing ?? null) as any} />
+      <BillingClient
+        companyId={companyId}
+        plans={(plans ?? []) as any}
+        billing={(billing ?? null) as any}
+      />
     </div>
   );
 }
