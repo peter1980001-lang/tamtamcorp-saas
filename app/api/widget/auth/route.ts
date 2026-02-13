@@ -1,6 +1,15 @@
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { requireOwner } from "@/lib/adminGuard";
+
+function normalizeHostFromOrigin(origin: string) {
+  const o = String(origin || "").trim();
+  if (!o) return "";
+  return o.replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase();
+}
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -20,14 +29,27 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown_key" }, { status: 404 });
   }
 
-  // OPTIONAL allowlist check (for real sites; localhost ok if included)
-  const origin = req.headers.get("origin") || "";
-  const host = origin.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  const allowed = (keyRow.allowed_domains || []).map((d: string) => d.toLowerCase());
+  // Owner bypass:
+  // If the admin is logged in as owner, skip allowed_domains checks (admin test convenience).
+  // This does NOT affect real widget usage on client sites because they won't have the owner session cookie.
+  let isOwner = false;
+  try {
+    const auth = await requireOwner();
+    isOwner = !!auth?.ok;
+  } catch {
+    isOwner = false;
+  }
 
-  if (allowed.length > 0 && host) {
-    const ok = allowed.includes(host.toLowerCase());
-    if (!ok) return NextResponse.json({ error: "domain_not_allowed", host }, { status: 403 });
+  if (!isOwner) {
+    // Domain allowlist check for real sites
+    const origin = req.headers.get("origin") || "";
+    const host = normalizeHostFromOrigin(origin);
+    const allowed = (keyRow.allowed_domains || []).map((d: string) => String(d || "").toLowerCase());
+
+    if (allowed.length > 0 && host) {
+      const ok = allowed.includes(host);
+      if (!ok) return NextResponse.json({ error: "domain_not_allowed", host }, { status: 403 });
+    }
   }
 
   const token = jwt.sign(
