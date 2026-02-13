@@ -443,11 +443,6 @@ function buildConsentMicrocopy(meta: CompanyLeadMeta) {
   return parts.length ? `\n\nHinweis: ${parts.join(" ")}` : "";
 }
 
-function needsContact(lead: LeadRow | null) {
-  if (!lead) return false;
-  return !lead.email && !lead.phone;
-}
-
 // Structured Outputs (JSON Schema) with fallback if SDK lacks responses API
 async function runLeadAnalysisStructured(args: {
   userText: string;
@@ -646,25 +641,7 @@ async function updateLeadFromAnalysis(params: {
     .maybeSingle();
 
   lead = (updated as any) ?? lead;
-if (!lead) return { lead: null, followUp: null };
-
-// ---- Follow-up decision (ANTI LOOP) ----
-const strongCommit =
-  params.analysis.requested_action === "offer" ||
-  params.analysis.requested_action === "booking" ||
-  params.analysis.requested_action === "callback" ||
-  params.analysis.requested_action === "demo";
-
-const committedNow = newState === "committed" || strongCommit;
-
-const haveContact = !!lead.email || !!lead.phone;
-const preferred = ((lead.qualification_json || {}) as any).preferred_contact_channel ?? "unknown";
-
-const lastKey = ((lead.qualification_json || {}) as any)._last_followup_key as string | null;
-const lastAt = ((lead.qualification_json || {}) as any)._last_followup_at as string | null;
-const lastAtMs = lastAt ? new Date(lastAt).getTime() : 0;
-
-
+  if (!lead) return { lead: null, followUp: null };
 
   // ---- Follow-up decision (ANTI LOOP) ----
   const strongCommit =
@@ -712,7 +689,7 @@ const lastAtMs = lastAt ? new Date(lastAt).getTime() : 0;
     return { lead, followUp: "Bevorzugen Sie E-Mail, Telefon oder WhatsApp?" };
   }
 
-  // 3) qualifying -> ask model next_question, but do not ask contact-style question if contact already exists
+  // 3) qualifying -> ask model next_question (no loop)
   const nq = (params.analysis.next_question || "").trim();
   const nqKey = (params.analysis.next_question_key || "").trim();
   const askedRecentlySame =
@@ -843,7 +820,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "db_insert_user_failed", details: m1Err.message }, { status: 500 });
   }
 
-  // ---------------- RAG (unchanged) ----------------
+  // ---------------- RAG ----------------
   let chunks: any[] = [];
 
   let queryEmbedding: number[];
@@ -865,8 +842,7 @@ export async function POST(req: Request) {
 
   chunks = (rpcData ?? []) as any[];
 
-  // ---------------- knowledge_only strict branch (now lead-safe) ----------------
-  // Keep strict: base answer stays unknown_answer; but lead engine may add ONE follow-up question.
+  // ---------------- knowledge_only strict branch (lead-safe) ----------------
   if (cfg.mode === "knowledge_only" && (!chunks || chunks.length === 0)) {
     let finalText = cfg.unknown_answer;
 
