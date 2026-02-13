@@ -1,8 +1,8 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { requireCompanyAccess } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string; conversationId: string }> }) {
   const { id, conversationId } = await ctx.params;
@@ -15,17 +15,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string; co
   const auth = await requireCompanyAccess(company_id);
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
-  const { data: conversation, error: cErr } = await supabaseServer
+  const { data: conv, error: cErr } = await supabaseServer
     .from("conversations")
     .select("id, company_id, created_at")
     .eq("id", conversation_id)
+    .eq("company_id", company_id)
     .maybeSingle();
 
   if (cErr) return NextResponse.json({ error: "db_failed", details: cErr.message }, { status: 500 });
-  if (!conversation) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  if (String((conversation as any).company_id) !== company_id) {
-    return NextResponse.json({ error: "conversation_company_mismatch" }, { status: 403 });
-  }
+  if (!conv) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const { data: lead } = await supabaseServer
     .from("company_leads")
@@ -44,7 +42,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string; co
   if (mErr) return NextResponse.json({ error: "db_failed", details: mErr.message }, { status: 500 });
 
   return NextResponse.json({
-    conversation,
+    conversation: conv,
     lead: lead ?? null,
     messages: messages ?? [],
   });

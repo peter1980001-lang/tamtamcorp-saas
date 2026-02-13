@@ -1,13 +1,16 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-function getSupabaseAuthServer() {
-  const cookieStore = cookies();
+// Self-contained Supabase auth server client for Next.js App Router (server).
+async function getSupabaseAuthServer() {
+  const cookieStore = await cookies();
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url || !anon) throw new Error("missing_supabase_env_for_auth");
+  if (!url || !anon) {
+    throw new Error("missing_supabase_env_for_auth");
+  }
 
   return createServerClient(url, anon, {
     cookies: {
@@ -24,20 +27,29 @@ function getSupabaseAuthServer() {
   });
 }
 
+type Role = "owner" | "admin" | "agent" | "viewer";
+
 type GuardResult =
-  | { ok: true; status: 200; user_id: string; role: "platform_owner" | "admin" | "agent" | "viewer"; company_id?: string }
+  | { ok: true; status: 200; user_id: string; role: Role; company_id?: string }
   | { ok: false; status: 401 | 403; error: string };
 
 async function getAuthUserId(): Promise<string | null> {
-  const supabase = getSupabaseAuthServer();
+  const supabase = await getSupabaseAuthServer();
   const { data, error } = await supabase.auth.getUser();
   if (error || !data?.user?.id) return null;
   return data.user.id;
 }
 
-// PLATFORM OWNER via env
-async function isPlatformOwner(): Promise<{ ok: boolean; user_id?: string }> {
-  const supabase = getSupabaseAuthServer();
+/**
+ * OWNER RULE:
+ * - Owner is identified by whitelist of emails OR a single OWNER_USER_ID.
+ *
+ * Pick ONE method:
+ *  A) OWNER_EMAILS="a@b.com,c@d.com"
+ *  B) OWNER_USER_ID="<uuid>"
+ */
+async function isOwner(): Promise<{ ok: boolean; user_id?: string }> {
+  const supabase = await getSupabaseAuthServer();
   const { data } = await supabase.auth.getUser();
   const user = data?.user;
   if (!user?.id) return { ok: false };
@@ -57,24 +69,25 @@ async function isPlatformOwner(): Promise<{ ok: boolean; user_id?: string }> {
 }
 
 export async function requireOwner(): Promise<GuardResult> {
-  const o = await isPlatformOwner();
+  const o = await isOwner();
   if (!o.user_id) return { ok: false, status: 401, error: "unauthorized" };
   if (!o.ok) return { ok: false, status: 403, error: "forbidden" };
-  return { ok: true, status: 200, user_id: o.user_id, role: "platform_owner" };
+  return { ok: true, status: 200, user_id: o.user_id, role: "owner" };
 }
 
 /**
- * Company access: platform_owner OR member of company_admins for that company.
+ * Company access guard:
+ * - Owner always allowed
+ * - Otherwise checks company_admins mapping for (company_id, user_id)
  */
 export async function requireCompanyAccess(company_id: string): Promise<GuardResult> {
   const user_id = await getAuthUserId();
   if (!user_id) return { ok: false, status: 401, error: "unauthorized" };
 
-  // platform owner always allowed
-  const o = await isPlatformOwner();
-  if (o.ok) return { ok: true, status: 200, user_id, role: "platform_owner", company_id };
+  // Owner is always allowed
+  const o = await isOwner();
+  if (o.ok) return { ok: true, status: 200, user_id, role: "owner", company_id };
 
-  // check membership in company_admins
   const { supabaseServer } = await import("@/lib/supabaseServer");
 
   const { data, error } = await supabaseServer
@@ -86,10 +99,15 @@ export async function requireCompanyAccess(company_id: string): Promise<GuardRes
 
   if (error || !data) return { ok: false, status: 403, error: "forbidden" };
 
-  const role = String((data as any).role || "admin") as any;
+  const role = String((data as any).role || "admin") as Role;
   return { ok: true, status: 200, user_id, role, company_id };
 }
 
-// Backward compat: alte Routes bauen weiter
-export const requireOwnerOrCompanyAdmin = requireCompanyAccess;
-export const requireCompanyAdmin = requireCompanyAccess;
+/**
+ * Backwards-compat alias:
+ * Some routes still call requireOwnerOrCompanyAdmin(company_id)
+ * -> keep this to avoid build errors
+ */
+export async function requireOwnerOrCompanyAdmin(company_id: string): Promise<GuardResult> {
+  return requireCompanyAccess(company_id);
+}
