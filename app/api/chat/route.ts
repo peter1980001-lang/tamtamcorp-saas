@@ -1,3 +1,6 @@
+console.log("SUPABASE_URL exists?", !!process.env.NEXT_PUBLIC_SUPABASE_URL, !!process.env.SUPABASE_URL);
+console.log("SUPABASE_ANON exists?", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+console.log("SUPABASE_SERVICE exists?", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import OpenAI from "openai";
