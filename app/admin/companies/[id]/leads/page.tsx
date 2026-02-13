@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 type Lead = {
   id: string;
@@ -79,6 +79,7 @@ function pill(band: string) {
 
 export default function CompanyLeadsPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const id = params?.id;
 
   const [loading, setLoading] = useState(true);
@@ -92,15 +93,15 @@ export default function CompanyLeadsPage() {
     if (!id) return;
     setLoading(true);
     const res = await fetch(`/api/admin/companies/${id}/leads`);
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     setLoading(false);
 
     if (!res.ok) {
-      setToast(json.error || "load_failed");
+      setToast((json && (json.error || json.details)) || "load_failed");
       return;
     }
 
-    setLeads(json.leads || []);
+    setLeads(json?.leads || []);
   }
 
   useEffect(() => {
@@ -134,15 +135,20 @@ export default function CompanyLeadsPage() {
       body: JSON.stringify({ lead_id, ...patch }),
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
 
     if (!res.ok) {
-      setToast(json.error || "update_failed");
+      setToast((json && (json.error || json.details)) || "update_failed");
       return;
     }
 
     setLeads((prev) => prev.map((x) => (x.id === lead_id ? json.lead : x)));
     setToast("Saved");
+  }
+
+  function openConversation(conversationId: string) {
+    if (!id) return;
+    router.push(`/admin/companies/${id}/conversations/${conversationId}`);
   }
 
   return (
@@ -152,6 +158,7 @@ export default function CompanyLeadsPage() {
           <div>
             <div style={{ fontSize: 12, opacity: 0.65 }}>Company Leads</div>
             <h1 style={{ fontSize: 28, margin: "4px 0 0" }}>Leads</h1>
+
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
               <Chip text={`Hot: ${counts.hot}`} />
               <Chip text={`Warm: ${counts.warm}`} />
@@ -160,20 +167,39 @@ export default function CompanyLeadsPage() {
               <Chip text={`Contacted: ${counts.contacted}`} />
               <Chip text={`Closed: ${counts.closed}`} />
             </div>
+
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
+              Tip: Klick auf Conversation-ID öffnet Conversation Viewer.
+            </div>
           </div>
 
-          <button
-            onClick={load}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #ddd",
-              background: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            Refresh
-          </button>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              onClick={() => router.push(`/admin/companies/${id}/conversations`)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: "1px solid #ddd",
+                background: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Conversations
+            </button>
+
+            <button
+              onClick={load}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 12,
+                border: "1px solid #ddd",
+                background: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -210,11 +236,7 @@ export default function CompanyLeadsPage() {
               <Card
                 key={l.id}
                 title={`${l.score_band.toUpperCase()} | Score ${l.score_total} | Intent ${l.intent_score}`}
-                right={
-                  <span style={{ padding: "6px 10px", borderRadius: 999, ...pill(l.score_band) }}>
-                    {l.score_band}
-                  </span>
-                }
+                right={<span style={{ padding: "6px 10px", borderRadius: 999, ...pill(l.score_band) }}>{l.score_band}</span>}
               >
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -235,7 +257,21 @@ export default function CompanyLeadsPage() {
                       <b>Phone:</b> {l.phone || "-"}
                     </div>
                     <div>
-                      <b>Conversation:</b> <code>{l.conversation_id}</code>
+                      <b>Conversation:</b>{" "}
+                      <button
+                        onClick={() => openConversation(l.conversation_id)}
+                        style={{
+                          border: "1px solid #ddd",
+                          background: "#fff",
+                          padding: "4px 8px",
+                          borderRadius: 10,
+                          cursor: "pointer",
+                          fontFamily: "monospace",
+                        }}
+                        title="Open conversation"
+                      >
+                        {l.conversation_id}
+                      </button>
                     </div>
                   </div>
 
@@ -302,6 +338,7 @@ export default function CompanyLeadsPage() {
               padding: "10px 14px",
               borderRadius: 999,
               fontSize: 13,
+              cursor: "pointer",
             }}
             onClick={() => setToast(null)}
           >
