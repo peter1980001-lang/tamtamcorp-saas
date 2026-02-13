@@ -1,26 +1,28 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-// Self-contained Supabase auth server client for Next.js App Router (server).
-async function getSupabaseAuthServer() {
-  const cookieStore = await cookies();
+// NOTE: In Next.js (App Router) cookies() can be async in some environments.
+// We handle both sync/async safely.
+async function getCookieStore() {
+  const c: any = cookies();
+  return typeof c?.then === "function" ? await c : c;
+}
 
+function getSupabaseAuthServerWithCookieStore(cookieStore: any) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url || !anon) {
-    throw new Error("missing_supabase_env_for_auth");
-  }
+  if (!url || !anon) throw new Error("missing_supabase_env_for_auth");
 
   return createServerClient(url, anon, {
     cookies: {
-      get(name) {
+      get(name: string) {
         return cookieStore.get(name)?.value;
       },
-      set(name, value, options) {
+      set(name: string, value: string, options: any) {
         cookieStore.set({ name, value, ...options });
       },
-      remove(name, options) {
+      remove(name: string, options: any) {
         cookieStore.set({ name, value: "", ...options });
       },
     },
@@ -34,7 +36,8 @@ type GuardResult =
   | { ok: false; status: 401 | 403; error: string };
 
 async function getAuthUserId(): Promise<string | null> {
-  const supabase = await getSupabaseAuthServer();
+  const cookieStore = await getCookieStore();
+  const supabase = getSupabaseAuthServerWithCookieStore(cookieStore);
   const { data, error } = await supabase.auth.getUser();
   if (error || !data?.user?.id) return null;
   return data.user.id;
@@ -42,14 +45,14 @@ async function getAuthUserId(): Promise<string | null> {
 
 /**
  * OWNER RULE:
- * - Owner is identified by whitelist of emails OR a single OWNER_USER_ID.
- *
- * Pick ONE method:
- *  A) OWNER_EMAILS="a@b.com,c@d.com"
- *  B) OWNER_USER_ID="<uuid>"
+ * Prefer email whitelist:
+ *   OWNER_EMAILS="a@b.com,c@d.com"
+ * Optional fallback:
+ *   OWNER_USER_ID="<uuid>"
  */
 async function isOwner(): Promise<{ ok: boolean; user_id?: string }> {
-  const supabase = await getSupabaseAuthServer();
+  const cookieStore = await getCookieStore();
+  const supabase = getSupabaseAuthServerWithCookieStore(cookieStore);
   const { data } = await supabase.auth.getUser();
   const user = data?.user;
   if (!user?.id) return { ok: false };
@@ -68,6 +71,8 @@ async function isOwner(): Promise<{ ok: boolean; user_id?: string }> {
   return { ok: false, user_id: user.id };
 }
 
+// ---- Public Guards ----
+
 export async function requireOwner(): Promise<GuardResult> {
   const o = await isOwner();
   if (!o.user_id) return { ok: false, status: 401, error: "unauthorized" };
@@ -76,15 +81,14 @@ export async function requireOwner(): Promise<GuardResult> {
 }
 
 /**
- * Company access guard:
- * - Owner always allowed
- * - Otherwise checks company_admins mapping for (company_id, user_id)
+ * Company access for Admin UI routes:
+ * - Owner -> always allowed for any company
+ * - Otherwise must exist in company_admins with matching company_id + user_id
  */
 export async function requireCompanyAccess(company_id: string): Promise<GuardResult> {
   const user_id = await getAuthUserId();
   if (!user_id) return { ok: false, status: 401, error: "unauthorized" };
 
-  // Owner is always allowed
   const o = await isOwner();
   if (o.ok) return { ok: true, status: 200, user_id, role: "owner", company_id };
 
@@ -103,11 +107,10 @@ export async function requireCompanyAccess(company_id: string): Promise<GuardRes
   return { ok: true, status: 200, user_id, role, company_id };
 }
 
-/**
- * Backwards-compat alias:
- * Some routes still call requireOwnerOrCompanyAdmin(company_id)
- * -> keep this to avoid build errors
- */
-export async function requireOwnerOrCompanyAdmin(company_id: string): Promise<GuardResult> {
+// Backward-compatible aliases (so old routes won’t crash)
+export async function requireCompanyAdmin(company_id: string) {
+  return requireCompanyAccess(company_id);
+}
+export async function requireOwnerOrCompanyAdmin(company_id: string) {
   return requireCompanyAccess(company_id);
 }

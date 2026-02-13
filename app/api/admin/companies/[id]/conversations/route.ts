@@ -1,8 +1,8 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -21,7 +21,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (cErr) return NextResponse.json({ error: "db_failed", details: cErr.message }, { status: 500 });
 
-  const ids = (convs ?? []).map((c: any) => c.id);
+  const ids = (convs ?? []).map((c) => c.id);
   if (ids.length === 0) return NextResponse.json({ conversations: [] });
 
   const { data: msgs, error: mErr } = await supabaseServer
