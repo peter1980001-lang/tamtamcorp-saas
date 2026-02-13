@@ -702,54 +702,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "conversation_company_mismatch" }, { status: 403 });
   }
 
-const billing = await loadCompanyEntitlements(company_id);
-const features = billing.entitlements?.features || {};
-const chatEnabled = !!features.chat;
+  const billing = await loadCompanyEntitlements(company_id);
+  const features = billing.entitlements?.features || {};
+  const chatEnabled = !!features.chat;
 
-// Owner-Bypass for Admin Test-Chat only
-let ownerBypass = false;
-try {
-  const auth = await requireOwner();
-  ownerBypass = !!auth?.ok;
-} catch {
-  ownerBypass = false;
-}
+  // Owner-Bypass for Admin Test-Chat only
+  let ownerBypass = false;
+  try {
+    const auth = await requireOwner();
+    ownerBypass = !!auth?.ok;
+  } catch {
+    ownerBypass = false;
+  }
 
-if ((!chatEnabled || !isPayingStatus(billing.status)) && !ownerBypass) {
-  return NextResponse.json(
-    {
-      error: "payment_required",
-      status: billing.status,
-      plan: billing.plan_key,
-      hint: "subscription_required",
-    },
-    { status: 402 }
-  );
-}
-const billing = await loadCompanyEntitlements(company_id);
-const features = billing.entitlements?.features || {};
-const chatEnabled = !!features.chat;
-
-// Owner-Bypass for Admin Test-Chat only
-let ownerBypass = false;
-try {
-  const auth = await requireOwner();
-  ownerBypass = !!auth?.ok;
-} catch {
-  ownerBypass = false;
-}
-
-if ((!chatEnabled || !isPayingStatus(billing.status)) && !ownerBypass) {
-  return NextResponse.json(
-    {
-      error: "payment_required",
-      status: billing.status,
-      plan: billing.plan_key,
-      hint: "subscription_required",
-    },
-    { status: 402 }
-  );
-}
+  if ((!chatEnabled || !isPayingStatus(billing.status)) && !ownerBypass) {
+    return NextResponse.json(
+      {
+        error: "payment_required",
+        status: billing.status,
+        plan: billing.plan_key,
+        hint: "subscription_required",
+      },
+      { status: 402 }
+    );
+  }
 
   const cfg = await loadCompanyConfig(company_id);
   const leadMeta = await loadCompanyLeadMeta(company_id);
