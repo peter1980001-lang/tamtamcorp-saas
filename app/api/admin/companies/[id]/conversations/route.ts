@@ -1,18 +1,17 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { requireOwner } from "@/lib/adminGuard";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwnerOrCompanyAdmin(company_id);
-  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
-
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
 
-  // Get conversations
+  const auth = await requireCompanyAccess(company_id);
+  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
+
   const { data: convs, error: cErr } = await supabaseServer
     .from("conversations")
     .select("id, company_id, created_at")
@@ -22,10 +21,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (cErr) return NextResponse.json({ error: "db_failed", details: cErr.message }, { status: 500 });
 
-  const ids = (convs ?? []).map((c) => c.id);
+  const ids = (convs ?? []).map((c: any) => c.id);
   if (ids.length === 0) return NextResponse.json({ conversations: [] });
 
-  // Fetch latest message timestamp per conversation (simple, robust approach)
   const { data: msgs, error: mErr } = await supabaseServer
     .from("messages")
     .select("conversation_id, created_at")
@@ -41,7 +39,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     if (!lastByConv[cid]) lastByConv[cid] = String((m as any).created_at);
   }
 
-  // Attach lead snapshot (if exists) per conversation
   const { data: leads, error: lErr } = await supabaseServer
     .from("company_leads")
     .select("conversation_id, score_total, score_band, lead_state, status, email, phone, created_at")
