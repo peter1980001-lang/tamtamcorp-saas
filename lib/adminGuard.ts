@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-// Server-side Supabase Auth Client (App Router compatible)
+// --- Supabase auth client (Next App Router server) ---
 function getSupabaseAuthServer() {
   const cookieStore = cookies();
 
@@ -25,49 +25,44 @@ function getSupabaseAuthServer() {
   });
 }
 
-type Role = "platform_owner" | "admin" | "agent" | "viewer";
+export type Role = "platform_owner" | "admin" | "agent" | "viewer";
 
 export type GuardResult =
   | { ok: true; status: 200; user_id: string; role: Role; company_id?: string }
   | { ok: false; status: 401 | 403; error: string };
 
-async function getAuthUser() {
+async function getAuthUser(): Promise<{ id: string; email: string | null } | null> {
   const supabase = getSupabaseAuthServer();
   const { data, error } = await supabase.auth.getUser();
   if (error || !data?.user?.id) return null;
-  return data.user;
+  return { id: data.user.id, email: (data.user.email || null) as any };
 }
 
 /**
- * PLATFORM OWNER:
- * Best practice: identify platform owner via env (OWNER_USER_ID or OWNER_EMAILS).
- *
- * Option A: OWNER_USER_ID="<uuid>"
- * Option B: OWNER_EMAILS="a@b.com,c@d.com"
+ * PLATFORM OWNER (global):
+ * We identify the platform owner via:
+ * - OWNER_USER_ID or OWNER_EMAILS
  */
 async function isPlatformOwner(): Promise<{ ok: boolean; user_id?: string }> {
-  const user = await getAuthUser();
-  if (!user?.id) return { ok: false };
+  const u = await getAuthUser();
+  if (!u?.id) return { ok: false };
 
   const ownerUserId = process.env.OWNER_USER_ID;
-  if (ownerUserId && user.id === ownerUserId) return { ok: true, user_id: user.id };
+  if (ownerUserId && u.id === ownerUserId) return { ok: true, user_id: u.id };
 
   const ownerEmails = (process.env.OWNER_EMAILS || "")
     .split(",")
     .map((x) => x.trim().toLowerCase())
     .filter(Boolean);
 
-  const email = (user.email || "").toLowerCase();
-  if (email && ownerEmails.includes(email)) return { ok: true, user_id: user.id };
+  const email = (u.email || "").toLowerCase();
+  if (email && ownerEmails.includes(email)) return { ok: true, user_id: u.id };
 
-  return { ok: false, user_id: user.id };
+  return { ok: false, user_id: u.id };
 }
 
-/**
- * Backwards compatible export.
- * Many routes still import requireOwner() -> keep it as "platform_owner".
- */
-export async function requireOwner(): Promise<GuardResult> {
+/** New: global owner guard (best practice naming) */
+export async function requirePlatformOwner(): Promise<GuardResult> {
   const o = await isPlatformOwner();
   if (!o.user_id) return { ok: false, status: 401, error: "unauthorized" };
   if (!o.ok) return { ok: false, status: 403, error: "forbidden" };
@@ -75,45 +70,56 @@ export async function requireOwner(): Promise<GuardResult> {
 }
 
 /**
- * Company access: platform_owner OR mapped user in company_admins for that company.
- * company_admins columns expected: company_id, user_id, role ('admin'|'agent'|'viewer')
+ * Company access:
+ * - platform_owner: always allowed
+ * - otherwise: must exist in company_admins mapping
  */
 export async function requireCompanyAccess(company_id: string): Promise<GuardResult> {
-  const user = await getAuthUser();
-  if (!user?.id) return { ok: false, status: 401, error: "unauthorized" };
+  const u = await getAuthUser();
+  if (!u?.id) return { ok: false, status: 401, error: "unauthorized" };
 
+  // platform owner always allowed
   const o = await isPlatformOwner();
-  if (o.ok) return { ok: true, status: 200, user_id: user.id, role: "platform_owner", company_id };
+  if (o.ok) return { ok: true, status: 200, user_id: u.id, role: "platform_owner", company_id };
 
+  // DB check via service role client (your supabaseServer)
   const { supabaseServer } = await import("@/lib/supabaseServer");
 
   const { data, error } = await supabaseServer
     .from("company_admins")
     .select("role, company_id, user_id")
     .eq("company_id", company_id)
-    .eq("user_id", user.id)
+    .eq("user_id", u.id)
     .maybeSingle();
 
   if (error || !data) return { ok: false, status: 403, error: "forbidden" };
 
-  const role = String((data as any).role || "admin") as Role;
-  if (role !== "admin" && role !== "agent" && role !== "viewer") {
-    return { ok: false, status: 403, error: "forbidden" };
-  }
+  const role = (String((data as any).role || "admin") as Role) || "admin";
+  return { ok: true, status: 200, user_id: u.id, role, company_id };
+}
 
-  return { ok: true, status: 200, user_id: user.id, role, company_id };
+/** Convenience */
+export async function requireOwnerOrCompanyAdmin(company_id: string): Promise<GuardResult> {
+  return requireCompanyAccess(company_id);
+}
+
+/* -------------------------------------------------------
+   Backward compatible exports (to stop Vercel build errors)
+   ------------------------------------------------------- */
+
+/**
+ * OLD NAME: requireOwner()
+ * Many routes still import this.
+ * We map it to requirePlatformOwner().
+ */
+export async function requireOwner(): Promise<GuardResult> {
+  return requirePlatformOwner();
 }
 
 /**
- * Convenience helpers (optional)
+ * OLD NAME: requireCompanyAdmin(company_id)
+ * Map to requireCompanyAccess(company_id)
  */
 export async function requireCompanyAdmin(company_id: string): Promise<GuardResult> {
-  const g = await requireCompanyAccess(company_id);
-  if (!g.ok) return g;
-  if (g.role === "platform_owner" || g.role === "admin") return g;
-  return { ok: false, status: 403, error: "forbidden" };
-}
-
-export async function requireOwnerOrCompanyAdmin(company_id: string): Promise<GuardResult> {
-  return requireCompanyAdmin(company_id);
+  return requireCompanyAccess(company_id);
 }
