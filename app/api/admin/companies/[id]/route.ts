@@ -1,8 +1,8 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { requireCompanyAccess } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
@@ -18,28 +18,25 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     .eq("id", company_id)
     .maybeSingle();
 
-  if (cErr || !company) {
-    return NextResponse.json({ error: "company_not_found", details: cErr?.message }, { status: 404 });
-  }
+  if (cErr) return NextResponse.json({ error: "db_failed", details: cErr.message }, { status: 500 });
+  if (!company) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  // IMPORTANT: only expose PUBLIC key to UI
-  const { data: keyRow, error: kErr } = await supabaseServer
+  const { data: keysRow, error: kErr } = await supabaseServer
     .from("company_keys")
-    .select("public_key, created_at")
+    .select("public_key, secret_key, created_at")
     .eq("company_id", company_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
 
-  if (kErr) {
-    return NextResponse.json({ error: "keys_lookup_failed", details: kErr.message }, { status: 500 });
-  }
+  if (kErr) return NextResponse.json({ error: "db_failed", details: kErr.message }, { status: 500 });
 
   return NextResponse.json({
-    company: {
-      ...company,
-      public_key: keyRow?.public_key ?? null,
-      keys_rotated_at: keyRow?.created_at ?? null,
-    },
+    company,
+    keys: keysRow
+      ? {
+          public_key: keysRow.public_key,
+          secret_key: keysRow.secret_key, // ok im Owner/Admin Panel
+          created_at: keysRow.created_at,
+        }
+      : null,
   });
 }
