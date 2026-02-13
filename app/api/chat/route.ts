@@ -39,23 +39,16 @@ type PlanEntitlements = {
 };
 
 function normalizeConfig(raw: any): CompanyChatConfig {
-  // Global defaults:
-  // - hybrid gives natural UX if KB isn't filled yet
-  // - knowledge_only still supported per-company if explicitly set
   const defaults: CompanyChatConfig = {
     mode: "hybrid",
     model: "gpt-4o-mini",
     temperature: 0.1,
     max_chunks: 6,
     system_prompt: "You are the company's website assistant. Be concise, factual and helpful.",
-    // Important: avoid endlessly asking for contact here - Lead Engine handles contact capture once needed
     unknown_answer:
-      "Ich habe dazu aktuell keine gesicherten Information in der Wissensdatenbank. Wenn Sie moechten, kann ich ein paar kurze Fragen stellen und dann ein Angebot oder einen Rueckruf vorbereiten.",
+      "Ich habe dazu aktuell keine gesicherten Informationen in der Wissensdatenbank. Ich kann Ihnen aber sofort helfen, die naechsten Schritte sauber vorzubereiten.",
     include_sources: false,
-    rate_limits: {
-      per_minute: 10,
-      per_day: 1000,
-    },
+    rate_limits: { per_minute: 10, per_day: 1000 },
   };
 
   const cfg = { ...defaults, ...(raw || {}) };
@@ -97,7 +90,7 @@ async function loadCompanyConfig(company_id: string): Promise<CompanyChatConfig>
   return normalizeConfig(raw);
 }
 
-// Minimal extra read for lead/legal microcopy (keeps core untouched)
+// Minimal extra read for lead/legal microcopy
 type CompanyLeadMeta = {
   company_name?: string | null;
   privacy_url?: string | null;
@@ -191,34 +184,6 @@ function capRateLimits(companyCfg: CompanyChatConfig, planEntitlements: PlanEnti
 }
 
 // ---------- Prompt builders ----------
-function buildKnowledgeOnlySystemPrompt(base: string) {
-  return (
-    base.trim() +
-    "\n\n" +
-    [
-      "STRICT RULES:",
-      "1) Only answer using the provided Context snippets.",
-      "2) If Context does not contain the answer, say you don't know and use the unknown_answer instruction.",
-      "3) Do NOT use general world knowledge.",
-      "4) Do NOT guess. Do NOT invent details.",
-      "5) Keep replies concise.",
-    ].join("\n")
-  );
-}
-
-function buildHybridSystemPrompt(base: string) {
-  return (
-    base.trim() +
-    "\n\n" +
-    [
-      "RULES:",
-      "1) Prefer the provided Context when relevant.",
-      "2) If Context is empty or not relevant, you may answer generally, but be transparent and concise.",
-      "3) Do not invent company-specific facts.",
-    ].join("\n")
-  );
-}
-
 function makeContextText(chunks: any[]) {
   return (chunks || [])
     .map((c: any, i: number) => {
@@ -236,6 +201,40 @@ function makeSourcesText(chunks: any[]) {
       return `[#${i + 1}] ${label}`;
     })
     .join("\n");
+}
+
+function buildCorePrompt(args: {
+  mode: ChatMode;
+  baseSystem: string;
+  unknownAnswer: string;
+  contextText: string;
+  leadMeta: CompanyLeadMeta;
+  leadState: any;
+}) {
+  const companyNameLine = args.leadMeta.company_name ? `Company name: ${args.leadMeta.company_name}` : "Company name: (unknown)";
+  const privacyLine = args.leadMeta.privacy_url ? `Privacy URL: ${args.leadMeta.privacy_url}` : "Privacy URL: (none)";
+
+  return [
+    args.baseSystem.trim(),
+    "",
+    "You are also a lead qualification assistant.",
+    "Your output must be a single, natural message: answer + (if appropriate) exactly ONE follow-up question.",
+    "",
+    "Hard rules:",
+    "1) Never invent company-specific facts (years, staff, prices, client list, locations, numbers) unless they appear in Context.",
+    "2) If Context is empty or not relevant, be transparent and switch to discovery: ask one question that moves the sales process forward.",
+    "3) Never ask for contact details unless user explicitly wants an offer/demo/callback/booking OR the lead state is committed.",
+    "4) If you ask for contact details, ask only once and do not ask again if already provided.",
+    "5) If mode is knowledge_only: if answer is not in Context, reply exactly with unknown_answer (and you may add ONE qualifying question only if it does not add company facts).",
+    "",
+    `Lead state snapshot (do not reveal): ${JSON.stringify(args.leadState || {})}`,
+    companyNameLine,
+    privacyLine,
+    "",
+    args.contextText ? `Context:\n${args.contextText}` : "Context: (empty)",
+    "",
+    `unknown_answer: ${args.unknownAnswer}`,
+  ].join("\n");
 }
 
 // ---------- Embedding helper ----------
@@ -267,13 +266,11 @@ function getRetryAfterSeconds(resetMinute: any, resetDay: any) {
   return Math.max(1, Math.min(secMinute || 999999, secDay || 999999));
 }
 
-// ---------- Lead Engine (Structured Outputs + DSGVO gating) ----------
+// ---------- Lead storage helpers ----------
 type LeadRow = {
   id: string;
   company_id: string;
   conversation_id: string;
-  channel: string | null;
-  source: string | null;
   lead_state: string;
   status: string;
   name: string | null;
@@ -284,30 +281,9 @@ type LeadRow = {
   intent_score: number;
   score_total: number;
   score_band: "cold" | "warm" | "hot";
-  tags: string[];
   last_touch_at: string;
   created_at: string;
   updated_at: string;
-};
-
-type LeadAnalysis = {
-  intent_level: "none" | "low" | "medium" | "high";
-  requested_action: "none" | "pricing" | "offer" | "demo" | "booking" | "callback" | "comparison" | "implementation";
-  urgency: "low" | "medium" | "high";
-  sentiment: "negative" | "neutral" | "positive";
-  pii_present: boolean;
-
-  slots: {
-    use_case: string | null;
-    timeline: "unknown" | "over_3_months" | "one_to_three_months" | "under_1_month" | "asap";
-    role: "unknown" | "decision_maker" | "influencer" | "researcher";
-    budget_band: "unknown" | "low" | "mid" | "high" | "enterprise";
-    preferred_contact_channel: "unknown" | "email" | "phone" | "whatsapp";
-  };
-
-  missing_signals: string[];
-  next_question: string;
-  next_question_key: string;
 };
 
 function extractEmail(text: string): string | null {
@@ -328,7 +304,6 @@ function extractName(text: string): string | null {
   const patterns = [
     /(?:mein name ist|ich hei(?:ss|s)e)\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\- ]{2,60})/i,
     /(?:my name is|i am)\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\- ]{2,60})/i,
-    /name\s*:\s*([A-Za-zÀ-ÖØ-öø-ÿ'’\- ]{2,60})/i,
   ];
   for (const p of patterns) {
     const m = text.match(p);
@@ -340,9 +315,7 @@ function extractName(text: string): string | null {
 async function getLead(company_id: string, conversation_id: string): Promise<LeadRow | null> {
   const { data } = await supabaseServer
     .from("company_leads")
-    .select(
-      "id, company_id, conversation_id, channel, source, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, tags, last_touch_at, created_at, updated_at"
-    )
+    .select("id, company_id, conversation_id, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, last_touch_at, created_at, updated_at")
     .eq("company_id", company_id)
     .eq("conversation_id", conversation_id)
     .maybeSingle();
@@ -370,340 +343,63 @@ async function ensureLead(company_id: string, conversation_id: string): Promise<
       tags: [],
       last_touch_at: new Date().toISOString(),
     })
-    .select(
-      "id, company_id, conversation_id, channel, source, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, tags, last_touch_at, created_at, updated_at"
-    )
+    .select("id, company_id, conversation_id, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, last_touch_at, created_at, updated_at")
     .maybeSingle();
 
   return (data as any) ?? null;
 }
 
-function calcScores(a: LeadAnalysis) {
-  const intentScore =
-    a.intent_level === "none" ? 0 : a.intent_level === "low" ? 30 : a.intent_level === "medium" ? 60 : 85;
+// Lightweight “analysis” (we keep your structured analyzer concept, but tighter):
+type LeadAnalysis = {
+  intent_level: "none" | "low" | "medium" | "high";
+  requested_action: "none" | "pricing" | "offer" | "demo" | "booking" | "callback" | "comparison" | "implementation";
+  slots: {
+    use_case: string | null;
+    timeline: "unknown" | "over_3_months" | "one_to_three_months" | "under_1_month" | "asap";
+    role: "unknown" | "decision_maker" | "influencer" | "researcher";
+    budget_band: "unknown" | "low" | "mid" | "high" | "enterprise";
+    preferred_contact_channel: "unknown" | "email" | "phone" | "whatsapp";
+  };
+};
 
-  const needScore = a.slots.use_case ? 15 : 0;
-
-  const timelineScore =
-    a.slots.timeline === "asap" || a.slots.timeline === "under_1_month"
-      ? 15
-      : a.slots.timeline === "one_to_three_months"
-      ? 10
-      : a.slots.timeline === "over_3_months"
-      ? 5
-      : 0;
-
-  const authorityScore = a.slots.role === "decision_maker" ? 12 : a.slots.role === "influencer" ? 8 : 0;
-
-  const budgetScore =
-    a.slots.budget_band === "enterprise" || a.slots.budget_band === "high"
-      ? 10
-      : a.slots.budget_band === "mid"
-      ? 6
-      : a.slots.budget_band === "low"
-      ? 3
-      : 0;
-
-  const commitmentScore =
-    a.requested_action === "offer" ||
-    a.requested_action === "booking" ||
-    a.requested_action === "callback" ||
-    a.requested_action === "demo"
-      ? 20
-      : a.requested_action === "pricing" || a.requested_action === "implementation" || a.requested_action === "comparison"
-      ? 8
-      : 0;
-
-  const urgencyScore = a.urgency === "high" ? 10 : a.urgency === "medium" ? 5 : 0;
-
-  let total = intentScore + needScore + timelineScore + authorityScore + budgetScore + commitmentScore + urgencyScore;
-  total = Math.max(0, Math.min(100, Math.floor(total)));
-
-  const band: "cold" | "warm" | "hot" = total >= 70 ? "hot" : total >= 40 ? "warm" : "cold";
-
-  return { intent_score: intentScore, score_total: total, score_band: band };
+function safeRequestedAction(text: string): LeadAnalysis["requested_action"] {
+  const t = text.toLowerCase();
+  if (/(angebot|offer|quote|kostenvoranschlag)/i.test(t)) return "offer";
+  if (/(demo|vorf(ü|u)hrung)/i.test(t)) return "demo";
+  if (/(termin|booking|kalender|call|gespr(ä|a)ch)/i.test(t)) return "booking";
+  if (/(r(ü|u)ckruf|callback)/i.test(t)) return "callback";
+  if (/(preis|pricing|kosten)/i.test(t)) return "pricing";
+  if (/(vergleich|comparison)/i.test(t)) return "comparison";
+  if (/(umsetzung|implementation|setup|einrichten)/i.test(t)) return "implementation";
+  return "none";
 }
 
-function nextLeadState(prev: string, a: LeadAnalysis, scores: { score_total: number }) {
-  const strongCommit =
-    a.requested_action === "offer" ||
-    a.requested_action === "booking" ||
-    a.requested_action === "callback" ||
-    a.requested_action === "demo";
+function buildLeadAnalysis(userText: string): LeadAnalysis {
+  const requested_action = safeRequestedAction(userText);
 
-  if (strongCommit) return "committed";
-  if (scores.score_total >= 40 && prev === "discovery") return "qualifying";
-  if (scores.score_total >= 70) return prev === "committed" ? "handoff" : "qualifying";
-  return prev || "discovery";
-}
+  let intent_level: LeadAnalysis["intent_level"] = "none";
+  if (requested_action !== "none") intent_level = "high";
+  else if (/(starten|sofort|jetzt|kaufen|beauftragen|interessiert|anfrage)/i.test(userText)) intent_level = "medium";
+  else if (/(info|fragen|warum|wie)/i.test(userText)) intent_level = "low";
 
-function buildConsentMicrocopy(meta: CompanyLeadMeta) {
-  const parts: string[] = [];
-  if (meta.privacy_url) parts.push(`Datenschutz: ${meta.privacy_url}`);
-  return parts.length ? `\n\nHinweis: ${parts.join(" ")}` : "";
-}
-
-// Structured Outputs (JSON Schema) with fallback if SDK lacks responses API
-async function runLeadAnalysisStructured(args: {
-  userText: string;
-  assistantText: string;
-  mode: ChatMode;
-  chunkHints: string[];
-  existingQualification: any;
-}): Promise<LeadAnalysis> {
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      intent_level: { type: "string", enum: ["none", "low", "medium", "high"] },
-      requested_action: {
-        type: "string",
-        enum: ["none", "pricing", "offer", "demo", "booking", "callback", "comparison", "implementation"],
-      },
-      urgency: { type: "string", enum: ["low", "medium", "high"] },
-      sentiment: { type: "string", enum: ["negative", "neutral", "positive"] },
-      pii_present: { type: "boolean" },
-      slots: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          use_case: { anyOf: [{ type: "string" }, { type: "null" }] },
-          timeline: { type: "string", enum: ["unknown", "over_3_months", "one_to_three_months", "under_1_month", "asap"] },
-          role: { type: "string", enum: ["unknown", "decision_maker", "influencer", "researcher"] },
-          budget_band: { type: "string", enum: ["unknown", "low", "mid", "high", "enterprise"] },
-          preferred_contact_channel: { type: "string", enum: ["unknown", "email", "phone", "whatsapp"] },
-        },
-        required: ["use_case", "timeline", "role", "budget_band", "preferred_contact_channel"],
-      },
-      missing_signals: { type: "array", items: { type: "string" } },
-      next_question: { type: "string" },
-      next_question_key: { type: "string" },
+  return {
+    intent_level,
+    requested_action,
+    slots: {
+      use_case: null,
+      timeline: /(asap|sofort|jetzt)/i.test(userText) ? "asap" : "unknown",
+      role: "unknown",
+      budget_band: "unknown",
+      preferred_contact_channel: /whats\s*app/i.test(userText) ? "whatsapp" : "unknown",
     },
-    required: [
-      "intent_level",
-      "requested_action",
-      "urgency",
-      "sentiment",
-      "pii_present",
-      "slots",
-      "missing_signals",
-      "next_question",
-      "next_question_key",
-    ],
   };
-
-  const system = [
-    "You are a lead qualification analyzer for a DACH SME website chatbot.",
-    "Return only valid JSON following the provided schema.",
-    "Be conservative. Do not invent user data.",
-    "If uncertain, use unknown values.",
-    "",
-    "Interpretation guidance:",
-    "- intent_level: buying intent level",
-    "- requested_action: what user wants next (pricing, offer, booking, callback, demo)",
-    "- slots.use_case: a short label or phrase describing the main use case",
-    "- slots.timeline: categorize timeline",
-    "- slots.role: decision maker vs influencer vs researcher",
-    "- slots.budget_band: rough budget band if implied",
-    "- preferred_contact_channel only if user indicates it",
-    "- missing_signals: list which of [use_case, timeline, role, budget_band, contact] are missing and important next",
-    "- next_question: exactly one short, polite German Sie-form question to collect the next most important missing signal",
-    "- Do not request sensitive data. Do not request address. Only business relevant signals.",
-  ].join("\n");
-
-  const user = [
-    `MODE: ${args.mode}`,
-    `USER_MESSAGE: ${args.userText}`,
-    `ASSISTANT_ANSWER: ${args.assistantText}`,
-    `CHUNK_HINTS: ${args.chunkHints.join(" | ")}`,
-    `KNOWN_QUALIFICATION_JSON: ${JSON.stringify(args.existingQualification || {})}`,
-  ].join("\n");
-
-  try {
-    const anyOpenAI: any = openai as any;
-    if (anyOpenAI.responses && typeof anyOpenAI.responses.create === "function") {
-      const resp = await anyOpenAI.responses.create({
-        model: "gpt-4o-mini",
-        input: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "lead_qualification",
-            schema,
-            strict: true,
-          },
-        },
-        temperature: 0,
-      });
-
-      const text = resp.output_text || "";
-      const parsed = JSON.parse(text);
-      return parsed as LeadAnalysis;
-    }
-  } catch {
-    // fall through
-  }
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    response_format: { type: "json_object" } as any,
-    messages: [
-      { role: "system", content: system + "\n\nIMPORTANT: Output must be a JSON object matching the schema keys." },
-      { role: "user", content: user + "\n\nReturn JSON only." },
-    ],
-  });
-
-  const raw = completion.choices?.[0]?.message?.content ?? "{}";
-  return JSON.parse(raw) as LeadAnalysis;
 }
 
-async function updateLeadFromAnalysis(params: {
-  company_id: string;
-  conversation_id: string;
-  analysis: LeadAnalysis;
-  meta: CompanyLeadMeta;
-  userText: string;
-}): Promise<{ lead: LeadRow | null; followUp: string | null }> {
-  const email = extractEmail(params.userText);
-  const phone = extractPhone(params.userText);
-  const name = extractName(params.userText);
-
-  const shouldCreate =
-    params.analysis.intent_level === "high" ||
-    params.analysis.intent_level === "medium" ||
-    params.analysis.requested_action !== "none" ||
-    !!email ||
-    !!phone;
-
-  let lead = shouldCreate
-    ? await ensureLead(params.company_id, params.conversation_id)
-    : await getLead(params.company_id, params.conversation_id);
-
-  if (!lead) return { lead: null, followUp: null };
-
-  const scores = calcScores(params.analysis);
-  const newState = nextLeadState(lead.lead_state, params.analysis, { score_total: scores.score_total });
-
-  const prevQual = (lead.qualification_json || {}) as any;
-
-  const nextQual = {
-    ...prevQual,
-    use_case: params.analysis.slots.use_case ?? prevQual.use_case ?? null,
-    timeline: params.analysis.slots.timeline ?? prevQual.timeline ?? "unknown",
-    role: params.analysis.slots.role ?? prevQual.role ?? "unknown",
-    budget_band: params.analysis.slots.budget_band ?? prevQual.budget_band ?? "unknown",
-    requested_action: params.analysis.requested_action,
-    urgency: params.analysis.urgency,
-    sentiment: params.analysis.sentiment,
-    preferred_contact_channel: params.analysis.slots.preferred_contact_channel ?? prevQual.preferred_contact_channel ?? "unknown",
-    missing_signals: params.analysis.missing_signals || [],
-    next_question_key: params.analysis.next_question_key || null,
-    _last_followup_key: prevQual._last_followup_key ?? null,
-    _last_followup_at: prevQual._last_followup_at ?? null,
-  };
-
-  const consents = { ...(lead.consents_json || {}) };
-
-  const contactUpdate: Record<string, any> = {};
-  if (!lead.email && email) contactUpdate.email = email;
-  if (!lead.phone && phone) contactUpdate.phone = phone;
-  if (!lead.name && name) contactUpdate.name = name;
-
-  const storingPII = Object.keys(contactUpdate).length > 0;
-  if (storingPII && !consents.contact_processing) {
-    consents.contact_processing = {
-      legal_basis: "Art6(1)(b)",
-      timestamp: new Date().toISOString(),
-      source: "user_provided",
-    };
-  }
-
-  const { data: updated } = await supabaseServer
-    .from("company_leads")
-    .update({
-      lead_state: newState,
-      intent_score: scores.intent_score,
-      score_total: scores.score_total,
-      score_band: scores.score_band,
-      qualification_json: nextQual,
-      consents_json: consents,
-      last_touch_at: new Date().toISOString(),
-      ...contactUpdate,
-    })
-    .eq("id", lead.id)
-    .select(
-      "id, company_id, conversation_id, channel, source, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, tags, last_touch_at, created_at, updated_at"
-    )
-    .maybeSingle();
-
-  lead = (updated as any) ?? lead;
-  if (!lead) return { lead: null, followUp: null };
-
-  // ---- Follow-up decision (ANTI LOOP) ----
-  const strongCommit =
-    params.analysis.requested_action === "offer" ||
-    params.analysis.requested_action === "booking" ||
-    params.analysis.requested_action === "callback" ||
-    params.analysis.requested_action === "demo";
-
-  const committedNow = newState === "committed" || strongCommit;
-
-  const haveContact = !!lead.email || !!lead.phone;
-  const preferred = ((lead.qualification_json || {}) as any).preferred_contact_channel ?? "unknown";
-
-  const lastKey = ((lead.qualification_json || {}) as any)._last_followup_key as string | null;
-  const lastAt = ((lead.qualification_json || {}) as any)._last_followup_at as string | null;
-  const lastAtMs = lastAt ? new Date(lastAt).getTime() : 0;
-
-  async function markAsked(key: string) {
-    await supabaseServer
-      .from("company_leads")
-      .update({
-        qualification_json: {
-          ...(lead?.qualification_json || {}),
-          _last_followup_key: key,
-          _last_followup_at: new Date().toISOString(),
-        },
-        last_touch_at: new Date().toISOString(),
-      })
-      .eq("id", lead!.id);
-  }
-
-  // 1) committed + missing contact -> ask ONCE
-  if (committedNow && !haveContact) {
-    if (lastKey === "contact") return { lead, followUp: null };
-    await markAsked("contact");
-    const privacy = buildConsentMicrocopy(params.meta);
-    const ask = "Wie duerfen wir Sie am besten erreichen (E-Mail oder Telefon)?" + privacy;
-    return { lead, followUp: ask };
-  }
-
-  // 2) committed + have contact but preferred channel unknown -> ask ONCE
-  if (committedNow && haveContact && preferred === "unknown") {
-    if (lastKey === "preferred_channel") return { lead, followUp: null };
-    await markAsked("preferred_channel");
-    return { lead, followUp: "Bevorzugen Sie E-Mail, Telefon oder WhatsApp?" };
-  }
-
-  // 3) qualifying -> ask model next_question (no loop)
-  const nq = (params.analysis.next_question || "").trim();
-  const nqKey = (params.analysis.next_question_key || "").trim();
-  const askedRecentlySame =
-    !!nqKey && !!lastKey && nqKey === lastKey && Date.now() - lastAtMs < 10 * 60 * 1000;
-
-  const looksLikeContactQuestion = /e-?mail|telefon|whats\s*app|erreichen|kontakt/i.test(nq);
-
-  if (newState === "qualifying" && nq && !askedRecentlySame) {
-    if (haveContact && looksLikeContactQuestion) return { lead, followUp: null };
-    if (nqKey) await markAsked(nqKey);
-    return { lead, followUp: nq };
-  }
-
-  return { lead, followUp: null };
+function calcBand(analysis: LeadAnalysis, haveContact: boolean) {
+  // Only "hot" if strong action + contact exists
+  if (analysis.requested_action !== "none" && haveContact) return { score_total: 80, score_band: "hot" as const };
+  if (analysis.intent_level === "high" || analysis.intent_level === "medium") return { score_total: 45, score_band: "warm" as const };
+  return { score_total: 10, score_band: "cold" as const };
 }
 
 // ---------- Main handler ----------
@@ -735,24 +431,15 @@ export async function POST(req: Request) {
     .eq("id", conversation_id)
     .maybeSingle();
 
-  if (convErr) {
-    return NextResponse.json({ error: "db_conv_failed", details: convErr.message }, { status: 500 });
-  }
-  if (!conv) {
-    return NextResponse.json(
-      { error: "conversation_not_found", hint: "call POST /api/widget/conversation first" },
-      { status: 400 }
-    );
-  }
-  if (String(conv.company_id) !== company_id) {
-    return NextResponse.json({ error: "conversation_company_mismatch" }, { status: 403 });
-  }
+  if (convErr) return NextResponse.json({ error: "db_conv_failed", details: convErr.message }, { status: 500 });
+  if (!conv) return NextResponse.json({ error: "conversation_not_found" }, { status: 400 });
+  if (String(conv.company_id) !== company_id) return NextResponse.json({ error: "conversation_company_mismatch" }, { status: 403 });
 
   const billing = await loadCompanyEntitlements(company_id);
   const features = billing.entitlements?.features || {};
   const chatEnabled = !!features.chat;
 
-  // Owner-Bypass for Admin Test-Chat only
+  // Owner bypass for admin testing only
   let ownerBypass = false;
   try {
     const auth = await requireOwner();
@@ -762,15 +449,7 @@ export async function POST(req: Request) {
   }
 
   if ((!chatEnabled || !isPayingStatus(billing.status)) && !ownerBypass) {
-    return NextResponse.json(
-      {
-        error: "payment_required",
-        status: billing.status,
-        plan: billing.plan_key,
-        hint: "subscription_required",
-      },
-      { status: 402 }
-    );
+    return NextResponse.json({ error: "payment_required" }, { status: 402 });
   }
 
   const cfg = await loadCompanyConfig(company_id);
@@ -784,133 +463,114 @@ export async function POST(req: Request) {
     p_limit_per_day: effectiveLimits.per_day,
   });
 
-  if (rlErr) {
-    return NextResponse.json({ error: "rate_limit_rpc_failed", details: rlErr.message }, { status: 500 });
-  }
+  if (rlErr) return NextResponse.json({ error: "rate_limit_rpc_failed", details: rlErr.message }, { status: 500 });
 
-  // IMPORTANT: Supabase RPC often returns an array for set-returning functions
   const rlRow: any = Array.isArray(rl) ? rl[0] : rl;
-
   if (!rlRow?.allowed) {
     const retryAfter = getRetryAfterSeconds(rlRow?.reset_minute, rlRow?.reset_day);
-
-    return new NextResponse(
-      JSON.stringify({
-        error: "rate_limited",
-        limits: { per_minute: effectiveLimits.per_minute, per_day: effectiveLimits.per_day },
-        usage: { minute_count: rlRow?.minute_count ?? null, day_count: rlRow?.day_count ?? null },
-        resets: { reset_minute: rlRow?.reset_minute ?? null, reset_day: rlRow?.reset_day ?? null },
-      }),
-      {
-        status: 429,
-        headers: {
-          "Content-Type": "application/json",
-          "Retry-After": String(retryAfter),
-        },
-      }
-    );
+    return new NextResponse(JSON.stringify({ error: "rate_limited" }), {
+      status: 429,
+      headers: { "Content-Type": "application/json", "Retry-After": String(retryAfter) },
+    });
   }
 
+  // Store user message
   const { error: m1Err } = await supabaseServer.from("messages").insert({
     conversation_id,
     role: "user",
     content: userText,
   });
-  if (m1Err) {
-    return NextResponse.json({ error: "db_insert_user_failed", details: m1Err.message }, { status: 500 });
-  }
+  if (m1Err) return NextResponse.json({ error: "db_insert_user_failed", details: m1Err.message }, { status: 500 });
 
-  // ---------------- RAG ----------------
+  // RAG
   let chunks: any[] = [];
-
-  let queryEmbedding: number[];
-  try {
-    queryEmbedding = await embedQuery(userText);
-  } catch (e: any) {
-    return NextResponse.json({ error: "embedding_failed", details: e?.message || String(e) }, { status: 500 });
-  }
-
+  const queryEmbedding = await embedQuery(userText);
   const { data: rpcData, error: rpcErr } = await supabaseServer.rpc("match_knowledge_chunks", {
     p_company_id: company_id,
     p_query_embedding: queryEmbedding,
     p_match_count: cfg.max_chunks,
   });
-
-  if (rpcErr) {
-    return NextResponse.json({ error: "rpc_failed", details: rpcErr.message }, { status: 500 });
-  }
-
+  if (rpcErr) return NextResponse.json({ error: "rpc_failed", details: rpcErr.message }, { status: 500 });
   chunks = (rpcData ?? []) as any[];
 
-  // ---------------- knowledge_only strict branch (lead-safe) ----------------
-  if (cfg.mode === "knowledge_only" && (!chunks || chunks.length === 0)) {
-    let finalText = cfg.unknown_answer;
-
-    try {
-      const existingLead = await getLead(company_id, conversation_id);
-      const existingQual = existingLead?.qualification_json || {};
-
-      const analysis = await runLeadAnalysisStructured({
-        userText,
-        assistantText: finalText,
-        mode: cfg.mode,
-        chunkHints: [],
-        existingQualification: existingQual,
-      });
-
-      const updated = await updateLeadFromAnalysis({
-        company_id,
-        conversation_id,
-        analysis,
-        meta: leadMeta,
-        userText,
-      });
-
-      if (updated.followUp) {
-        finalText = `${finalText}\n\n${updated.followUp}`;
-      }
-    } catch {
-      // Lead engine must never break chat
-    }
-
-    const { error: m2Err } = await supabaseServer.from("messages").insert({
-      conversation_id,
-      role: "assistant",
-      content: finalText,
-    });
-
-    if (m2Err) {
-      return NextResponse.json({ error: "db_insert_assistant_failed", details: m2Err.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ reply: finalText, chunks: [] });
-  }
-
   const contextText = makeContextText(chunks);
-  const systemPrompt =
-    cfg.mode === "knowledge_only"
-      ? buildKnowledgeOnlySystemPrompt(cfg.system_prompt)
-      : buildHybridSystemPrompt(cfg.system_prompt);
 
-  const messages: { role: "system" | "user"; content: string }[] = [{ role: "system", content: systemPrompt }];
+  // Lead snapshot
+  const existingLead = await getLead(company_id, conversation_id);
+  const lead = existingLead ?? (await ensureLead(company_id, conversation_id));
 
-  if (contextText) {
-    messages.push({ role: "system", content: `Context:\n${contextText}` });
+  const email = extractEmail(userText);
+  const phone = extractPhone(userText);
+  const name = extractName(userText);
+
+  const haveContact = !!(lead?.email || lead?.phone || email || phone);
+
+  // Update lead with any provided PII (minimization: only if user provided)
+  if (lead && (email || phone || name)) {
+    const contactUpdate: any = {};
+    if (!lead.email && email) contactUpdate.email = email;
+    if (!lead.phone && phone) contactUpdate.phone = phone;
+    if (!lead.name && name) contactUpdate.name = name;
+
+    if (Object.keys(contactUpdate).length) {
+      const consents = { ...(lead.consents_json || {}) };
+      if (!consents.contact_processing) {
+        consents.contact_processing = {
+          legal_basis: "Art6(1)(b)",
+          timestamp: new Date().toISOString(),
+          source: "user_provided",
+        };
+      }
+      await supabaseServer
+        .from("company_leads")
+        .update({ ...contactUpdate, consents_json: consents, last_touch_at: new Date().toISOString() })
+        .eq("id", lead.id);
+    }
   }
 
-  if (cfg.mode === "knowledge_only") {
-    messages.push({
-      role: "system",
-      content: `If the answer is not in Context, reply exactly with:\n${cfg.unknown_answer}`,
-    });
+  const analysis = buildLeadAnalysis(userText);
+  const band = calcBand(analysis, haveContact);
+
+  // Persist lead scoring (safe, no hallucination)
+  if (lead) {
+    await supabaseServer
+      .from("company_leads")
+      .update({
+        intent_score: analysis.intent_level === "high" ? 45 : analysis.intent_level === "medium" ? 25 : analysis.intent_level === "low" ? 10 : 0,
+        score_total: band.score_total,
+        score_band: band.score_band,
+        qualification_json: {
+          ...(lead.qualification_json || {}),
+          requested_action: analysis.requested_action,
+          timeline: analysis.slots.timeline,
+        },
+        last_touch_at: new Date().toISOString(),
+      })
+      .eq("id", lead.id);
   }
 
-  messages.push({ role: "user", content: userText });
+  // Single-pass assistant output (smooth)
+  const coreSystem = buildCorePrompt({
+    mode: cfg.mode,
+    baseSystem: cfg.system_prompt,
+    unknownAnswer: cfg.unknown_answer,
+    contextText,
+    leadMeta,
+    leadState: {
+      lead_state: lead?.lead_state ?? "discovery",
+      have_contact: haveContact,
+      score_band: band.score_band,
+      requested_action: analysis.requested_action,
+    },
+  });
 
   const completion = await openai.chat.completions.create({
     model: cfg.model,
-    temperature: cfg.temperature,
-    messages,
+    temperature: cfg.mode === "knowledge_only" ? 0 : cfg.temperature,
+    messages: [
+      { role: "system", content: coreSystem },
+      { role: "user", content: userText },
+    ],
   });
 
   let assistantText = completion.choices?.[0]?.message?.content ?? "";
@@ -920,50 +580,12 @@ export async function POST(req: Request) {
     if (sources) assistantText = `${assistantText}\n\nSources:\n${sources}`;
   }
 
-  // ---------------- Lead Engine Hook (Business Layer) ----------------
-  let finalText = assistantText;
-
-  try {
-    const existingLead = await getLead(company_id, conversation_id);
-    const existingQual = existingLead?.qualification_json || {};
-
-    const chunkHints = (chunks || [])
-      .slice(0, 4)
-      .map((c: any) => String(c.title || c.source || "").slice(0, 80))
-      .filter(Boolean);
-
-    const analysis = await runLeadAnalysisStructured({
-      userText,
-      assistantText,
-      mode: cfg.mode,
-      chunkHints,
-      existingQualification: existingQual,
-    });
-
-    const updated = await updateLeadFromAnalysis({
-      company_id,
-      conversation_id,
-      analysis,
-      meta: leadMeta,
-      userText,
-    });
-
-    if (updated.followUp) {
-      finalText = `${finalText}\n\n${updated.followUp}`;
-    }
-  } catch {
-    // Lead engine must never break chat
-  }
-
   const { error: m2Err } = await supabaseServer.from("messages").insert({
     conversation_id,
     role: "assistant",
-    content: finalText,
+    content: assistantText,
   });
+  if (m2Err) return NextResponse.json({ error: "db_insert_assistant_failed", details: m2Err.message }, { status: 500 });
 
-  if (m2Err) {
-    return NextResponse.json({ error: "db_insert_assistant_failed", details: m2Err.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ reply: finalText, chunks });
+  return NextResponse.json({ reply: assistantText, chunks });
 }
