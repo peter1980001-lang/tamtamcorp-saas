@@ -1,6 +1,5 @@
-console.log("SUPABASE_URL exists?", !!process.env.NEXT_PUBLIC_SUPABASE_URL, !!process.env.SUPABASE_URL);
-console.log("SUPABASE_ANON exists?", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-console.log("SUPABASE_SERVICE exists?", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import OpenAI from "openai";
@@ -389,8 +388,7 @@ function calcScores(a: LeadAnalysis) {
       ? 5
       : 0;
 
-  const authorityScore =
-    a.slots.role === "decision_maker" ? 12 : a.slots.role === "influencer" ? 8 : 0;
+  const authorityScore = a.slots.role === "decision_maker" ? 12 : a.slots.role === "influencer" ? 8 : 0;
 
   const budgetScore =
     a.slots.budget_band === "enterprise" || a.slots.budget_band === "high"
@@ -402,7 +400,10 @@ function calcScores(a: LeadAnalysis) {
       : 0;
 
   const commitmentScore =
-    a.requested_action === "offer" || a.requested_action === "booking" || a.requested_action === "callback" || a.requested_action === "demo"
+    a.requested_action === "offer" ||
+    a.requested_action === "booking" ||
+    a.requested_action === "callback" ||
+    a.requested_action === "demo"
       ? 20
       : a.requested_action === "pricing" || a.requested_action === "implementation" || a.requested_action === "comparison"
       ? 8
@@ -420,7 +421,10 @@ function calcScores(a: LeadAnalysis) {
 
 function nextLeadState(prev: string, a: LeadAnalysis, scores: { score_total: number }) {
   const strongCommit =
-    a.requested_action === "offer" || a.requested_action === "booking" || a.requested_action === "callback" || a.requested_action === "demo";
+    a.requested_action === "offer" ||
+    a.requested_action === "booking" ||
+    a.requested_action === "callback" ||
+    a.requested_action === "demo";
 
   if (strongCommit) return "committed";
   if (scores.score_total >= 40 && prev === "discovery") return "qualifying";
@@ -471,10 +475,7 @@ async function runLeadAnalysisStructured(args: {
         },
         required: ["use_case", "timeline", "role", "budget_band", "preferred_contact_channel"],
       },
-      missing_signals: {
-        type: "array",
-        items: { type: "string" },
-      },
+      missing_signals: { type: "array", items: { type: "string" } },
       next_question: { type: "string" },
       next_question_key: { type: "string" },
     },
@@ -518,7 +519,6 @@ async function runLeadAnalysisStructured(args: {
     `KNOWN_QUALIFICATION_JSON: ${JSON.stringify(args.existingQualification || {})}`,
   ].join("\n");
 
-  // Preferred path: responses API with json_schema
   try {
     const anyOpenAI: any = openai as any;
     if (anyOpenAI.responses && typeof anyOpenAI.responses.create === "function") {
@@ -547,7 +547,6 @@ async function runLeadAnalysisStructured(args: {
     // fall through
   }
 
-  // Fallback: chat.completions with json_object (still deterministic, but not strict schema)
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
@@ -580,7 +579,9 @@ async function updateLeadFromAnalysis(params: {
     !!email ||
     !!phone;
 
-  let lead = shouldCreate ? await ensureLead(params.company_id, params.conversation_id) : await getLead(params.company_id, params.conversation_id);
+  let lead = shouldCreate
+    ? await ensureLead(params.company_id, params.conversation_id)
+    : await getLead(params.company_id, params.conversation_id);
 
   if (!lead) return { lead: null, followUp: null };
 
@@ -603,14 +604,11 @@ async function updateLeadFromAnalysis(params: {
 
   const consents = { ...(lead.consents_json || {}) };
 
-  // If user provided contact data voluntarily, store it (still DSGVO-minimizing: only what's provided)
   const contactUpdate: Record<string, any> = {};
   if (!lead.email && email) contactUpdate.email = email;
   if (!lead.phone && phone) contactUpdate.phone = phone;
   if (!lead.name && name) contactUpdate.name = name;
 
-  // If we store contact data, log a minimal "request context" consent record for processing inquiry
-  // This is aligned with pre-contractual measures when user engages for offer/callback/demo etc.
   const storingPII = Object.keys(contactUpdate).length > 0;
   if (storingPII && !consents.contact_processing) {
     consents.contact_processing = {
@@ -640,9 +638,6 @@ async function updateLeadFromAnalysis(params: {
 
   lead = (updated as any) ?? lead;
 
-  // Decide follow-up question:
-  // - Only ask for contact when committed (or strong action) AND missing contact
-  // - Otherwise ask the model-provided next_question (one question) when qualifying
   const strongCommit =
     params.analysis.requested_action === "offer" ||
     params.analysis.requested_action === "booking" ||
@@ -653,9 +648,7 @@ async function updateLeadFromAnalysis(params: {
 
   if (committedNow && needsContact(lead)) {
     const privacy = buildConsentMicrocopy(params.meta);
-    const ask =
-      "Wie duerfen wir Sie am besten erreichen (E-Mail oder Telefon)?" +
-      privacy;
+    const ask = "Wie duerfen wir Sie am besten erreichen (E-Mail oder Telefon)?" + privacy;
     return { lead, followUp: ask };
   }
 
@@ -842,8 +835,6 @@ export async function POST(req: Request) {
   }
 
   // ---------------- Lead Engine Hook (Business Layer) ----------------
-  // Structured analysis based on user + assistant + hints (no PII invention)
-  // Then update lead object, score, state, and maybe append one follow-up question.
   let finalText = assistantText;
 
   try {
@@ -872,7 +863,6 @@ export async function POST(req: Request) {
     });
 
     if (updated.followUp) {
-      // Append exactly one extra question (humane, progressive disclosure)
       finalText = `${finalText}\n\n${updated.followUp}`;
     }
   } catch {
