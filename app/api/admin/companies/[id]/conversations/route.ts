@@ -5,7 +5,7 @@ import { requireOwner } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwner();
+  const auth = await requireOwnerOrCompanyAdmin(company_id);
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
   const { id } = await ctx.params;

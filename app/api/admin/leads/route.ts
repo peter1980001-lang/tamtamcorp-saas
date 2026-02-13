@@ -4,62 +4,46 @@ import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
 
-function q(req: Request, key: string) {
-  const u = new URL(req.url);
-  return (u.searchParams.get(key) || "").trim();
-}
-
 export async function GET(req: Request) {
   const auth = await requireOwner();
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
-  const band = q(req, "band"); // hot|warm|cold
-  const status = q(req, "status"); // new|contacted|closed
-  const state = q(req, "state"); // discovery|qualifying|committed|handoff
-  const search = q(req, "q"); // free text
-  const limitRaw = q(req, "limit");
+  const url = new URL(req.url);
+  const q = (url.searchParams.get("q") || "").trim();
+  const band = (url.searchParams.get("band") || "all").trim(); // all|cold|warm|hot
+  const status = (url.searchParams.get("status") || "all").trim(); // all|new|contacted|closed
+  const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || 200)));
 
-  const limit = Math.max(1, Math.min(500, Number(limitRaw || "200") || 200));
-
-  // Supabase: join company name (requires FK company_leads.company_id -> companies.id)
+  // Basic query
   let query = supabaseServer
     .from("company_leads")
     .select(
-      "id, company_id, conversation_id, lead_state, status, score_total, score_band, intent_score, name, email, phone, qualification_json, consents_json, tags, last_touch_at, created_at, updated_at, companies(name)"
+      "id, company_id, conversation_id, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, tags, last_touch_at, created_at, updated_at"
     )
     .order("last_touch_at", { ascending: false })
     .limit(limit);
 
-  if (band && ["hot", "warm", "cold"].includes(band)) query = query.eq("score_band", band);
-  if (status && ["new", "contacted", "closed"].includes(status)) query = query.eq("status", status);
-  if (state && ["discovery", "qualifying", "committed", "handoff"].includes(state)) query = query.eq("lead_state", state);
+  if (band !== "all") query = query.eq("score_band", band);
+  if (status !== "all") query = query.eq("status", status);
 
-  // Simple search: we do ILIKE across a few fields.
-  // NOTE: if you want faster/better search later -> add a denormalized search_text column + GIN index.
-  if (search) {
-    const s = search.replace(/[%_]/g, ""); // minimal sanitize for ilike
+  // Search across name/email/phone + use_case in qualification_json
+  if (q) {
+    const like = `%${q}%`;
+    // NOTE: ilike on jsonb path is not available directly; we search use_case via ->> in a filter string:
     query = query.or(
       [
-        `name.ilike.%${s}%`,
-        `email.ilike.%${s}%`,
-        `phone.ilike.%${s}%`,
-        `conversation_id.ilike.%${s}%`,
-        // search inside qualification_json.use_case (jsonb -> text) using a cast via PostgREST is tricky.
-        // for now: skip JSON search to keep it robust.
+        `name.ilike.${like}`,
+        `email.ilike.${like}`,
+        `phone.ilike.${like}`,
+        `conversation_id.ilike.${like}`,
+        // jsonb text extraction (works in PostgREST):
+        `qualification_json->>use_case.ilike.${like}`,
       ].join(",")
     );
   }
 
   const { data, error } = await query;
-
   if (error) return NextResponse.json({ error: "db_failed", details: error.message }, { status: 500 });
 
-  // Normalize company name
-  const leads = (data ?? []).map((l: any) => ({
-    ...l,
-    company_name: l.companies?.name ?? null,
-    companies: undefined,
-  }));
-
-  return NextResponse.json({ leads });
+  return NextResponse.json({ leads: data ?? [] });
 }

@@ -6,7 +6,7 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireOwner();
+  const auth = await await requireCompanyAccess(company_id);
   if (!auth.ok) {
     return NextResponse.json({ error: "forbidden" }, { status: auth.status });
   }

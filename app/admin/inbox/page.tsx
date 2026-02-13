@@ -2,27 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type LeadRow = {
+type Lead = {
   id: string;
   company_id: string;
   conversation_id: string;
-  channel: string | null;
-  source: string | null;
+
   lead_state: string;
   status: string;
+
   name: string | null;
   email: string | null;
   phone: string | null;
+
   qualification_json: any;
   consents_json: any;
+
   intent_score: number;
   score_total: number;
   score_band: "cold" | "warm" | "hot";
+
   tags: string[];
   last_touch_at: string;
   created_at: string;
   updated_at: string;
-  companies?: { id: string; name: string } | null;
 };
 
 function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
@@ -64,33 +66,50 @@ function Chip({ text }: { text: string }) {
   );
 }
 
-function pill(band: string) {
+function bandPill(band: string) {
   const bg = band === "hot" ? "#111" : band === "warm" ? "#fff" : "#fafafa";
   const color = band === "hot" ? "#fff" : "#111";
   const border = band === "warm" ? "1px solid #111" : "1px solid #eee";
   return { background: bg, color, border };
 }
 
-export default function AdminInboxPage() {
+function fmt(dt: string | null | undefined) {
+  if (!dt) return "-";
+  const t = new Date(dt);
+  if (Number.isNaN(t.getTime())) return "-";
+  return t.toLocaleString();
+}
+
+function safeStr(v: any) {
+  if (v === null || v === undefined) return "";
+  return String(v);
+}
+
+export default function GlobalInboxPage() {
   const [loading, setLoading] = useState(true);
-  const [leads, setLeads] = useState<LeadRow[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
+  const [q, setQ] = useState("");
   const [band, setBand] = useState<"all" | "cold" | "warm" | "hot">("all");
   const [status, setStatus] = useState<"all" | "new" | "contacted" | "closed">("all");
-  const [leadState, setLeadState] = useState<"all" | "discovery" | "qualifying" | "committed" | "handoff">("all");
-  const [q, setQ] = useState("");
+  const [limit, setLimit] = useState(300);
 
   async function load() {
     setLoading(true);
+
     const params = new URLSearchParams();
+    const qTrim = q.trim();
+    if (qTrim) params.set("q", qTrim);
     params.set("band", band);
     params.set("status", status);
-    params.set("lead_state", leadState);
-    if (q.trim()) params.set("q", q.trim());
-    params.set("limit", "200");
+    params.set("limit", String(limit));
 
-    const res = await fetch(`/api/admin/inbox/leads?${params.toString()}`);
+    const res = await fetch(`/api/admin/leads?${params.toString()}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
     const json = await res.json().catch(() => ({}));
     setLoading(false);
 
@@ -98,13 +117,14 @@ export default function AdminInboxPage() {
       setToast(json.error || "load_failed");
       return;
     }
-    setLeads(json.leads || []);
+
+    setLeads(Array.isArray(json.leads) ? json.leads : []);
   }
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [band, status, leadState]);
+  }, []);
 
   const counts = useMemo(() => {
     const c: any = { cold: 0, warm: 0, hot: 0, new: 0, contacted: 0, closed: 0 };
@@ -115,50 +135,21 @@ export default function AdminInboxPage() {
     return c as { cold: number; warm: number; hot: number; new: number; contacted: number; closed: number };
   }, [leads]);
 
-  async function updateLead(lead_id: string, patch: { status?: string; lead_state?: string }) {
-    const res = await fetch(`/api/admin/inbox/leads`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lead_id, ...patch }),
+  const sortedLeads = useMemo(() => {
+    // Already should come sorted by API, but keep UI stable: last_touch desc
+    return [...leads].sort((a, b) => {
+      const ta = new Date(a.last_touch_at || a.updated_at || a.created_at).getTime();
+      const tb = new Date(b.last_touch_at || b.updated_at || b.created_at).getTime();
+      return tb - ta;
     });
-
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setToast(json.error || "update_failed");
-      return;
-    }
-
-    setLeads((prev) => prev.map((x) => (x.id === lead_id ? { ...(x as any), ...(json.lead as any) } : x)));
-    setToast("Saved");
-  }
-
-  const list = useMemo(() => {
-    if (!q.trim()) return leads;
-    const s = q.trim().toLowerCase();
-    return leads.filter((l) => {
-      const companyName = String(l.companies?.name || "").toLowerCase();
-      const useCase = String(l.qualification_json?.use_case || "").toLowerCase();
-      const email = String(l.email || "").toLowerCase();
-      const phone = String(l.phone || "").toLowerCase();
-      const name = String(l.name || "").toLowerCase();
-      const cid = String(l.conversation_id || "").toLowerCase();
-      return (
-        companyName.includes(s) ||
-        useCase.includes(s) ||
-        email.includes(s) ||
-        phone.includes(s) ||
-        name.includes(s) ||
-        cid.includes(s)
-      );
-    });
-  }, [leads, q]);
+  }, [leads]);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 12, opacity: 0.65 }}>Admin</div>
+            <div style={{ fontSize: 12, opacity: 0.65 }}>Owner</div>
             <h1 style={{ fontSize: 28, margin: "4px 0 0" }}>Global Inbox</h1>
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
               <Chip text={`Hot: ${counts.hot}`} />
@@ -178,150 +169,150 @@ export default function AdminInboxPage() {
               border: "1px solid #ddd",
               background: "#fff",
               cursor: "pointer",
+              whiteSpace: "nowrap",
             }}
           >
             Refresh
           </button>
         </div>
 
-        <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name/email/phone/company/use_case/conversation..."
-            style={{ flex: 1, minWidth: 280, padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd" }}
             onKeyDown={(e) => {
               if (e.key === "Enter") load();
             }}
+            placeholder="Search name/email/phone/conversation/use_case..."
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              background: "#fff",
+              width: 520,
+              maxWidth: "100%",
+            }}
           />
 
-          <select value={band} onChange={(e) => setBand(e.target.value as any)} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}>
+          <select
+            value={band}
+            onChange={(e) => setBand(e.target.value as any)}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+          >
             <option value="all">All bands</option>
             <option value="hot">Hot</option>
             <option value="warm">Warm</option>
             <option value="cold">Cold</option>
           </select>
 
-          <select value={status} onChange={(e) => setStatus(e.target.value as any)} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as any)}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+          >
             <option value="all">All status</option>
             <option value="new">New</option>
             <option value="contacted">Contacted</option>
             <option value="closed">Closed</option>
           </select>
 
-          <select value={leadState} onChange={(e) => setLeadState(e.target.value as any)} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}>
-            <option value="all">All states</option>
-            <option value="discovery">discovery</option>
-            <option value="qualifying">qualifying</option>
-            <option value="committed">committed</option>
-            <option value="handoff">handoff</option>
+          <select
+            value={String(limit)}
+            onChange={(e) => setLimit(Number(e.target.value))}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+          >
+            <option value="50">Limit 50</option>
+            <option value="100">Limit 100</option>
+            <option value="300">Limit 300</option>
+            <option value="500">Limit 500</option>
           </select>
 
           <button
             onClick={load}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #111",
-              background: "#111",
-              color: "#fff",
-              cursor: "pointer",
-            }}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
           >
-            Search
+            Apply
           </button>
         </div>
 
-        <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+        <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
           {loading ? (
             <Card title="Loading">Fetching leads...</Card>
-          ) : list.length === 0 ? (
-            <Card title="No Leads">No leads found.</Card>
+          ) : sortedLeads.length === 0 ? (
+            <Card title="No leads">No leads found.</Card>
           ) : (
-            list.map((l) => {
-              const companyName = l.companies?.name || l.company_id;
-              const useCase = l.qualification_json?.use_case || "-";
-              const timeline = l.qualification_json?.timeline || "unknown";
-              const action = l.qualification_json?.requested_action || "none";
-
-              const openHref = `/admin/companies/${l.company_id}/conversations/${l.conversation_id}`;
+            sortedLeads.map((l) => {
+              const qj = l.qualification_json || {};
+              const useCase = safeStr(qj.use_case) || "-";
+              const timeline = safeStr(qj.timeline) || "unknown";
+              const action = safeStr(qj.requested_action) || "unknown";
+              const role = safeStr(qj.role) || "unknown";
+              const budget = safeStr(qj.budget_band) || "unknown";
 
               return (
                 <Card
                   key={l.id}
-                  title={`${companyName} | ${l.score_band.toUpperCase()} ${l.score_total}`}
+                  title={`${l.score_band.toUpperCase()} | Score ${l.score_total} | Intent ${l.intent_score}`}
                   right={
-                    <span style={{ padding: "6px 10px", borderRadius: 999, ...pill(l.score_band) }}>{l.score_band}</span>
+                    <span style={{ padding: "6px 10px", borderRadius: 999, ...bandPill(l.score_band) }}>
+                      {l.score_band}
+                    </span>
                   }
                 >
                   <div style={{ display: "grid", gap: 10 }}>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <Chip text={`Company: ${l.company_id}`} />
                       <Chip text={`State: ${l.lead_state}`} />
                       <Chip text={`Status: ${l.status}`} />
-                      <Chip text={`Created: ${new Date(l.created_at).toLocaleString()}`} />
-                      <Chip text={`Last touch: ${new Date(l.last_touch_at).toLocaleString()}`} />
+                      <Chip text={`Last touch: ${fmt(l.last_touch_at)}`} />
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.7 }}>
-                        <div><b>Name:</b> {l.name || "-"}</div>
-                        <div><b>Email:</b> {l.email || "-"}</div>
-                        <div><b>Phone:</b> {l.phone || "-"}</div>
-                        <div><b>Conversation:</b> <code>{l.conversation_id}</code></div>
+                    <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.6 }}>
+                      <div>
+                        <b>Use case:</b> {useCase}
                       </div>
-
-                      <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.7 }}>
-                        <div><b>use_case:</b> {useCase}</div>
-                        <div><b>timeline:</b> {timeline}</div>
-                        <div><b>action:</b> {action}</div>
+                      <div>
+                        <b>Signals:</b> timeline: {timeline} · action: {action} · role: {role} · budget: {budget}
+                      </div>
+                      <div>
+                        <b>Contact:</b> {(l.email || "-") + " / " + (l.phone || "-")}
+                      </div>
+                      <div style={{ opacity: 0.75, marginTop: 6 }}>
+                        <b>Conversation:</b> <code>{l.conversation_id}</code>
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      <select
-                        value={l.status}
-                        onChange={(e) => updateLead(l.id, { status: e.target.value })}
-                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
-                      >
-                        <option value="new">new</option>
-                        <option value="contacted">contacted</option>
-                        <option value="closed">closed</option>
-                      </select>
-
-                      <select
-                        value={l.lead_state}
-                        onChange={(e) => updateLead(l.id, { lead_state: e.target.value })}
-                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
-                      >
-                        <option value="discovery">discovery</option>
-                        <option value="qualifying">qualifying</option>
-                        <option value="committed">committed</option>
-                        <option value="handoff">handoff</option>
-                      </select>
-
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <a
-                        href={openHref}
+                        href={`/admin/companies/${l.company_id}/conversations/${l.conversation_id}`}
                         style={{
-                          marginLeft: "auto",
+                          display: "inline-block",
                           padding: "10px 12px",
                           borderRadius: 12,
-                          border: "1px solid #111",
+                          border: "1px solid #ddd",
                           background: "#fff",
-                          color: "#111",
                           textDecoration: "none",
-                          display: "inline-block",
+                          color: "#111",
                         }}
                       >
                         Open conversation
                       </a>
-                    </div>
 
-                    <details>
-                      <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.8 }}>Show qualification and consents</summary>
-                      <pre style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
-                        {JSON.stringify({ qualification_json: l.qualification_json, consents_json: l.consents_json, tags: l.tags }, null, 2)}
-                      </pre>
-                    </details>
+                      <a
+                        href={`/admin/companies/${l.company_id}/leads`}
+                        style={{
+                          display: "inline-block",
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          border: "1px solid #ddd",
+                          background: "#fff",
+                          textDecoration: "none",
+                          color: "#111",
+                        }}
+                      >
+                        Company leads
+                      </a>
+                    </div>
                   </div>
                 </Card>
               );
