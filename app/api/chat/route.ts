@@ -742,15 +742,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "rate_limit_rpc_failed", details: rlErr.message }, { status: 500 });
   }
 
-  if (!rl?.allowed) {
-    const retryAfter = getRetryAfterSeconds(rl?.reset_minute, rl?.reset_day);
+  // IMPORTANT: Supabase RPC often returns an array for set-returning functions
+  const rlRow: any = Array.isArray(rl) ? rl[0] : rl;
+
+  if (!rlRow?.allowed) {
+    const retryAfter = getRetryAfterSeconds(rlRow?.reset_minute, rlRow?.reset_day);
 
     return new NextResponse(
       JSON.stringify({
         error: "rate_limited",
         limits: { per_minute: effectiveLimits.per_minute, per_day: effectiveLimits.per_day },
-        usage: { minute_count: rl?.minute_count ?? null, day_count: rl?.day_count ?? null },
-        resets: { reset_minute: rl?.reset_minute ?? null, reset_day: rl?.reset_day ?? null },
+        usage: { minute_count: rlRow?.minute_count ?? null, day_count: rlRow?.day_count ?? null },
+        resets: { reset_minute: rlRow?.reset_minute ?? null, reset_day: rlRow?.reset_day ?? null },
       }),
       {
         status: 429,
