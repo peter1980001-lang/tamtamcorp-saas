@@ -646,6 +646,25 @@ async function updateLeadFromAnalysis(params: {
     .maybeSingle();
 
   lead = (updated as any) ?? lead;
+if (!lead) return { lead: null, followUp: null };
+
+// ---- Follow-up decision (ANTI LOOP) ----
+const strongCommit =
+  params.analysis.requested_action === "offer" ||
+  params.analysis.requested_action === "booking" ||
+  params.analysis.requested_action === "callback" ||
+  params.analysis.requested_action === "demo";
+
+const committedNow = newState === "committed" || strongCommit;
+
+const haveContact = !!lead.email || !!lead.phone;
+const preferred = ((lead.qualification_json || {}) as any).preferred_contact_channel ?? "unknown";
+
+const lastKey = ((lead.qualification_json || {}) as any)._last_followup_key as string | null;
+const lastAt = ((lead.qualification_json || {}) as any)._last_followup_at as string | null;
+const lastAtMs = lastAt ? new Date(lastAt).getTime() : 0;
+
+
 
   // ---- Follow-up decision (ANTI LOOP) ----
   const strongCommit =
