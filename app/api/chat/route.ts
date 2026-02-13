@@ -39,14 +39,18 @@ type PlanEntitlements = {
 };
 
 function normalizeConfig(raw: any): CompanyChatConfig {
+  // Global defaults:
+  // - hybrid gives natural UX if KB isn't filled yet
+  // - knowledge_only still supported per-company if explicitly set
   const defaults: CompanyChatConfig = {
-    mode: "knowledge_only",
+    mode: "hybrid",
     model: "gpt-4o-mini",
     temperature: 0.1,
     max_chunks: 6,
     system_prompt: "You are the company's website assistant. Be concise, factual and helpful.",
+    // Important: avoid endlessly asking for contact here - Lead Engine handles contact capture once needed
     unknown_answer:
-      "I don't have that information in the provided knowledge base yet. Please leave your email or phone and we'll get back to you, or ask a question about our services/products.",
+      "Ich habe dazu aktuell keine gesicherten Information in der Wissensdatenbank. Wenn Sie moechten, kann ich ein paar kurze Fragen stellen und dann ein Angebot oder einen Rueckruf vorbereiten.",
     include_sources: false,
     rate_limits: {
       per_minute: 10,
@@ -589,18 +593,22 @@ async function updateLeadFromAnalysis(params: {
   const scores = calcScores(params.analysis);
   const newState = nextLeadState(lead.lead_state, params.analysis, { score_total: scores.score_total });
 
+  const prevQual = (lead.qualification_json || {}) as any;
+
   const nextQual = {
-    ...(lead.qualification_json || {}),
-    use_case: params.analysis.slots.use_case ?? (lead.qualification_json || {}).use_case ?? null,
-    timeline: params.analysis.slots.timeline ?? (lead.qualification_json || {}).timeline ?? "unknown",
-    role: params.analysis.slots.role ?? (lead.qualification_json || {}).role ?? "unknown",
-    budget_band: params.analysis.slots.budget_band ?? (lead.qualification_json || {}).budget_band ?? "unknown",
+    ...prevQual,
+    use_case: params.analysis.slots.use_case ?? prevQual.use_case ?? null,
+    timeline: params.analysis.slots.timeline ?? prevQual.timeline ?? "unknown",
+    role: params.analysis.slots.role ?? prevQual.role ?? "unknown",
+    budget_band: params.analysis.slots.budget_band ?? prevQual.budget_band ?? "unknown",
     requested_action: params.analysis.requested_action,
     urgency: params.analysis.urgency,
     sentiment: params.analysis.sentiment,
-    preferred_contact_channel: params.analysis.slots.preferred_contact_channel ?? "unknown",
+    preferred_contact_channel: params.analysis.slots.preferred_contact_channel ?? prevQual.preferred_contact_channel ?? "unknown",
     missing_signals: params.analysis.missing_signals || [],
     next_question_key: params.analysis.next_question_key || null,
+    _last_followup_key: prevQual._last_followup_key ?? null,
+    _last_followup_at: prevQual._last_followup_at ?? null,
   };
 
   const consents = { ...(lead.consents_json || {}) };
@@ -639,6 +647,7 @@ async function updateLeadFromAnalysis(params: {
 
   lead = (updated as any) ?? lead;
 
+  // ---- Follow-up decision (ANTI LOOP) ----
   const strongCommit =
     params.analysis.requested_action === "offer" ||
     params.analysis.requested_action === "booking" ||
@@ -647,14 +656,55 @@ async function updateLeadFromAnalysis(params: {
 
   const committedNow = newState === "committed" || strongCommit;
 
-  if (committedNow && needsContact(lead)) {
+  const haveContact = !!lead.email || !!lead.phone;
+  const preferred = ((lead.qualification_json || {}) as any).preferred_contact_channel ?? "unknown";
+
+  const lastKey = ((lead.qualification_json || {}) as any)._last_followup_key as string | null;
+  const lastAt = ((lead.qualification_json || {}) as any)._last_followup_at as string | null;
+  const lastAtMs = lastAt ? new Date(lastAt).getTime() : 0;
+
+  async function markAsked(key: string) {
+    await supabaseServer
+      .from("company_leads")
+      .update({
+        qualification_json: {
+          ...(lead?.qualification_json || {}),
+          _last_followup_key: key,
+          _last_followup_at: new Date().toISOString(),
+        },
+        last_touch_at: new Date().toISOString(),
+      })
+      .eq("id", lead!.id);
+  }
+
+  // 1) committed + missing contact -> ask ONCE
+  if (committedNow && !haveContact) {
+    if (lastKey === "contact") return { lead, followUp: null };
+    await markAsked("contact");
     const privacy = buildConsentMicrocopy(params.meta);
     const ask = "Wie duerfen wir Sie am besten erreichen (E-Mail oder Telefon)?" + privacy;
     return { lead, followUp: ask };
   }
 
-  if (newState === "qualifying" && params.analysis.next_question && params.analysis.next_question.trim()) {
-    return { lead, followUp: params.analysis.next_question.trim() };
+  // 2) committed + have contact but preferred channel unknown -> ask ONCE
+  if (committedNow && haveContact && preferred === "unknown") {
+    if (lastKey === "preferred_channel") return { lead, followUp: null };
+    await markAsked("preferred_channel");
+    return { lead, followUp: "Bevorzugen Sie E-Mail, Telefon oder WhatsApp?" };
+  }
+
+  // 3) qualifying -> ask model next_question, but do not ask contact-style question if contact already exists
+  const nq = (params.analysis.next_question || "").trim();
+  const nqKey = (params.analysis.next_question_key || "").trim();
+  const askedRecentlySame =
+    !!nqKey && !!lastKey && nqKey === lastKey && Date.now() - lastAtMs < 10 * 60 * 1000;
+
+  const looksLikeContactQuestion = /e-?mail|telefon|whats\s*app|erreichen|kontakt/i.test(nq);
+
+  if (newState === "qualifying" && nq && !askedRecentlySame) {
+    if (haveContact && looksLikeContactQuestion) return { lead, followUp: null };
+    if (nqKey) await markAsked(nqKey);
+    return { lead, followUp: nq };
   }
 
   return { lead, followUp: null };
@@ -796,21 +846,49 @@ export async function POST(req: Request) {
 
   chunks = (rpcData ?? []) as any[];
 
-  // IMPORTANT: knowledge_only strict branch unchanged (no appended lead text)
+  // ---------------- knowledge_only strict branch (now lead-safe) ----------------
+  // Keep strict: base answer stays unknown_answer; but lead engine may add ONE follow-up question.
   if (cfg.mode === "knowledge_only" && (!chunks || chunks.length === 0)) {
-    const safe = cfg.unknown_answer;
+    let finalText = cfg.unknown_answer;
+
+    try {
+      const existingLead = await getLead(company_id, conversation_id);
+      const existingQual = existingLead?.qualification_json || {};
+
+      const analysis = await runLeadAnalysisStructured({
+        userText,
+        assistantText: finalText,
+        mode: cfg.mode,
+        chunkHints: [],
+        existingQualification: existingQual,
+      });
+
+      const updated = await updateLeadFromAnalysis({
+        company_id,
+        conversation_id,
+        analysis,
+        meta: leadMeta,
+        userText,
+      });
+
+      if (updated.followUp) {
+        finalText = `${finalText}\n\n${updated.followUp}`;
+      }
+    } catch {
+      // Lead engine must never break chat
+    }
 
     const { error: m2Err } = await supabaseServer.from("messages").insert({
       conversation_id,
       role: "assistant",
-      content: safe,
+      content: finalText,
     });
 
     if (m2Err) {
       return NextResponse.json({ error: "db_insert_assistant_failed", details: m2Err.message }, { status: 500 });
     }
 
-    return NextResponse.json({ reply: safe, chunks: [] });
+    return NextResponse.json({ reply: finalText, chunks: [] });
   }
 
   const contextText = makeContextText(chunks);
