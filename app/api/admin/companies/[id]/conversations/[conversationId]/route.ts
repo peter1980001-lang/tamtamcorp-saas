@@ -1,0 +1,59 @@
+export const runtime = "nodejs";
+
+import { NextResponse } from "next/server";
+import { requireOwner } from "@/lib/adminGuard";
+import { supabaseServer } from "@/lib/supabaseServer";
+
+export async function GET(
+  _req: Request,
+  ctx: { params: Promise<{ companyId: string; conversationId: string }> }
+) {
+  const auth = await requireOwner();
+  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
+
+  const { companyId, conversationId } = await ctx.params;
+
+  const company_id = String(companyId || "").trim();
+  const conversation_id = String(conversationId || "").trim();
+  if (!company_id || !conversation_id) {
+    return NextResponse.json({ error: "missing_params" }, { status: 400 });
+  }
+
+  const { data: conv, error: cErr } = await supabaseServer
+    .from("conversations")
+    .select("id, company_id, created_at")
+    .eq("id", conversation_id)
+    .maybeSingle();
+
+  if (cErr) return NextResponse.json({ error: "db_failed", details: cErr.message }, { status: 500 });
+  if (!conv) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  if (String((conv as any).company_id) !== company_id) {
+    return NextResponse.json({ error: "company_mismatch" }, { status: 403 });
+  }
+
+  const { data: messages, error: mErr } = await supabaseServer
+    .from("messages")
+    .select("id, conversation_id, role, content, created_at")
+    .eq("conversation_id", conversation_id)
+    .order("created_at", { ascending: true })
+    .limit(2000);
+
+  if (mErr) return NextResponse.json({ error: "db_failed", details: mErr.message }, { status: 500 });
+
+  const { data: lead, error: lErr } = await supabaseServer
+    .from("company_leads")
+    .select(
+      "id, company_id, conversation_id, channel, source, lead_state, status, name, email, phone, qualification_json, consents_json, intent_score, score_total, score_band, tags, last_touch_at, created_at, updated_at"
+    )
+    .eq("company_id", company_id)
+    .eq("conversation_id", conversation_id)
+    .maybeSingle();
+
+  if (lErr) return NextResponse.json({ error: "db_failed", details: lErr.message }, { status: 500 });
+
+  return NextResponse.json({
+    conversation: conv,
+    lead: lead ?? null,
+    messages: messages ?? [],
+  });
+}
