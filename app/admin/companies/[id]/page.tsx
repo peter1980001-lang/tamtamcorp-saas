@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import BillingActions from "./_components/BillingActions";
 
 type Company = { id: string; name: string; status: string; created_at: string };
 type Keys = {
@@ -36,7 +37,7 @@ type LeadRow = {
   updated_at: string;
 };
 
-const tabs = ["overview", "keys", "domains", "limits", "embed", "test-chat", "knowledge", "leads"] as const;
+const tabs = ["overview", "keys", "domains", "limits", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
 type Tab = (typeof tabs)[number];
 
 function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
@@ -565,6 +566,21 @@ export default function CompanyDetailPage() {
                   <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
                     {embedSnippet}
                   </pre>
+                </Card>
+              )}
+
+              {/* ✅ NEW: BILLING TAB */}
+              {tab === "billing" && (
+                <Card title="Billing">
+                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+                    Start a subscription (Checkout) or manage the current subscription (Customer Portal).
+                  </div>
+
+                  <BillingActions companyId={id as string} />
+
+                  <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+                    After Checkout completes, Stripe Webhooks will update <code>company_billing</code> automatically.
+                  </div>
                 </Card>
               )}
 

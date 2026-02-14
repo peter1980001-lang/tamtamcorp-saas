@@ -13,6 +13,18 @@ function toIsoOrNull(unixSeconds?: number | null) {
   return new Date(unixSeconds * 1000).toISOString();
 }
 
+async function resolvePlanKey(stripe_price_id?: string | null) {
+  if (!stripe_price_id) return null;
+  const { data: plan } = await supabaseServer
+    .from("billing_plans")
+    .select("plan_key, is_active")
+    .eq("stripe_price_id", stripe_price_id)
+    .maybeSingle();
+
+  if (!plan?.is_active) return null;
+  return plan.plan_key ?? null;
+}
+
 async function upsertCompanyBilling(input: {
   company_id: string;
   stripe_customer_id?: string | null;
@@ -21,32 +33,55 @@ async function upsertCompanyBilling(input: {
   status?: string | null;
   current_period_end?: string | null;
 }) {
+  const stripe_price_id = input.stripe_price_id ?? null;
+  const plan_key = await resolvePlanKey(stripe_price_id);
+
   const payload = {
     company_id: input.company_id,
     stripe_customer_id: input.stripe_customer_id ?? null,
     stripe_subscription_id: input.stripe_subscription_id ?? null,
-    stripe_price_id: input.stripe_price_id ?? null,
+    stripe_price_id,
+    plan_key,
     status: input.status ?? "none",
     current_period_end: input.current_period_end ?? null,
+    updated_at: new Date().toISOString(),
   };
 
-  // plan_key sync (denormalize) from billing_plans by stripe_price_id
-  let plan_key: string | null = null;
-  if (payload.stripe_price_id) {
-    const { data: plan } = await supabaseServer
-      .from("billing_plans")
-      .select("plan_key")
-      .eq("stripe_price_id", payload.stripe_price_id)
-      .maybeSingle();
-    plan_key = plan?.plan_key ?? null;
-  }
-
-  const { error } = await supabaseServer.from("company_billing").upsert({
-    ...payload,
-    plan_key,
-  });
+  const { error } = await supabaseServer
+    .from("company_billing")
+    .upsert(payload, { onConflict: "company_id" });
 
   if (error) throw new Error(`company_billing_upsert_failed: ${error.message}`);
+}
+
+async function findCompanyIdForSubscription(sub: Stripe.Subscription) {
+  const customerId = (typeof sub.customer === "string" ? sub.customer : sub.customer?.id) || null;
+
+  // 1) Best: subscription metadata
+  const metaCompany = String((sub as any).metadata?.company_id || "").trim();
+  if (metaCompany) return metaCompany;
+
+  // 2) Lookup by subscription_id
+  const bySub = await supabaseServer
+    .from("company_billing")
+    .select("company_id")
+    .eq("stripe_subscription_id", sub.id)
+    .maybeSingle();
+
+  if (bySub.data?.company_id) return bySub.data.company_id;
+
+  // 3) Lookup by customer_id
+  if (customerId) {
+    const byCustomer = await supabaseServer
+      .from("company_billing")
+      .select("company_id")
+      .eq("stripe_customer_id", customerId)
+      .maybeSingle();
+
+    if (byCustomer.data?.company_id) return byCustomer.data.company_id;
+  }
+
+  return null;
 }
 
 export async function POST(req: Request) {
@@ -73,7 +108,7 @@ export async function POST(req: Request) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
-      const company_id = String(session.metadata?.company_id || "").trim();
+      const company_id = String(session.metadata?.company_id || session.client_reference_id || "").trim();
       const customerId =
         (typeof session.customer === "string" ? session.customer : session.customer?.id) || null;
       const subscriptionId =
@@ -85,9 +120,20 @@ export async function POST(req: Request) {
         });
 
         const priceId = sub.items.data?.[0]?.price?.id ?? null;
-
-        // Stripe typings sometimes lag behind actual fields -> safe access
         const currentPeriodEndUnix = (sub as any).current_period_end as number | undefined;
+
+        // OPTIONAL BUT RECOMMENDED: ensure subscription carries company_id in metadata
+        // so future subscription.updated events can map without DB lookup.
+        try {
+          const existingMeta = String((sub as any).metadata?.company_id || "").trim();
+          if (!existingMeta) {
+            await stripe.subscriptions.update(sub.id, {
+              metadata: { ...(sub as any).metadata, company_id },
+            });
+          }
+        } catch {
+          // non-fatal
+        }
 
         await upsertCompanyBilling({
           company_id,
@@ -109,46 +155,28 @@ export async function POST(req: Request) {
     ) {
       const sub = event.data.object as Stripe.Subscription;
 
+      const company_id = await findCompanyIdForSubscription(sub);
+      if (!company_id) {
+        return NextResponse.json({ received: true, ignored: true, reason: "company_id_not_resolved" });
+      }
+
       const customerId =
         (typeof sub.customer === "string" ? sub.customer : sub.customer?.id) || null;
       const priceId = sub.items.data?.[0]?.price?.id ?? null;
 
-      let company_id: string | null = null;
-
-      const bySub = await supabaseServer
-        .from("company_billing")
-        .select("company_id")
-        .eq("stripe_subscription_id", sub.id)
-        .maybeSingle();
-
-      if (bySub.data?.company_id) {
-        company_id = bySub.data.company_id;
-      } else if (customerId) {
-        const byCustomer = await supabaseServer
-          .from("company_billing")
-          .select("company_id")
-          .eq("stripe_customer_id", customerId)
-          .maybeSingle();
-        if (byCustomer.data?.company_id) company_id = byCustomer.data.company_id;
-      }
-
-      if (!company_id) {
-        company_id = String((sub as any).metadata?.company_id || "").trim() || null;
-      }
-
-      // Stripe typings sometimes lag behind actual fields -> safe access
       const currentPeriodEndUnix = (sub as any).current_period_end as number | undefined;
 
-      if (company_id) {
-        await upsertCompanyBilling({
-          company_id,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: sub.id,
-          stripe_price_id: priceId,
-          status: sub.status,
-          current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
-        });
-      }
+      const status =
+        event.type === "customer.subscription.deleted" ? "canceled" : (sub.status as any);
+
+      await upsertCompanyBilling({
+        company_id,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: sub.id,
+        stripe_price_id: priceId,
+        status,
+        current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
+      });
 
       return NextResponse.json({ received: true });
     }
