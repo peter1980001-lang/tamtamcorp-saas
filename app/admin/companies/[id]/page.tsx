@@ -132,23 +132,23 @@ export default function CompanyDetailPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
-  // ===== NEW: Billing state =====
+  // Billing state
   const [billingInfo, setBillingInfo] = useState<any>(null);
   const [billingLoading, setBillingLoading] = useState(false);
 
-  // ===== Test Chat state =====
+  // Test Chat state
   const [testToken, setTestToken] = useState<string | null>(null);
   const [testConversationId, setTestConversationId] = useState<string | null>(null);
   const [testInput, setTestInput] = useState("Hello Nova");
   const [testLog, setTestLog] = useState<{ role: string; text: string }[]>([]);
   const [testSending, setTestSending] = useState(false);
 
-  // ===== Knowledge state =====
+  // Knowledge state
   const [kbTitle, setKbTitle] = useState("Manual Admin Entry");
   const [kbText, setKbText] = useState("");
   const [kbIngesting, setKbIngesting] = useState(false);
 
-  // ===== Leads state =====
+  // Leads state
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
@@ -165,7 +165,6 @@ export default function CompanyDetailPage() {
     setLoading(false);
   }
 
-  // ===== NEW: Load billing from DB =====
   async function loadBilling() {
     if (!id) return;
     setBillingLoading(true);
@@ -181,11 +180,9 @@ export default function CompanyDetailPage() {
     setBillingInfo(json);
   }
 
-  // ✅ Auto-tab + checkout return handling
   useEffect(() => {
     if (!id) return;
 
-    // open tab from URL ?tab=billing
     const t = String(searchParams?.get("tab") || "").toLowerCase();
     if (t && (tabs as readonly string[]).includes(t)) {
       setTab(t as any);
@@ -193,7 +190,6 @@ export default function CompanyDetailPage() {
 
     load();
 
-    // show toast + refresh after checkout return
     const checkout = String(searchParams?.get("checkout") || "").toLowerCase();
     if (checkout === "success") {
       setToast("Checkout success — syncing billing…");
@@ -204,6 +200,15 @@ export default function CompanyDetailPage() {
       }, 1200);
     } else if (checkout === "cancel") {
       setToast("Checkout canceled");
+    }
+
+    const trial = String(searchParams?.get("trial") || "").toLowerCase();
+    if (trial === "started") {
+      setToast("Trial started — refreshing billing…");
+      setTimeout(() => {
+        loadBilling();
+        setToast("Billing refreshed");
+      }, 600);
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,9 +242,7 @@ export default function CompanyDetailPage() {
     await load();
   }
 
-  // =========================
   // Test Chat actions
-  // =========================
   async function testGetToken() {
     const pk = data?.keys?.public_key;
     if (!pk) return setToast("No public key found. Rotate keys first.");
@@ -312,9 +315,7 @@ export default function CompanyDetailPage() {
     setTestInput("");
   }
 
-  // =========================
   // Knowledge actions
-  // =========================
   async function ingestKnowledge() {
     if (!id) return setToast("Missing company id");
     if (!kbText.trim()) return setToast("Paste some text first");
@@ -342,9 +343,7 @@ export default function CompanyDetailPage() {
     setKbText("");
   }
 
-  // =========================
   // Leads actions
-  // =========================
   async function loadLeads() {
     if (!id) return;
     setLeadsLoading(true);
@@ -615,7 +614,7 @@ export default function CompanyDetailPage() {
                 </Card>
               )}
 
-              {/* ✅ BILLING TAB (Status + Actions) */}
+              {/* BILLING TAB */}
               {tab === "billing" && (
                 <Card
                   title="Billing"
@@ -646,7 +645,15 @@ export default function CompanyDetailPage() {
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
                         <div>
-                          <b>Status:</b> {billingInfo.billing.status || "—"}
+                          <b>Status:</b> {billingInfo.billing.status || "—"}{" "}
+                          {billingInfo.paying_status ? badge("paying", "#111", "#fff") : badge("not paying", "#fafafa", "#111")}
+                        </div>
+                        <div>
+                          <b>Chat:</b>{" "}
+                          {billingInfo.chat_enabled ? badge("enabled", "#111", "#fff") : badge("disabled", "#fafafa", "#111")}{" "}
+                          <span style={{ fontSize: 12, opacity: 0.7 }}>
+                            (feature: {billingInfo.chat_feature_enabled ? "on" : "off"})
+                          </span>
                         </div>
                         <div>
                           <b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}
@@ -665,6 +672,24 @@ export default function CompanyDetailPage() {
                         <div>
                           <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
                         </div>
+
+                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #eee" }}>
+                          <b>Rate limits (effective):</b>{" "}
+                          {billingInfo.effective_rate_limits ? (
+                            <span>
+                              {billingInfo.effective_rate_limits.per_minute}/min &nbsp;·&nbsp; {billingInfo.effective_rate_limits.per_day}/day
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                            Company config: {billingInfo.company_rate_limits?.per_minute ?? "—"}/min · {billingInfo.company_rate_limits?.per_day ?? "—"}/day
+                            {"  "} | Plan cap:{" "}
+                            {billingInfo.plan_rate_limits?.per_minute ? `${billingInfo.plan_rate_limits.per_minute}/min` : "—"} ·{" "}
+                            {billingInfo.plan_rate_limits?.per_day ? `${billingInfo.plan_rate_limits.per_day}/day` : "—"}
+                          </div>
+                        </div>
+
                         <div style={{ fontSize: 12, opacity: 0.7 }}>
                           Updated: {billingInfo.billing.updated_at ? new Date(billingInfo.billing.updated_at).toLocaleString() : "—"}
                         </div>
@@ -680,7 +705,6 @@ export default function CompanyDetailPage() {
 
               {tab === "test-chat" && (
                 <Card title="Test Chat">
-                  {/* (dein original Test-Chat block unverändert) */}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                     <button
                       onClick={testGetToken}
@@ -823,13 +847,7 @@ export default function CompanyDetailPage() {
                     </button>
                   }
                 >
-                  {/* Dein Leads Block ist extrem lang – du hast ihn vorher komplett gepostet.
-                      Wenn du willst, dass ich 100% auch hier bis zur letzten Zeile exakt reinsetze,
-                      poste mir einfach den Rest (ab der Stelle wo es in deinem Editor weitergeht).
-                      Funktional bleibt hier alles, weil wir an Leads nichts geändert haben. */}
-                  <div style={{ opacity: 0.75 }}>
-                    Leads UI unverändert – bleibt wie bei dir im Projekt.
-                  </div>
+                  <div style={{ opacity: 0.75 }}>Leads UI unverändert – bleibt wie bei dir im Projekt.</div>
                 </Card>
               )}
             </>
