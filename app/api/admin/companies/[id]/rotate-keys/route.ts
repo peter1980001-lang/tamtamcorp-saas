@@ -10,6 +10,7 @@ function genKey(prefix: "pk" | "sk") {
 }
 
 function maskSecret(s: string) {
+  if (!s) return "";
   if (s.length <= 10) return "********";
   return s.slice(0, 6) + "…" + s.slice(-4);
 }
@@ -17,27 +18,37 @@ function maskSecret(s: string) {
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
-  if (!company_id) return NextResponse.json({ ok: false, error: "missing_company_id" }, { status: 400 });
+  if (!company_id)
+    return NextResponse.json({ ok: false, error: "missing_company_id" }, { status: 400 });
 
   const auth = await requireCompanyAccess(company_id);
-  if (!auth.ok) return NextResponse.json({ ok: false, error: "forbidden" }, { status: auth.status });
+  if (!auth.ok)
+    return NextResponse.json({ ok: false, error: "forbidden" }, { status: auth.status });
 
   const public_key = genKey("pk");
   const secret_key = genKey("sk");
 
-  // IMPORTANT: adjust table name if yours differs
   const { data, error } = await supabaseServer
-    .from("company_api_keys")
-    .insert({ company_id, public_key, secret_key })
+    .from("company_keys")
+    .update({
+      public_key,
+      secret_key,
+      created_at: new Date().toISOString(),
+    })
+    .eq("company_id", company_id)
     .select("public_key, secret_key, created_at")
     .maybeSingle();
 
-  if (error) return NextResponse.json({ ok: false, error: "db_failed", details: error.message }, { status: 500 });
+  if (error)
+    return NextResponse.json(
+      { ok: false, error: "db_failed", details: error.message },
+      { status: 500 }
+    );
 
   return NextResponse.json({
     ok: true,
     public_key: data?.public_key ?? public_key,
-    secret_key: data?.secret_key ?? secret_key, // full secret only in response to POST
+    secret_key: data?.secret_key ?? secret_key,
     secret_key_masked: maskSecret(data?.secret_key ?? secret_key),
     keys_rotated_at: data?.created_at ?? new Date().toISOString(),
   });

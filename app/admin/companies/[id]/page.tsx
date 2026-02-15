@@ -129,10 +129,7 @@ function TrialNotice(props: { billingInfo: any }) {
 
   if (![1, 2, 3].includes(daysLeft)) return null;
 
-  const text =
-    daysLeft === 1
-      ? "Dein Trial läuft in 1 Tag ab."
-      : `Dein Trial läuft in ${daysLeft} Tagen ab.`;
+  const text = daysLeft === 1 ? "Dein Trial läuft in 1 Tag ab." : `Dein Trial läuft in ${daysLeft} Tagen ab.`;
 
   return (
     <div
@@ -155,6 +152,19 @@ function TrialNotice(props: { billingInfo: any }) {
   );
 }
 
+function normalizeHost(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "");
+}
+
+function uniq(arr: string[]) {
+  return Array.from(new Set(arr));
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -173,6 +183,12 @@ export default function CompanyDetailPage() {
   // ===== Billing state =====
   const [billingInfo, setBillingInfo] = useState<any>(null);
   const [billingLoading, setBillingLoading] = useState(false);
+
+  // ===== Domains edit state =====
+  const [domainInput, setDomainInput] = useState("");
+  const [domainDraft, setDomainDraft] = useState<string[]>([]);
+  const [domainSaving, setDomainSaving] = useState(false);
+  const [domainDirty, setDomainDirty] = useState(false);
 
   // ===== Test Chat state =====
   const [testToken, setTestToken] = useState<string | null>(null);
@@ -259,13 +275,29 @@ export default function CompanyDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams]);
 
-  // ✅ When switching to "limits", reload once to reflect DB changes immediately
+  // ✅ When switching tabs, reload/prepare as needed
   useEffect(() => {
     if (tab === "limits") load();
     if (tab === "billing") loadBilling();
     if (tab === "leads") loadLeads();
+
+    if (tab === "domains") {
+      const current = data?.keys?.allowed_domains ?? [];
+      setDomainDraft(current);
+      setDomainInput("");
+      setDomainDirty(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // Keep draft in sync when data changes while domains tab is active (e.g. refresh)
+  useEffect(() => {
+    if (tab !== "domains") return;
+    const current = data?.keys?.allowed_domains ?? [];
+    setDomainDraft(current);
+    setDomainDirty(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.keys?.allowed_domains, tab]);
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -293,6 +325,71 @@ export default function CompanyDetailPage() {
 
     setToast("Keys rotated");
     await load();
+  }
+
+  function addDomainFromInput() {
+    const raw = domainInput || "";
+    const normalized = normalizeHost(raw);
+
+    if (!normalized) {
+      setToast("Enter a domain");
+      return;
+    }
+    if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) {
+      setToast("Invalid domain");
+      return;
+    }
+
+    setDomainDraft((prev) => {
+      const next = uniq([...prev, normalized]);
+      return next;
+    });
+    setDomainInput("");
+    setDomainDirty(true);
+  }
+
+  function removeDomain(d: string) {
+    setDomainDraft((prev) => prev.filter((x) => x !== d));
+    setDomainDirty(true);
+  }
+
+  async function saveDomains() {
+    if (!id) return;
+    setDomainSaving(true);
+
+    const payload = {
+      allowed_domains: uniq(
+        (domainDraft ?? [])
+          .filter((x) => typeof x === "string")
+          .map((x) => normalizeHost(x))
+          .filter((x) => x.length > 0)
+      ),
+    };
+
+    const res = await fetch(`/api/admin/companies/${id}/domains`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json().catch(() => null);
+    setDomainSaving(false);
+
+    if (!res.ok) {
+      setToast(json?.error || "domains_save_failed");
+      return;
+    }
+
+    const updatedKeys: Keys | null = json?.keys ?? null;
+    if (updatedKeys) {
+      setData((prev) => {
+        if (!prev) return prev;
+        return { ...prev, keys: updatedKeys };
+      });
+    }
+
+    setDomainDirty(false);
+    setToast("Domains saved");
   }
 
   async function testGetToken() {
@@ -539,9 +636,7 @@ export default function CompanyDetailPage() {
                       </div>
                       <div>
                         <b>Chat Mode:</b>{" "}
-                        {data.settings?.branding_json?.chat?.mode ??
-                          data.settings?.limits_json?.chat?.mode ??
-                          "hybrid (default)"}
+                        {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid (default)"}
                       </div>
                     </div>
                   </Card>
@@ -557,7 +652,17 @@ export default function CompanyDetailPage() {
                       </button>
                     }
                   >
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
+                    <pre
+                      style={{
+                        margin: 0,
+                        whiteSpace: "pre-wrap",
+                        fontSize: 12,
+                        background: "#fafafa",
+                        border: "1px solid #eee",
+                        padding: 12,
+                        borderRadius: 12,
+                      }}
+                    >
                       {embedSnippet}
                     </pre>
                   </Card>
@@ -615,27 +720,151 @@ export default function CompanyDetailPage() {
               )}
 
               {tab === "domains" && (
-                <Card title="Allowed Domains">
+                <Card
+                  title="Allowed Domains"
+                  right={
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        onClick={() => {
+                          const current = data.keys?.allowed_domains ?? [];
+                          setDomainDraft(current);
+                          setDomainInput("");
+                          setDomainDirty(false);
+                          setToast("Reset");
+                        }}
+                        disabled={domainSaving}
+                        style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        onClick={saveDomains}
+                        disabled={domainSaving || !domainDirty}
+                        style={{
+                          border: "1px solid #111",
+                          background: domainSaving || !domainDirty ? "#444" : "#111",
+                          color: "#fff",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          cursor: domainSaving || !domainDirty ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {domainSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                  }
+                >
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-                    Stored in <code>company_keys.allowed_domains</code>.
+                    Stored in <code>company_keys.allowed_domains</code>. Host-only, no protocol, no path.
                   </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    <input
+                      value={domainInput}
+                      onChange={(e) => setDomainInput(e.target.value)}
+                      placeholder="e.g. tamtamcorp-saas-pcwl.vercel.app"
+                      style={{ flex: 1, minWidth: 280, padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addDomainFromInput();
+                      }}
+                    />
+                    <button
+                      onClick={addDomainFromInput}
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: "1px solid #111",
+                        background: "#111",
+                        color: "#fff",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  <div style={{ marginBottom: 10, fontSize: 12, opacity: 0.7 }}>
+                    Example: <code>tamtamcorp-saas-pcwl.vercel.app</code> — do not include <code>https://</code> or slashes.
+                  </div>
+
                   <div>
-                    {(data.keys?.allowed_domains ?? []).length === 0 ? (
+                    {domainDraft.length === 0 ? (
                       <div style={{ opacity: 0.7 }}>No domains set.</div>
                     ) : (
-                      (data.keys?.allowed_domains ?? []).map((d) => <Chip key={d} text={d} />)
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {domainDraft.map((d) => (
+                          <span
+                            key={d}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "6px 10px",
+                              borderRadius: 999,
+                              border: "1px solid #eee",
+                              background: "#fafafa",
+                              fontSize: 12,
+                              marginRight: 8,
+                              marginBottom: 8,
+                            }}
+                          >
+                            <span>{d}</span>
+                            <button
+                              onClick={() => removeDomain(d)}
+                              style={{
+                                border: "1px solid #ddd",
+                                background: "#fff",
+                                padding: "2px 8px",
+                                borderRadius: 999,
+                                cursor: "pointer",
+                                fontSize: 12,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </div>
-                  <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>(Editing UI is next – for now set via DB.)</div>
+
+                  <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+                    Status:{" "}
+                    {domainDirty ? (
+                      <span style={{ fontWeight: 700 }}>Unsaved changes</span>
+                    ) : (
+                      <span>Saved</span>
+                    )}
+                  </div>
                 </Card>
               )}
 
               {tab === "limits" && (
-                <Card title="Limits" right={<button onClick={load} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>Refresh</button>}>
+                <Card
+                  title="Limits"
+                  right={
+                    <button
+                      onClick={load}
+                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
+                    >
+                      Refresh
+                    </button>
+                  }
+                >
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Stored in <code>company_settings.limits_json</code>.
                   </div>
-                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: "pre-wrap",
+                      fontSize: 12,
+                      background: "#fafafa",
+                      border: "1px solid #eee",
+                      padding: 12,
+                      borderRadius: 12,
+                    }}
+                  >
                     {JSON.stringify(data.settings?.limits_json ?? {}, null, 2)}
                   </pre>
                 </Card>
@@ -656,7 +885,17 @@ export default function CompanyDetailPage() {
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Put this script on the client website. It loads the floating iframe widget.
                   </div>
-                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: "pre-wrap",
+                      fontSize: 12,
+                      background: "#fafafa",
+                      border: "1px solid #eee",
+                      padding: 12,
+                      borderRadius: 12,
+                    }}
+                  >
                     {embedSnippet}
                   </pre>
                 </Card>
@@ -689,8 +928,7 @@ export default function CompanyDetailPage() {
                       <div style={{ opacity: 0.75 }}>Loading billing…</div>
                     ) : !billingInfo?.billing ? (
                       <div style={{ opacity: 0.75 }}>
-                        No billing row yet. After first Checkout, Stripe webhook will create/update{" "}
-                        <code>company_billing</code>.
+                        No billing row yet. After first Checkout, Stripe webhook will create/update <code>company_billing</code>.
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
@@ -706,9 +944,7 @@ export default function CompanyDetailPage() {
                         </div>
                         <div>
                           <b>Current period end:</b>{" "}
-                          {billingInfo.billing.current_period_end
-                            ? new Date(billingInfo.billing.current_period_end).toLocaleString()
-                            : "—"}
+                          {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
                         </div>
                         <div>
                           <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
@@ -717,10 +953,7 @@ export default function CompanyDetailPage() {
                           <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
                         </div>
                         <div style={{ fontSize: 12, opacity: 0.7 }}>
-                          Updated:{" "}
-                          {billingInfo.billing.updated_at
-                            ? new Date(billingInfo.billing.updated_at).toLocaleString()
-                            : "—"}
+                          Updated: {billingInfo.billing.updated_at ? new Date(billingInfo.billing.updated_at).toLocaleString() : "—"}
                         </div>
                       </div>
                     )}
@@ -737,7 +970,14 @@ export default function CompanyDetailPage() {
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                     <button
                       onClick={testGetToken}
-                      style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        border: "1px solid #111",
+                        background: "#111",
+                        color: "#fff",
+                        cursor: "pointer",
+                      }}
                     >
                       Get Token
                     </button>
@@ -866,9 +1106,7 @@ export default function CompanyDetailPage() {
 
               {tab === "leads" && (
                 <Card title="Leads Dashboard">
-                  <div style={{ opacity: 0.75 }}>
-                    Leads UI unverändert – bleibt wie bei dir im Projekt.
-                  </div>
+                  <div style={{ opacity: 0.75 }}>Leads UI unverändert – bleibt wie bei dir im Projekt.</div>
                 </Card>
               )}
             </>
