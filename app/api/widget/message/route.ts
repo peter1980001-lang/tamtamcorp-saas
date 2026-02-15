@@ -15,120 +15,102 @@ function getBearerToken(req: Request) {
   return m ? m[1] : null;
 }
 
-function todayUtcKey(d = new Date()) {
-  // YYYY-MM-DD in UTC
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+function toInt(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.floor(n) : fallback;
 }
 
-function minuteUtcKey(d = new Date()) {
-  // YYYY-MM-DDTHH:MM in UTC
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mi = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+function makeBuckets(now: Date) {
+  // bucket format matches your billing usage route pattern:
+  // minute:YYYY-MM-DDTHH:MM (UTC)
+  // day:YYYY-MM-DD (UTC)
+  const pad = (x: number) => String(x).padStart(2, "0");
+
+  const yyyy = now.getUTCFullYear();
+  const mm = pad(now.getUTCMonth() + 1);
+  const dd = pad(now.getUTCDate());
+  const hh = pad(now.getUTCHours());
+  const mi = pad(now.getUTCMinutes());
+
+  const min_bucket = `minute:${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+  const day_bucket = `day:${yyyy}-${mm}-${dd}`;
+
+  // optional hints
+  const reset_minute = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0));
+  reset_minute.setUTCMinutes(reset_minute.getUTCMinutes() + 1);
+
+  const reset_day = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+  reset_day.setUTCDate(reset_day.getUTCDate() + 1);
+
+  return {
+    min_bucket,
+    day_bucket,
+    reset_minute: reset_minute.toISOString(),
+    reset_day: reset_day.toISOString(),
+  };
 }
 
-async function enforceRateLimits(company_id: string, limits: { per_minute: number; per_day: number }) {
+async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { per_minute: number; per_day: number }) {
   const now = new Date();
-  const minute_key = minuteUtcKey(now);
-  const day_key = todayUtcKey(now);
+  const { min_bucket, day_bucket, reset_minute, reset_day } = makeBuckets(now);
 
-  // We count "requests". One widget message = one request.
-  // Minute bucket in: public.rate_limit_minute(company_id, minute_bucket, count, reset_at?)
-  // Day bucket in: public.usage_daily(company_id, day_bucket, count, reset_at?)
-  //
-  // If your columns differ, we’ll adjust after the first error message.
-  //
-  // We do this as: read -> if over -> block -> else increment.
-  // (MVP; later we can move to a single RPC for atomicity)
+  const per_minute = Math.max(1, Math.min(600, toInt(limits.per_minute, 10)));
+  const per_day = Math.max(1, Math.min(200000, toInt(limits.per_day, 1000)));
 
-  // 1) Minute read
-  const { data: mRow, error: mErr } = await supabaseServer
-    .from("rate_limit_minute")
-    .select("count, bucket")
+  // Read both buckets in one query
+  const { data: counters, error: cErr } = await supabaseServer
+    .from("company_usage_counters")
+    .select("bucket,count,updated_at")
     .eq("company_id", company_id)
-    .eq("bucket", `minute:${minute_key}`)
-    .maybeSingle();
+    .in("bucket", [min_bucket, day_bucket]);
 
-  if (mErr) {
-    return { ok: false as const, status: 500, error: "rate_limit_read_failed", details: mErr.message };
+  if (cErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_read_failed", details: cErr.message };
   }
 
-  const minuteCount = Number((mRow as any)?.count ?? 0);
-  if (limits.per_minute > 0 && minuteCount >= limits.per_minute) {
+  const byBucket = new Map<string, any>((counters || []).map((r: any) => [String(r.bucket), r]));
+  const minuteCount = Number(byBucket.get(min_bucket)?.count ?? 0);
+  const dayCount = Number(byBucket.get(day_bucket)?.count ?? 0);
+
+  if (per_minute > 0 && minuteCount >= per_minute) {
     return {
       ok: false as const,
       status: 429,
       error: "rate_limited",
       scope: "minute",
-      limit: limits.per_minute,
+      limit: per_minute,
       count: minuteCount,
-      reset_hint: "next_minute",
+      reset_hint: reset_minute,
     };
   }
 
-  // 2) Day read
-  const { data: dRow, error: dErr } = await supabaseServer
-    .from("usage_daily")
-    .select("count, day")
-    .eq("company_id", company_id)
-    .eq("day", day_key)
-    .maybeSingle();
-
-  if (dErr) {
-    return { ok: false as const, status: 500, error: "rate_limit_read_failed", details: dErr.message };
-  }
-
-  const dayCount = Number((dRow as any)?.count ?? 0);
-  if (limits.per_day > 0 && dayCount >= limits.per_day) {
+  if (per_day > 0 && dayCount >= per_day) {
     return {
       ok: false as const,
       status: 429,
       error: "rate_limited",
       scope: "day",
-      limit: limits.per_day,
+      limit: per_day,
       count: dayCount,
-      reset_hint: "next_day",
+      reset_hint: reset_day,
     };
   }
 
-  // 3) Increment minute (upsert)
-  const { error: mUpErr } = await supabaseServer
-    .from("rate_limit_minute")
+  // Increment both buckets (upsert)
+  const nowIso = new Date().toISOString();
+
+  const { error: upErr } = await supabaseServer
+    .from("company_usage_counters")
     .upsert(
-      {
-        company_id,
-        bucket: `minute:${minute_key}`,
-        count: minuteCount + 1,
-        updated_at: new Date().toISOString(),
-      } as any,
+      [
+        { company_id, bucket: min_bucket, count: minuteCount + 1, updated_at: nowIso } as any,
+        { company_id, bucket: day_bucket, count: dayCount + 1, updated_at: nowIso } as any,
+      ],
       { onConflict: "company_id,bucket" }
     );
 
-  if (mUpErr) {
-    return { ok: false as const, status: 500, error: "rate_limit_write_failed", details: mUpErr.message };
-  }
-
-  // 4) Increment day (upsert)
-  const { error: dUpErr } = await supabaseServer
-    .from("usage_daily")
-    .upsert(
-      {
-        company_id,
-        day: day_key,
-        count: dayCount + 1,
-        updated_at: new Date().toISOString(),
-      } as any,
-      { onConflict: "company_id,day" }
-    );
-
-  if (dUpErr) {
-    return { ok: false as const, status: 500, error: "rate_limit_write_failed", details: dUpErr.message };
+  if (upErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_write_failed", details: upErr.message };
   }
 
   return { ok: true as const };
@@ -175,19 +157,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
 
-  // 1) Billing gate (your existing logic)
+  // Billing gate
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) {
     return NextResponse.json({ error: bill.code, message: bill.message }, { status: 402 });
   }
 
-  // 2) Hard Rate Limit (429) BEFORE OpenAI
-  const rl = await enforceRateLimits(company_id, bill.limits);
+  // ✅ Hard Rate Limit (429) BEFORE OpenAI — using company_usage_counters (consistent with your billing usage route)
+  const rl = await enforceRateLimitsViaUsageCounters(company_id, bill.limits);
   if (!rl.ok) {
-    return NextResponse.json(
-      { error: rl.error, ...(rl as any) },
-      { status: rl.status }
-    );
+    return NextResponse.json({ error: rl.error, ...(rl as any) }, { status: rl.status });
   }
 
   // Store user message
