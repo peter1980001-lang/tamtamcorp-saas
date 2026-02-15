@@ -1,8 +1,5 @@
 {
   "crons": [
-    {
-      "path": "/api/admin/billing/reconcile",
-      "schedule": "* * * * *"
-    }
+    { "path": "/api/admin/billing/reconcile", "schedule": "0 3 * * *" }
   ]
 }
