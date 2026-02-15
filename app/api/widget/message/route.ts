@@ -112,6 +112,76 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   return { ok: true as const };
 }
 
+// -------------------- LANGUAGE --------------------
+
+type Lang = "de" | "en";
+
+function detectLanguage(text: string): Lang {
+  const t = String(text || "").toLowerCase();
+
+  // quick DE markers
+  const deMarkers = [
+    " kann ",
+    " bitte",
+    " ich ",
+    " wir ",
+    " nicht ",
+    " warum ",
+    " wie ",
+    " was ",
+    " danke",
+    " hallo",
+    " guten",
+    " sprache",
+    " lernen",
+    " hilft",
+    " funktioniert",
+    " würde",
+    " könnte",
+    " möchte",
+    " benötige",
+    " vielleicht",
+  ];
+
+  const hasUmlaut = /[äöüß]/.test(t);
+  const hasDeMarker = deMarkers.some((m) => t.includes(m));
+
+  // quick EN markers
+  const enMarkers = [" please", " can you", " how ", " what ", " why ", " thanks", "hello", "help me", "learn "];
+  const hasEnMarker = enMarkers.some((m) => t.includes(m));
+
+  if (hasUmlaut || (hasDeMarker && !hasEnMarker)) return "de";
+  return "en";
+}
+
+function getLangFromBranding(branding_json: any): Lang | null {
+  const v = branding_json?.chat?.language ?? branding_json?.language ?? null;
+  if (!v) return null;
+  const s = String(v).toLowerCase();
+  if (s.startsWith("de")) return "de";
+  if (s.startsWith("en")) return "en";
+  return null;
+}
+
+function unknownByLang(lang: Lang) {
+  return lang === "de" ? "Ich weiß es nicht basierend auf den bereitgestellten Informationen." : "I don’t know based on the provided information.";
+}
+
+function languageSystemRule(lang: Lang) {
+  if (lang === "de") {
+    return [
+      "Du bist der Assistent der Company.",
+      "Antworte IMMER vollständig auf Deutsch, ohne Englisch-Mischung.",
+      "Wenn der User Englisch schreibt, darfst du auf Englisch antworten; sonst auf Deutsch.",
+    ].join("\n");
+  }
+  return [
+    "You are the company's assistant.",
+    "Always reply fully in English, without mixing German.",
+    "If the user writes in German, you may reply in German; otherwise reply in English.",
+  ].join("\n");
+}
+
 // -------------------- KNOWLEDGE (RAG) --------------------
 
 async function embedQuery(text: string): Promise<number[]> {
@@ -189,10 +259,12 @@ async function getCompanyChatConfig(company_id: string) {
   const max_chunks = Number.isFinite(Number(chat?.max_chunks)) ? Math.max(0, Math.min(20, Number(chat.max_chunks))) : 6;
 
   const system_prompt = String(chat?.system_prompt || "").trim();
+
+  // NOTE: unknown_answer may exist in DB; we will localize at runtime if not explicitly set per language
   const unknown_answer = String(chat?.unknown_answer || "I don’t know based on the provided information.").trim();
   const include_sources = Boolean(chat?.include_sources ?? false);
 
-  return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources };
+  return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources, branding };
 }
 
 // ✅ Allow GET for quick health check
@@ -267,15 +339,31 @@ export async function POST(req: Request) {
   if (hErr) return NextResponse.json({ error: "db_history_failed", details: hErr.message }, { status: 500 });
 
   // Chat config + Knowledge
-  const cfg = (await getCompanyChatConfig(company_id)) ?? {
-    mode: "hybrid",
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    max_chunks: 6,
-    system_prompt: "",
-    unknown_answer: "I don’t know based on the provided information.",
-    include_sources: false,
-  };
+  const cfg =
+    (await getCompanyChatConfig(company_id)) ?? ({
+      mode: "hybrid",
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      max_chunks: 6,
+      system_prompt: "",
+      unknown_answer: "I don’t know based on the provided information.",
+      include_sources: false,
+      branding: {},
+    } as any);
+
+  // language decision:
+  // 1) explicit company branding/setting (branding_json.chat.language or branding_json.language)
+  // 2) detect from user message
+  const lang: Lang = getLangFromBranding(cfg.branding) ?? detectLanguage(message);
+
+  // unknown answer localization:
+  // If DB unknown_answer is present AND looks localized already, keep it.
+  // Otherwise, use our localized default to avoid mixed languages.
+  const cfgUnknown = String(cfg.unknown_answer || "").trim();
+  const unknown_answer =
+    cfgUnknown && cfgUnknown !== "I don’t know based on the provided information."
+      ? cfgUnknown
+      : unknownByLang(lang);
 
   let context = "";
   let sources: any[] = [];
@@ -293,7 +381,7 @@ export async function POST(req: Request) {
 
   // ✅ enforce knowledge-only when configured
   if (cfg.mode === "knowledge_only" && !context) {
-    const reply = cfg.unknown_answer;
+    const reply = unknown_answer;
 
     const { error: insAsstErr } = await supabaseServer.from("messages").insert({
       conversation_id,
@@ -310,12 +398,16 @@ export async function POST(req: Request) {
 
   const systemParts: string[] = [];
 
+  // 1) hard language rule first
+  systemParts.push(languageSystemRule(lang));
+
+  // 2) optional per-company system prompt
   if (cfg.system_prompt) systemParts.push(cfg.system_prompt);
 
+  // 3) core RAG instructions
   systemParts.push(
-    "You are the company's assistant.",
     "Use the provided KNOWLEDGE CONTEXT as the primary source of truth.",
-    `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${cfg.unknown_answer}".`,
+    `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${unknown_answer}".`,
     "Be concise and accurate.",
     "",
     "KNOWLEDGE CONTEXT:",
@@ -332,7 +424,19 @@ export async function POST(req: Request) {
   });
 
   let reply = String(completion.choices?.[0]?.message?.content || "").trim();
-  if (!reply) reply = cfg.unknown_answer;
+  if (!reply) reply = unknown_answer;
+
+  // Safety: if model returns mixed language on DE request, force unknown answer when context empty.
+  // (Most mixes happen on unknown cases.)
+  if (!context && cfg.mode !== "knowledge_only") {
+    // If user is DE and reply contains typical EN phrase, normalize to DE unknown.
+    if (lang === "de" && /i\s+don['’]t\s+know|based\s+on\s+the\s+provided\s+information/i.test(reply)) {
+      reply = unknown_answer;
+    }
+    if (lang === "en" && /ich\s+weiß\s+es\s+nicht|bereitgestellten\s+informationen/i.test(reply)) {
+      reply = unknown_answer;
+    }
+  }
 
   // Store assistant reply
   const { error: insAsstErr } = await supabaseServer.from("messages").insert({
