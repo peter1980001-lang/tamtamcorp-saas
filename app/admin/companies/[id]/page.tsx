@@ -117,6 +117,52 @@ function ScoreBadge({ band, total }: { band: LeadRow["score_band"]; total: numbe
   return badge(`cold ${total}`, "#fafafa", "#111");
 }
 
+function TrialNotice(props: { billingInfo: any }) {
+  const billing = props.billingInfo?.billing;
+  if (!billing) return null;
+
+  const status = String(billing.status || "none").toLowerCase();
+  if (status !== "trialing") return null;
+
+  const endRaw = billing.current_period_end;
+  if (!endRaw) return null;
+
+  const end = new Date(endRaw);
+  if (Number.isNaN(end.getTime())) return null;
+
+  const now = new Date();
+  const msLeft = end.getTime() - now.getTime();
+  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+
+  // only show exactly for 3/2/1 days (as requested)
+  if (![1, 2, 3].includes(daysLeft)) return null;
+
+  const text =
+    daysLeft === 1
+      ? "Dein Trial läuft in 1 Tag ab."
+      : `Dein Trial läuft in ${daysLeft} Tagen ab.`;
+
+  return (
+    <div
+      style={{
+        border: "1px solid #eee",
+        background: "#fff8e1",
+        borderRadius: 14,
+        padding: 12,
+        marginBottom: 12,
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>Trial Hinweis</div>
+      <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.5 }}>
+        {text} <span style={{ opacity: 0.75 }}>(Ende: {end.toLocaleString()})</span>
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
+        Du kannst jederzeit auf einen Plan upgraden über <b>Subscribe</b>.
+      </div>
+    </div>
+  );
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -132,23 +178,23 @@ export default function CompanyDetailPage() {
 
   const [toast, setToast] = useState<string | null>(null);
 
-  // Billing state
+  // ===== Billing state =====
   const [billingInfo, setBillingInfo] = useState<any>(null);
   const [billingLoading, setBillingLoading] = useState(false);
 
-  // Test Chat state
+  // ===== Test Chat state =====
   const [testToken, setTestToken] = useState<string | null>(null);
   const [testConversationId, setTestConversationId] = useState<string | null>(null);
   const [testInput, setTestInput] = useState("Hello Nova");
   const [testLog, setTestLog] = useState<{ role: string; text: string }[]>([]);
   const [testSending, setTestSending] = useState(false);
 
-  // Knowledge state
+  // ===== Knowledge state =====
   const [kbTitle, setKbTitle] = useState("Manual Admin Entry");
   const [kbText, setKbText] = useState("");
   const [kbIngesting, setKbIngesting] = useState(false);
 
-  // Leads state
+  // ===== Leads state =====
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
@@ -204,11 +250,8 @@ export default function CompanyDetailPage() {
 
     const trial = String(searchParams?.get("trial") || "").toLowerCase();
     if (trial === "started") {
-      setToast("Trial started — refreshing billing…");
-      setTimeout(() => {
-        loadBilling();
-        setToast("Billing refreshed");
-      }, 600);
+      setToast("Trial started");
+      setTimeout(() => loadBilling(), 600);
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,7 +285,6 @@ export default function CompanyDetailPage() {
     await load();
   }
 
-  // Test Chat actions
   async function testGetToken() {
     const pk = data?.keys?.public_key;
     if (!pk) return setToast("No public key found. Rotate keys first.");
@@ -315,7 +357,6 @@ export default function CompanyDetailPage() {
     setTestInput("");
   }
 
-  // Knowledge actions
   async function ingestKnowledge() {
     if (!id) return setToast("Missing company id");
     if (!kbText.trim()) return setToast("Paste some text first");
@@ -343,7 +384,6 @@ export default function CompanyDetailPage() {
     setKbText("");
   }
 
-  // Leads actions
   async function loadLeads() {
     if (!id) return;
     setLeadsLoading(true);
@@ -409,7 +449,6 @@ export default function CompanyDetailPage() {
   return (
     <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, opacity: 0.65 }}>Company</div>
@@ -455,7 +494,6 @@ export default function CompanyDetailPage() {
           </div>
         </div>
 
-        {/* Tabs */}
         <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {tabs.map((t) => (
             <button
@@ -476,7 +514,6 @@ export default function CompanyDetailPage() {
           ))}
         </div>
 
-        {/* Body */}
         <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
           {loading || !data ? (
             <Card title="Loading">Fetching data…</Card>
@@ -614,7 +651,6 @@ export default function CompanyDetailPage() {
                 </Card>
               )}
 
-              {/* BILLING TAB */}
               {tab === "billing" && (
                 <Card
                   title="Billing"
@@ -627,6 +663,9 @@ export default function CompanyDetailPage() {
                     </button>
                   }
                 >
+                  {/* ✅ NEW: Trial countdown hint (3/2/1 days) */}
+                  <TrialNotice billingInfo={billingInfo} />
+
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Start a subscription (Checkout) or manage the current subscription (Customer Portal).
                   </div>
@@ -634,7 +673,7 @@ export default function CompanyDetailPage() {
                   <BillingActions companyId={id as string} />
 
                   <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 14 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Billing + Access + Usage</div>
+                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Current Billing Status</div>
 
                     {billingLoading ? (
                       <div style={{ opacity: 0.75 }}>Loading billing…</div>
@@ -643,53 +682,27 @@ export default function CompanyDetailPage() {
                         No billing row yet. After first Checkout, Stripe webhook will create/update <code>company_billing</code>.
                       </div>
                     ) : (
-                      <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
+                      <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
                         <div>
-                          <b>Status:</b> {billingInfo.billing.status || "—"}{" "}
-                          {billingInfo.paying_status ? badge("paying", "#111", "#fff") : badge("not paying", "#fafafa", "#111")}
-                        </div>
-                        <div>
-                          <b>Chat:</b>{" "}
-                          {billingInfo.chat_enabled ? badge("enabled", "#111", "#fff") : badge("disabled", "#fafafa", "#111")}{" "}
-                          <span style={{ fontSize: 12, opacity: 0.7 }}>(feature: {billingInfo.chat_feature_enabled ? "on" : "off"})</span>
+                          <b>Status:</b> {billingInfo.billing.status || "—"}
                         </div>
                         <div>
                           <b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}
                           {billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}
                         </div>
                         <div>
+                          <b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}
+                        </div>
+                        <div>
                           <b>Current period end:</b>{" "}
                           {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
                         </div>
-
-                        <div style={{ paddingTop: 8, marginTop: 6, borderTop: "1px dashed #eee" }}>
-                          <b>Effective limits:</b>{" "}
-                          {billingInfo.effective_rate_limits
-                            ? `${billingInfo.effective_rate_limits.per_minute}/min · ${billingInfo.effective_rate_limits.per_day}/day`
-                            : "—"}
-                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-                            Company: {billingInfo.company_rate_limits?.per_minute ?? "—"}/min · {billingInfo.company_rate_limits?.per_day ?? "—"}/day{" "}
-                            | Plan cap:{" "}
-                            {billingInfo.plan_rate_limits?.per_minute ? `${billingInfo.plan_rate_limits.per_minute}/min` : "—"} ·{" "}
-                            {billingInfo.plan_rate_limits?.per_day ? `${billingInfo.plan_rate_limits.per_day}/day` : "—"}
-                          </div>
+                        <div>
+                          <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
                         </div>
-
-                        <div style={{ paddingTop: 8, marginTop: 6, borderTop: "1px dashed #eee" }}>
-                          <b>Usage (this minute/day):</b>
-                          <div style={{ fontSize: 13, marginTop: 4 }}>
-                            Minute: {billingInfo.usage?.minute_count ?? 0} &nbsp;| Remaining: {billingInfo.usage?.remaining_minute ?? "—"} &nbsp;| Reset:{" "}
-                            {billingInfo.usage?.reset_minute ? new Date(billingInfo.usage.reset_minute).toLocaleTimeString() : "—"}
-                          </div>
-                          <div style={{ fontSize: 13, marginTop: 2 }}>
-                            Day: {billingInfo.usage?.day_count ?? 0} &nbsp;| Remaining: {billingInfo.usage?.remaining_day ?? "—"} &nbsp;| Reset:{" "}
-                            {billingInfo.usage?.reset_day ? new Date(billingInfo.usage.reset_day).toLocaleTimeString() : "—"}
-                          </div>
-                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-                            Buckets: {billingInfo.usage?.minute_bucket ?? "—"} · {billingInfo.usage?.day_bucket ?? "—"}
-                          </div>
+                        <div>
+                          <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
                         </div>
-
                         <div style={{ fontSize: 12, opacity: 0.7 }}>
                           Updated: {billingInfo.billing.updated_at ? new Date(billingInfo.billing.updated_at).toLocaleString() : "—"}
                         </div>
@@ -697,7 +710,7 @@ export default function CompanyDetailPage() {
                     )}
 
                     <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-                      Stripe webhooks sync billing. Cron auto-expires trials after <code>current_period_end</code>.
+                      After Checkout completes, Stripe Webhooks will update <code>company_billing</code> automatically.
                     </div>
                   </div>
                 </Card>
@@ -836,25 +849,16 @@ export default function CompanyDetailPage() {
               )}
 
               {tab === "leads" && (
-                <Card
-                  title="Leads Dashboard"
-                  right={
-                    <button
-                      onClick={loadLeads}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
-                      Refresh
-                    </button>
-                  }
-                >
-                  <div style={{ opacity: 0.75 }}>Leads UI unverändert – bleibt wie bei dir im Projekt.</div>
+                <Card title="Leads Dashboard">
+                  <div style={{ opacity: 0.75 }}>
+                    Leads UI unverändert – bleibt wie bei dir im Projekt.
+                  </div>
                 </Card>
               )}
             </>
           )}
         </div>
 
-        {/* Toast */}
         {toast && (
           <div
             onClick={() => setToast(null)}
