@@ -10,7 +10,6 @@ type EnsureCompanyResp =
   | { error: string };
 
 function getSiteUrl() {
-  // prefer explicit env (prod), fallback to window origin
   const envUrl = process.env.NEXT_PUBLIC_SITE_URL;
   if (envUrl && envUrl.startsWith("http")) return envUrl.replace(/\/+$/, "");
   if (typeof window !== "undefined") return window.location.origin;
@@ -62,6 +61,8 @@ export default function SignupPage() {
         password,
         options: {
           emailRedirectTo,
+          // ✅ IMPORTANT: store company name for later confirmed login onboarding
+          data: { company_name: trimmedCompany },
         },
       });
 
@@ -122,7 +123,7 @@ export default function SignupPage() {
             type="text"
             value={companyName}
             onChange={(e) => setCompanyName(e.target.value)}
-            placeholder="TamTamCorp"
+            placeholder="Dreamsaini"
             style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
           />
         </label>

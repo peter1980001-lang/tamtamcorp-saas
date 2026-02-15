@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
-import { requireOwner } from "@/lib/adminGuard";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";
 
@@ -10,10 +10,13 @@ export async function GET(
 ) {
   const { id: companyId } = await ctx.params;
 
-  // Your project’s guard signature takes 0 args
-  await requireOwner();
+  // ✅ allow platform owner OR admins of THIS company
+  const guard = await requireCompanyAccess(companyId);
+  if (!guard.ok) {
+    return NextResponse.json({ error: guard.error }, { status: guard.status });
+  }
 
-  // Extra safety: ensure company exists (and keep a clear error)
+  // Ensure company exists (clear error)
   const { data: company, error: cErr } = await supabaseServer
     .from("companies")
     .select("id")
@@ -21,7 +24,10 @@ export async function GET(
     .maybeSingle();
 
   if (cErr) {
-    return NextResponse.json({ error: "db_company_failed", details: cErr.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "db_company_failed", details: cErr.message },
+      { status: 500 }
+    );
   }
   if (!company) {
     return NextResponse.json({ error: "company_not_found" }, { status: 404 });
@@ -32,7 +38,10 @@ export async function GET(
   });
 
   if (error) {
-    return NextResponse.json({ error: "usage_rpc_failed", details: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "usage_rpc_failed", details: error.message },
+      { status: 500 }
+    );
   }
 
   const row = Array.isArray(data) ? data[0] : data;
