@@ -634,7 +634,7 @@ export default function CompanyDetailPage() {
                   <BillingActions companyId={id as string} />
 
                   <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 14 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Current Billing Status</div>
+                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Billing + Access + Usage</div>
 
                     {billingLoading ? (
                       <div style={{ opacity: 0.75 }}>Loading billing…</div>
@@ -643,7 +643,7 @@ export default function CompanyDetailPage() {
                         No billing row yet. After first Checkout, Stripe webhook will create/update <code>company_billing</code>.
                       </div>
                     ) : (
-                      <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                      <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
                         <div>
                           <b>Status:</b> {billingInfo.billing.status || "—"}{" "}
                           {billingInfo.paying_status ? badge("paying", "#111", "#fff") : badge("not paying", "#fafafa", "#111")}
@@ -651,42 +651,42 @@ export default function CompanyDetailPage() {
                         <div>
                           <b>Chat:</b>{" "}
                           {billingInfo.chat_enabled ? badge("enabled", "#111", "#fff") : badge("disabled", "#fafafa", "#111")}{" "}
-                          <span style={{ fontSize: 12, opacity: 0.7 }}>
-                            (feature: {billingInfo.chat_feature_enabled ? "on" : "off"})
-                          </span>
+                          <span style={{ fontSize: 12, opacity: 0.7 }}>(feature: {billingInfo.chat_feature_enabled ? "on" : "off"})</span>
                         </div>
                         <div>
                           <b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}
                           {billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}
                         </div>
                         <div>
-                          <b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}
-                        </div>
-                        <div>
                           <b>Current period end:</b>{" "}
                           {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
                         </div>
-                        <div>
-                          <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
-                        </div>
-                        <div>
-                          <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
-                        </div>
 
-                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #eee" }}>
-                          <b>Rate limits (effective):</b>{" "}
-                          {billingInfo.effective_rate_limits ? (
-                            <span>
-                              {billingInfo.effective_rate_limits.per_minute}/min &nbsp;·&nbsp; {billingInfo.effective_rate_limits.per_day}/day
-                            </span>
-                          ) : (
-                            "—"
-                          )}
+                        <div style={{ paddingTop: 8, marginTop: 6, borderTop: "1px dashed #eee" }}>
+                          <b>Effective limits:</b>{" "}
+                          {billingInfo.effective_rate_limits
+                            ? `${billingInfo.effective_rate_limits.per_minute}/min · ${billingInfo.effective_rate_limits.per_day}/day`
+                            : "—"}
                           <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-                            Company config: {billingInfo.company_rate_limits?.per_minute ?? "—"}/min · {billingInfo.company_rate_limits?.per_day ?? "—"}/day
-                            {"  "} | Plan cap:{" "}
+                            Company: {billingInfo.company_rate_limits?.per_minute ?? "—"}/min · {billingInfo.company_rate_limits?.per_day ?? "—"}/day{" "}
+                            | Plan cap:{" "}
                             {billingInfo.plan_rate_limits?.per_minute ? `${billingInfo.plan_rate_limits.per_minute}/min` : "—"} ·{" "}
                             {billingInfo.plan_rate_limits?.per_day ? `${billingInfo.plan_rate_limits.per_day}/day` : "—"}
+                          </div>
+                        </div>
+
+                        <div style={{ paddingTop: 8, marginTop: 6, borderTop: "1px dashed #eee" }}>
+                          <b>Usage (this minute/day):</b>
+                          <div style={{ fontSize: 13, marginTop: 4 }}>
+                            Minute: {billingInfo.usage?.minute_count ?? 0} &nbsp;| Remaining: {billingInfo.usage?.remaining_minute ?? "—"} &nbsp;| Reset:{" "}
+                            {billingInfo.usage?.reset_minute ? new Date(billingInfo.usage.reset_minute).toLocaleTimeString() : "—"}
+                          </div>
+                          <div style={{ fontSize: 13, marginTop: 2 }}>
+                            Day: {billingInfo.usage?.day_count ?? 0} &nbsp;| Remaining: {billingInfo.usage?.remaining_day ?? "—"} &nbsp;| Reset:{" "}
+                            {billingInfo.usage?.reset_day ? new Date(billingInfo.usage.reset_day).toLocaleTimeString() : "—"}
+                          </div>
+                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                            Buckets: {billingInfo.usage?.minute_bucket ?? "—"} · {billingInfo.usage?.day_bucket ?? "—"}
                           </div>
                         </div>
 
@@ -697,7 +697,7 @@ export default function CompanyDetailPage() {
                     )}
 
                     <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-                      After Checkout completes, Stripe Webhooks will update <code>company_billing</code> automatically.
+                      Stripe webhooks sync billing. Cron auto-expires trials after <code>current_period_end</code>.
                     </div>
                   </div>
                 </Card>

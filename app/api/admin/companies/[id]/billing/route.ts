@@ -13,6 +13,27 @@ function toInt(v: any, fallback: number) {
   return Number.isFinite(n) ? Math.floor(n) : fallback;
 }
 
+function makeBuckets(now: Date) {
+  // Same pattern as your RPC (minute:YYYY-MM-DD"T"HH24:MI, day:YYYY-MM-DD)
+  const pad = (x: number) => String(x).padStart(2, "0");
+  const yyyy = now.getUTCFullYear();
+  const mm = pad(now.getUTCMonth() + 1);
+  const dd = pad(now.getUTCDate());
+  const hh = pad(now.getUTCHours());
+  const mi = pad(now.getUTCMinutes());
+
+  const min_bucket = `minute:${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+  const day_bucket = `day:${yyyy}-${mm}-${dd}`;
+
+  const reset_minute = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0));
+  reset_minute.setUTCMinutes(reset_minute.getUTCMinutes() + 1);
+
+  const reset_day = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+  reset_day.setUTCDate(reset_day.getUTCDate() + 1);
+
+  return { min_bucket, day_bucket, reset_minute: reset_minute.toISOString(), reset_day: reset_day.toISOString() };
+}
+
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const auth = await requireOwner();
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
@@ -32,7 +53,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
 
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
 
-  // 2) company settings -> rate limits from branding.chat or limits.chat
+  // 2) company settings -> chat rate limits from branding.chat or limits.chat
   const { data: settings, error: sErr } = await supabaseServer
     .from("company_settings")
     .select("limits_json, branding_json")
@@ -87,6 +108,25 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
   const paying_status = isPayingStatus(status);
   const chat_enabled = chat_feature_enabled && paying_status;
 
+  // 4) Usage counters (minute/day) from company_usage_counters
+  const now = new Date();
+  const { min_bucket, day_bucket, reset_minute, reset_day } = makeBuckets(now);
+
+  const { data: counters, error: cErr } = await supabaseServer
+    .from("company_usage_counters")
+    .select("bucket,count,updated_at")
+    .eq("company_id", company_id)
+    .in("bucket", [min_bucket, day_bucket]);
+
+  if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
+
+  const byBucket = new Map<string, any>((counters || []).map((r: any) => [String(r.bucket), r]));
+  const minute_count = Number(byBucket.get(min_bucket)?.count ?? 0);
+  const day_count = Number(byBucket.get(day_bucket)?.count ?? 0);
+
+  const remaining_minute = Math.max(0, effective_per_minute - minute_count);
+  const remaining_day = Math.max(0, effective_per_day - day_count);
+
   return NextResponse.json({
     billing: billing ?? null,
     plan,
@@ -100,5 +140,17 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     company_rate_limits: { per_minute: company_per_minute, per_day: company_per_day },
     plan_rate_limits: { per_minute: plan_per_minute, per_day: plan_per_day },
     effective_rate_limits: { per_minute: effective_per_minute, per_day: effective_per_day },
+
+    // usage
+    usage: {
+      minute_bucket: min_bucket,
+      day_bucket,
+      minute_count,
+      day_count,
+      remaining_minute,
+      remaining_day,
+      reset_minute,
+      reset_day,
+    },
   });
 }
