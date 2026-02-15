@@ -21,9 +21,6 @@ function toInt(v: any, fallback: number) {
 }
 
 function makeBuckets(now: Date) {
-  // bucket format matches your billing usage route pattern:
-  // minute:YYYY-MM-DDTHH:MM (UTC)
-  // day:YYYY-MM-DD (UTC)
   const pad = (x: number) => String(x).padStart(2, "0");
 
   const yyyy = now.getUTCFullYear();
@@ -35,8 +32,9 @@ function makeBuckets(now: Date) {
   const min_bucket = `minute:${yyyy}-${mm}-${dd}T${hh}:${mi}`;
   const day_bucket = `day:${yyyy}-${mm}-${dd}`;
 
-  // optional hints
-  const reset_minute = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0));
+  const reset_minute = new Date(
+    Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0)
+  );
   reset_minute.setUTCMinutes(reset_minute.getUTCMinutes() + 1);
 
   const reset_day = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
@@ -57,7 +55,6 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   const per_minute = Math.max(1, Math.min(600, toInt(limits.per_minute, 10)));
   const per_day = Math.max(1, Math.min(200000, toInt(limits.per_day, 1000)));
 
-  // Read both buckets in one query
   const { data: counters, error: cErr } = await supabaseServer
     .from("company_usage_counters")
     .select("bucket,count,updated_at")
@@ -96,7 +93,6 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
     };
   }
 
-  // Increment both buckets (upsert)
   const nowIso = new Date().toISOString();
 
   const { error: upErr } = await supabaseServer
@@ -114,6 +110,89 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   }
 
   return { ok: true as const };
+}
+
+// -------------------- KNOWLEDGE (RAG) --------------------
+
+async function embedQuery(text: string): Promise<number[]> {
+  const r = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: text,
+  });
+  return r.data[0].embedding as unknown as number[];
+}
+
+/**
+ * Your project already has an RPC "match_knowledge_chunks".
+ * Parameter names sometimes differ across setups.
+ * We try multiple common signatures (no snippets in caller).
+ */
+async function matchKnowledgeChunks(company_id: string, embedding: number[], match_count: number) {
+  const tries: Array<{ args: any }> = [
+    { args: { p_company_id: company_id, p_query_embedding: embedding, p_match_count: match_count } },
+    { args: { company_id, query_embedding: embedding, match_count } },
+    { args: { p_company_id: company_id, query_embedding: embedding, match_count: match_count } },
+    { args: { company_id: company_id, p_query_embedding: embedding, p_match_count: match_count } },
+  ];
+
+  let lastErr: any = null;
+
+  for (const t of tries) {
+    const { data, error } = await supabaseServer.rpc("match_knowledge_chunks", t.args);
+    if (!error) {
+      const rows = Array.isArray(data) ? data : [];
+      return { ok: true as const, rows };
+    }
+    lastErr = error;
+  }
+
+  return { ok: false as const, rows: [] as any[], error: lastErr?.message || "match_knowledge_chunks_failed" };
+}
+
+function buildContext(rows: any[]) {
+  const cleaned = (rows || [])
+    .map((r) => ({
+      content: String(r?.content || "").trim(),
+      title: String(r?.title || r?.source || "").trim(),
+      similarity: typeof r?.similarity === "number" ? r.similarity : null,
+    }))
+    .filter((x) => x.content.length > 0);
+
+  if (cleaned.length === 0) return "";
+
+  return cleaned
+    .map((x, i) => {
+      const head = x.title ? `SOURCE: ${x.title}\n` : "";
+      return `[#${i + 1}]\n${head}${x.content}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+async function getCompanyChatConfig(company_id: string) {
+  const { data, error } = await supabaseServer
+    .from("company_settings")
+    .select("branding_json, limits_json")
+    .eq("company_id", company_id)
+    .maybeSingle();
+
+  if (error) return null;
+
+  const branding = (data as any)?.branding_json ?? {};
+  const limits = (data as any)?.limits_json ?? {};
+
+  const chat = branding?.chat ?? limits?.chat ?? {};
+
+  // defaults (safe)
+  const mode = String(chat?.mode || "hybrid"); // "knowledge_only" | "hybrid"
+  const model = String(chat?.model || "gpt-4o-mini");
+  const temperature = Number.isFinite(Number(chat?.temperature)) ? Number(chat.temperature) : 0.2;
+  const max_chunks = Number.isFinite(Number(chat?.max_chunks)) ? Math.max(0, Math.min(20, Number(chat.max_chunks))) : 6;
+
+  const system_prompt = String(chat?.system_prompt || "").trim();
+  const unknown_answer = String(chat?.unknown_answer || "I don’t know based on the provided information.").trim();
+  const include_sources = Boolean(chat?.include_sources ?? false);
+
+  return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources };
 }
 
 // ✅ Allow GET for quick health check
@@ -150,9 +229,7 @@ export async function POST(req: Request) {
     .eq("id", conversation_id)
     .maybeSingle();
 
-  if (convErr) {
-    return NextResponse.json({ error: "db_conversation_failed", details: convErr.message }, { status: 500 });
-  }
+  if (convErr) return NextResponse.json({ error: "db_conversation_failed", details: convErr.message }, { status: 500 });
   if (!conv || String(conv.company_id) !== company_id) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
@@ -163,7 +240,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: bill.code, message: bill.message }, { status: 402 });
   }
 
-  // ✅ Hard Rate Limit (429) BEFORE OpenAI — using company_usage_counters (consistent with your billing usage route)
+  // Hard Rate Limit BEFORE OpenAI
   const rl = await enforceRateLimitsViaUsageCounters(company_id, bill.limits);
   if (!rl.ok) {
     return NextResponse.json({ error: rl.error, ...(rl as any) }, { status: rl.status });
@@ -175,31 +252,89 @@ export async function POST(req: Request) {
     role: "user",
     content: message,
   });
-
   if (insUserErr) {
     return NextResponse.json({ error: "db_insert_user_message_failed", details: insUserErr.message }, { status: 500 });
   }
 
-  // Get last 12 messages
+  // Load recent history
   const { data: history, error: hErr } = await supabaseServer
     .from("messages")
     .select("role,content,created_at")
     .eq("conversation_id", conversation_id)
     .order("created_at", { ascending: true })
-    .limit(12);
+    .limit(16);
 
-  if (hErr) {
-    return NextResponse.json({ error: "db_history_failed", details: hErr.message }, { status: 500 });
+  if (hErr) return NextResponse.json({ error: "db_history_failed", details: hErr.message }, { status: 500 });
+
+  // Chat config + Knowledge
+  const cfg = (await getCompanyChatConfig(company_id)) ?? {
+    mode: "hybrid",
+    model: "gpt-4o-mini",
+    temperature: 0.2,
+    max_chunks: 6,
+    system_prompt: "",
+    unknown_answer: "I don’t know based on the provided information.",
+    include_sources: false,
+  };
+
+  let context = "";
+  let sources: any[] = [];
+
+  try {
+    const emb = await embedQuery(message);
+    const match = await matchKnowledgeChunks(company_id, emb, cfg.max_chunks);
+    if (match.ok) {
+      sources = match.rows;
+      context = buildContext(match.rows);
+    }
+  } catch {
+    // fail soft: context stays empty
   }
 
+  // ✅ enforce knowledge-only when configured
+  if (cfg.mode === "knowledge_only" && !context) {
+    const reply = cfg.unknown_answer;
+
+    const { error: insAsstErr } = await supabaseServer.from("messages").insert({
+      conversation_id,
+      role: "assistant",
+      content: reply,
+    });
+
+    if (insAsstErr) {
+      return NextResponse.json({ error: "db_insert_assistant_message_failed", details: insAsstErr.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ reply, sources: cfg.include_sources ? [] : undefined });
+  }
+
+  const systemParts: string[] = [];
+
+  if (cfg.system_prompt) systemParts.push(cfg.system_prompt);
+
+  systemParts.push(
+    "You are the company's assistant.",
+    "Use the provided KNOWLEDGE CONTEXT as the primary source of truth.",
+    `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${cfg.unknown_answer}".`,
+    "Be concise and accurate.",
+    "",
+    "KNOWLEDGE CONTEXT:",
+    context || "(empty)"
+  );
+
   const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: (history || []).map((m: any) => ({ role: m.role, content: m.content })) as any,
-    temperature: 0.7,
+    model: cfg.model,
+    temperature: cfg.temperature,
+    messages: [
+      { role: "system", content: systemParts.join("\n") },
+      ...(history || []).map((m: any) => ({ role: m.role, content: m.content })),
+    ] as any,
   });
 
-  const reply = String(completion.choices?.[0]?.message?.content || "").trim();
+  let reply = String(completion.choices?.[0]?.message?.content || "").trim();
+  if (!reply) reply = cfg.unknown_answer;
 
+  // Store assistant reply
   const { error: insAsstErr } = await supabaseServer.from("messages").insert({
     conversation_id,
     role: "assistant",
@@ -210,5 +345,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "db_insert_assistant_message_failed", details: insAsstErr.message }, { status: 500 });
   }
 
-  return NextResponse.json({ reply });
+  return NextResponse.json({
+    reply,
+    sources: cfg.include_sources ? sources : undefined,
+  });
 }
