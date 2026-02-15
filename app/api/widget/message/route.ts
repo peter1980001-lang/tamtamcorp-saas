@@ -3,9 +3,9 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import crypto from "crypto";
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { checkBillingGate } from "@/lib/billingGate";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -15,60 +15,126 @@ function getBearerToken(req: Request) {
   return m ? m[1] : null;
 }
 
-function nowIso() {
-  return new Date().toISOString();
+function todayUtcKey(d = new Date()) {
+  // YYYY-MM-DD in UTC
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-function isPayingStatus(status: string) {
-  return status === "active" || status === "trialing";
+function minuteUtcKey(d = new Date()) {
+  // YYYY-MM-DDTHH:MM in UTC
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mi = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
-async function enforceBillingGate(companyId: string) {
-  const { data: billing, error: bErr } = await supabaseServer
-    .from("company_billing")
-    .select("status,plan_key,stripe_price_id,current_period_end")
-    .eq("company_id", companyId)
+async function enforceRateLimits(company_id: string, limits: { per_minute: number; per_day: number }) {
+  const now = new Date();
+  const minute_key = minuteUtcKey(now);
+  const day_key = todayUtcKey(now);
+
+  // We count "requests". One widget message = one request.
+  // Minute bucket in: public.rate_limit_minute(company_id, minute_bucket, count, reset_at?)
+  // Day bucket in: public.usage_daily(company_id, day_bucket, count, reset_at?)
+  //
+  // If your columns differ, we’ll adjust after the first error message.
+  //
+  // We do this as: read -> if over -> block -> else increment.
+  // (MVP; later we can move to a single RPC for atomicity)
+
+  // 1) Minute read
+  const { data: mRow, error: mErr } = await supabaseServer
+    .from("rate_limit_minute")
+    .select("count, bucket")
+    .eq("company_id", company_id)
+    .eq("bucket", `minute:${minute_key}`)
     .maybeSingle();
 
-  if (bErr) return { ok: false as const, status: 500, error: "db_billing_failed", details: bErr.message };
-  if (!billing) return { ok: false as const, status: 402, error: "payment_required" };
-
-  const status = String(billing.status || "none");
-  const cpe = billing.current_period_end ? String(billing.current_period_end) : null;
-
-  if (!isPayingStatus(status)) return { ok: false as const, status: 402, error: "payment_required" };
-  if (cpe && cpe < nowIso()) return { ok: false as const, status: 402, error: "trial_expired" };
-
-  // plan must have chat feature enabled
-  let plan: any = null;
-  if (billing.plan_key) {
-    const { data: p, error: pErr } = await supabaseServer
-      .from("billing_plans")
-      .select("plan_key,is_active,entitlements_json")
-      .eq("plan_key", billing.plan_key)
-      .maybeSingle();
-    if (pErr) return { ok: false as const, status: 500, error: "db_plan_failed", details: pErr.message };
-    plan = p ?? null;
-  } else if (billing.stripe_price_id) {
-    const { data: p, error: pErr } = await supabaseServer
-      .from("billing_plans")
-      .select("plan_key,is_active,entitlements_json")
-      .eq("stripe_price_id", billing.stripe_price_id)
-      .maybeSingle();
-    if (pErr) return { ok: false as const, status: 500, error: "db_plan_failed", details: pErr.message };
-    plan = p ?? null;
+  if (mErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_read_failed", details: mErr.message };
   }
 
-  if (!plan || !plan.is_active) return { ok: false as const, status: 402, error: "invalid_or_inactive_plan" };
+  const minuteCount = Number((mRow as any)?.count ?? 0);
+  if (limits.per_minute > 0 && minuteCount >= limits.per_minute) {
+    return {
+      ok: false as const,
+      status: 429,
+      error: "rate_limited",
+      scope: "minute",
+      limit: limits.per_minute,
+      count: minuteCount,
+      reset_hint: "next_minute",
+    };
+  }
 
-  const ent = plan.entitlements_json || {};
-  const features = ent.features || {};
-  if (!features.chat) return { ok: false as const, status: 402, error: "feature_disabled" };
+  // 2) Day read
+  const { data: dRow, error: dErr } = await supabaseServer
+    .from("usage_daily")
+    .select("count, day")
+    .eq("company_id", company_id)
+    .eq("day", day_key)
+    .maybeSingle();
+
+  if (dErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_read_failed", details: dErr.message };
+  }
+
+  const dayCount = Number((dRow as any)?.count ?? 0);
+  if (limits.per_day > 0 && dayCount >= limits.per_day) {
+    return {
+      ok: false as const,
+      status: 429,
+      error: "rate_limited",
+      scope: "day",
+      limit: limits.per_day,
+      count: dayCount,
+      reset_hint: "next_day",
+    };
+  }
+
+  // 3) Increment minute (upsert)
+  const { error: mUpErr } = await supabaseServer
+    .from("rate_limit_minute")
+    .upsert(
+      {
+        company_id,
+        bucket: `minute:${minute_key}`,
+        count: minuteCount + 1,
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "company_id,bucket" }
+    );
+
+  if (mUpErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_write_failed", details: mUpErr.message };
+  }
+
+  // 4) Increment day (upsert)
+  const { error: dUpErr } = await supabaseServer
+    .from("usage_daily")
+    .upsert(
+      {
+        company_id,
+        day: day_key,
+        count: dayCount + 1,
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "company_id,day" }
+    );
+
+  if (dUpErr) {
+    return { ok: false as const, status: 500, error: "rate_limit_write_failed", details: dUpErr.message };
+  }
 
   return { ok: true as const };
 }
 
-// ✅ Allow GET so visiting in browser doesn’t look like “broken”
+// ✅ Allow GET for quick health check
 export async function GET() {
   return NextResponse.json({ ok: true, route: "/api/widget/message", methods: ["POST"] });
 }
@@ -109,12 +175,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
 
-  // 🔒 Monetization lock
-  const gate = await enforceBillingGate(company_id);
-  if (!gate.ok) {
+  // 1) Billing gate (your existing logic)
+  const bill = await checkBillingGate(company_id);
+  if (!bill.ok) {
+    return NextResponse.json({ error: bill.code, message: bill.message }, { status: 402 });
+  }
+
+  // 2) Hard Rate Limit (429) BEFORE OpenAI
+  const rl = await enforceRateLimits(company_id, bill.limits);
+  if (!rl.ok) {
     return NextResponse.json(
-      { error: gate.error, ...(gate.details ? { details: gate.details } : {}) },
-      { status: gate.status }
+      { error: rl.error, ...(rl as any) },
+      { status: rl.status }
     );
   }
 
@@ -124,6 +196,7 @@ export async function POST(req: Request) {
     role: "user",
     content: message,
   });
+
   if (insUserErr) {
     return NextResponse.json({ error: "db_insert_user_message_failed", details: insUserErr.message }, { status: 500 });
   }
@@ -142,33 +215,20 @@ export async function POST(req: Request) {
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: (history || []).map((m: any) => ({
-      role: m.role,
-      content: m.content,
-    })) as any,
+    messages: (history || []).map((m: any) => ({ role: m.role, content: m.content })) as any,
     temperature: 0.7,
   });
 
   const reply = String(completion.choices?.[0]?.message?.content || "").trim();
 
-  // Store assistant reply
   const { error: insAsstErr } = await supabaseServer.from("messages").insert({
     conversation_id,
     role: "assistant",
     content: reply,
   });
-  if (insAsstErr) {
-    return NextResponse.json(
-      { error: "db_insert_assistant_message_failed", details: insAsstErr.message },
-      { status: 500 }
-    );
-  }
 
-  // Usage increment (if RPC exists; if not, ignore)
-  try {
-    await supabaseServer.rpc("increment_company_usage", { p_company_id: company_id });
-  } catch {
-    // ignore
+  if (insAsstErr) {
+    return NextResponse.json({ error: "db_insert_assistant_message_failed", details: insAsstErr.message }, { status: 500 });
   }
 
   return NextResponse.json({ reply });
