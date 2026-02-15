@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/admin/billing/reconcile",
-      "schedule": "* * * *"
+      "schedule": "* * * * *"
     }
   ]
 }
