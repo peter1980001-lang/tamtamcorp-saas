@@ -165,6 +165,14 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr));
 }
 
+function safeJsonStringify(v: any) {
+  try {
+    return JSON.stringify(v ?? {}, null, 2);
+  } catch {
+    return "{}";
+  }
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -189,6 +197,11 @@ export default function CompanyDetailPage() {
   const [domainDraft, setDomainDraft] = useState<string[]>([]);
   const [domainSaving, setDomainSaving] = useState(false);
   const [domainDirty, setDomainDirty] = useState(false);
+
+  // ===== Limits edit state =====
+  const [limitsText, setLimitsText] = useState<string>("{}");
+  const [limitsSaving, setLimitsSaving] = useState(false);
+  const [limitsDirty, setLimitsDirty] = useState(false);
 
   // ===== Test Chat state =====
   const [testToken, setTestToken] = useState<string | null>(null);
@@ -277,7 +290,13 @@ export default function CompanyDetailPage() {
 
   // ✅ When switching tabs, reload/prepare as needed
   useEffect(() => {
-    if (tab === "limits") load();
+    if (tab === "limits") {
+      // prepare textarea from freshest data
+      const current = data?.settings?.limits_json ?? {};
+      setLimitsText(safeJsonStringify(current));
+      setLimitsDirty(false);
+    }
+
     if (tab === "billing") loadBilling();
     if (tab === "leads") loadLeads();
 
@@ -290,7 +309,7 @@ export default function CompanyDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // Keep draft in sync when data changes while domains tab is active (e.g. refresh)
+  // Keep drafts in sync when server data changes while tabs are active
   useEffect(() => {
     if (tab !== "domains") return;
     const current = data?.keys?.allowed_domains ?? [];
@@ -298,6 +317,14 @@ export default function CompanyDetailPage() {
     setDomainDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.keys?.allowed_domains, tab]);
+
+  useEffect(() => {
+    if (tab !== "limits") return;
+    const current = data?.settings?.limits_json ?? {};
+    setLimitsText(safeJsonStringify(current));
+    setLimitsDirty(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.settings?.limits_json, tab]);
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -340,10 +367,7 @@ export default function CompanyDetailPage() {
       return;
     }
 
-    setDomainDraft((prev) => {
-      const next = uniq([...prev, normalized]);
-      return next;
-    });
+    setDomainDraft((prev) => uniq([...prev, normalized]));
     setDomainInput("");
     setDomainDirty(true);
   }
@@ -382,14 +406,52 @@ export default function CompanyDetailPage() {
 
     const updatedKeys: Keys | null = json?.keys ?? null;
     if (updatedKeys) {
-      setData((prev) => {
-        if (!prev) return prev;
-        return { ...prev, keys: updatedKeys };
-      });
+      setData((prev) => (prev ? { ...prev, keys: updatedKeys } : prev));
     }
 
     setDomainDirty(false);
     setToast("Domains saved");
+  }
+
+  async function saveLimits() {
+    if (!id) return;
+
+    // quick client validation
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(limitsText || "{}");
+    } catch {
+      setToast("Limits JSON invalid");
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      setToast("Limits must be a JSON object");
+      return;
+    }
+
+    setLimitsSaving(true);
+
+    const res = await fetch(`/api/admin/companies/${id}/limits`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limits_text: limitsText }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setLimitsSaving(false);
+
+    if (!res.ok) {
+      setToast(json?.error || "limits_save_failed");
+      return;
+    }
+
+    const updatedSettings: Settings | null = json?.settings ?? null;
+    if (updatedSettings) {
+      setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
+    }
+
+    setLimitsDirty(false);
+    setToast("Limits saved");
   }
 
   async function testGetToken() {
@@ -439,7 +501,6 @@ export default function CompanyDetailPage() {
     setTestSending(true);
     setTestLog((l) => [...l, { role: "user", text: testInput }]);
 
-    // ✅ IMPORTANT: use widget route (not /api/chat)
     const res = await fetch("/api/widget/message", {
       method: "POST",
       headers: {
@@ -829,12 +890,7 @@ export default function CompanyDetailPage() {
                   </div>
 
                   <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-                    Status:{" "}
-                    {domainDirty ? (
-                      <span style={{ fontWeight: 700 }}>Unsaved changes</span>
-                    ) : (
-                      <span>Saved</span>
-                    )}
+                    Status: {domainDirty ? <span style={{ fontWeight: 700 }}>Unsaved changes</span> : <span>Saved</span>}
                   </div>
                 </Card>
               )}
@@ -843,30 +899,60 @@ export default function CompanyDetailPage() {
                 <Card
                   title="Limits"
                   right={
-                    <button
-                      onClick={load}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
-                      Refresh
-                    </button>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        onClick={() => {
+                          const current = data.settings?.limits_json ?? {};
+                          setLimitsText(safeJsonStringify(current));
+                          setLimitsDirty(false);
+                          setToast("Reset");
+                        }}
+                        disabled={limitsSaving}
+                        style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        onClick={saveLimits}
+                        disabled={limitsSaving || !limitsDirty}
+                        style={{
+                          border: "1px solid #111",
+                          background: limitsSaving || !limitsDirty ? "#444" : "#111",
+                          color: "#fff",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          cursor: limitsSaving || !limitsDirty ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {limitsSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
                   }
                 >
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-                    Stored in <code>company_settings.limits_json</code>.
+                    Stored in <code>company_settings.limits_json</code>. Edit JSON and save.
                   </div>
-                  <pre
+                  <textarea
+                    value={limitsText}
+                    onChange={(e) => {
+                      setLimitsText(e.target.value);
+                      setLimitsDirty(true);
+                    }}
+                    spellCheck={false}
                     style={{
-                      margin: 0,
-                      whiteSpace: "pre-wrap",
-                      fontSize: 12,
-                      background: "#fafafa",
-                      border: "1px solid #eee",
+                      width: "100%",
+                      minHeight: 260,
                       padding: 12,
                       borderRadius: 12,
+                      border: "1px solid #ddd",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                      fontSize: 12,
+                      background: "#fafafa",
                     }}
-                  >
-                    {JSON.stringify(data.settings?.limits_json ?? {}, null, 2)}
-                  </pre>
+                  />
+                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+                    Status: {limitsDirty ? <span style={{ fontWeight: 700 }}>Unsaved changes</span> : <span>Saved</span>}
+                  </div>
                 </Card>
               )}
 
