@@ -15,6 +15,29 @@ type Keys = {
 type Settings = { company_id: string; limits_json: any; branding_json: any };
 type DetailResponse = { company: Company; keys: Keys | null; settings: Settings };
 
+type InviteRow = {
+  id: string;
+  company_id: string;
+  token: string;
+  email: string | null;
+  role: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+  accepted_by: string | null;
+  accepted_at: string | null;
+  created_by: string | null;
+};
+
+type AdminRow = {
+  id: string;
+  company_id: string;
+  user_id: string;
+  role: string;
+  created_at: string;
+};
+
 type LeadRow = {
   id: string;
   company_id: string;
@@ -37,7 +60,18 @@ type LeadRow = {
   updated_at: string;
 };
 
-const tabs = ["overview", "keys", "domains", "limits", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
+const tabs = [
+  "overview",
+  "keys",
+  "domains",
+  "limits",
+  "admins",
+  "embed",
+  "billing",
+  "test-chat",
+  "knowledge",
+  "leads",
+] as const;
 type Tab = (typeof tabs)[number];
 
 function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
@@ -83,73 +117,6 @@ function mask(s: string) {
   if (!s) return "";
   if (s.length <= 10) return "********";
   return s.slice(0, 6) + "…" + s.slice(-4);
-}
-
-function badge(text: string, bg: string, fg: string) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "4px 10px",
-        borderRadius: 999,
-        fontSize: 12,
-        background: bg,
-        color: fg,
-        border: "1px solid rgba(0,0,0,0.06)",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {text}
-    </span>
-  );
-}
-
-function ScoreBadge({ band, total }: { band: LeadRow["score_band"]; total: number }) {
-  if (band === "hot") return badge(`hot ${total}`, "#111", "#fff");
-  if (band === "warm") return badge(`warm ${total}`, "#f3f4f6", "#111");
-  return badge(`cold ${total}`, "#fafafa", "#111");
-}
-
-function TrialNotice(props: { billingInfo: any }) {
-  const billing = props.billingInfo?.billing;
-  if (!billing) return null;
-
-  const status = String(billing.status || "none").toLowerCase();
-  if (status !== "trialing") return null;
-
-  const endRaw = billing.current_period_end;
-  if (!endRaw) return null;
-
-  const end = new Date(endRaw);
-  if (Number.isNaN(end.getTime())) return null;
-
-  const now = new Date();
-  const msLeft = end.getTime() - now.getTime();
-  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
-
-  if (![1, 2, 3].includes(daysLeft)) return null;
-
-  const text = daysLeft === 1 ? "Dein Trial läuft in 1 Tag ab." : `Dein Trial läuft in ${daysLeft} Tagen ab.`;
-
-  return (
-    <div
-      style={{
-        border: "1px solid #eee",
-        background: "#fff8e1",
-        borderRadius: 14,
-        padding: 12,
-        marginBottom: 12,
-      }}
-    >
-      <div style={{ fontWeight: 700, marginBottom: 4 }}>Trial Hinweis</div>
-      <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.5 }}>
-        {text} <span style={{ opacity: 0.75 }}>(Ende: {end.toLocaleString()})</span>
-      </div>
-      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
-        Du kannst jederzeit auf einen Plan upgraden über <b>Subscribe</b>.
-      </div>
-    </div>
-  );
 }
 
 function normalizeHost(input: string): string {
@@ -203,6 +170,16 @@ export default function CompanyDetailPage() {
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
 
+  // ===== Admins/Invites state =====
+  const [admins, setAdmins] = useState<AdminRow[]>([]);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [adminsLoading, setAdminsLoading] = useState(false);
+
+  const [inviteRole, setInviteRole] = useState("admin");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteDays, setInviteDays] = useState(7);
+  const [inviteCreating, setInviteCreating] = useState(false);
+
   // ===== Test Chat state =====
   const [testToken, setTestToken] = useState<string | null>(null);
   const [testConversationId, setTestConversationId] = useState<string | null>(null);
@@ -220,8 +197,6 @@ export default function CompanyDetailPage() {
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
-  const [leadOpenId, setLeadOpenId] = useState<string | null>(null);
-  const [leadSaving, setLeadSaving] = useState<string | null>(null);
 
   async function load() {
     if (!id) return;
@@ -258,13 +233,27 @@ export default function CompanyDetailPage() {
     setBillingInfo(json);
   }
 
+  async function loadAdminsAndInvites() {
+    if (!id) return;
+    setAdminsLoading(true);
+    const res = await fetch(`/api/admin/companies/${id}/invites`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+    setAdminsLoading(false);
+
+    if (!res.ok) {
+      setToast(json?.error || "admins_invites_load_failed");
+      return;
+    }
+
+    setAdmins(json.admins ?? []);
+    setInvites(json.invites ?? []);
+  }
+
   useEffect(() => {
     if (!id) return;
 
     const t = String(searchParams?.get("tab") || "").toLowerCase();
-    if (t && (tabs as readonly string[]).includes(t)) {
-      setTab(t as any);
-    }
+    if (t && (tabs as readonly string[]).includes(t)) setTab(t as any);
 
     load();
 
@@ -291,13 +280,13 @@ export default function CompanyDetailPage() {
   // ✅ When switching tabs, reload/prepare as needed
   useEffect(() => {
     if (tab === "limits") {
-      // prepare textarea from freshest data
       const current = data?.settings?.limits_json ?? {};
       setLimitsText(safeJsonStringify(current));
       setLimitsDirty(false);
     }
 
     if (tab === "billing") loadBilling();
+    if (tab === "admins") loadAdminsAndInvites();
     if (tab === "leads") loadLeads();
 
     if (tab === "domains") {
@@ -309,7 +298,6 @@ export default function CompanyDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // Keep drafts in sync when server data changes while tabs are active
   useEffect(() => {
     if (tab !== "domains") return;
     const current = data?.keys?.allowed_domains ?? [];
@@ -358,14 +346,8 @@ export default function CompanyDetailPage() {
     const raw = domainInput || "";
     const normalized = normalizeHost(raw);
 
-    if (!normalized) {
-      setToast("Enter a domain");
-      return;
-    }
-    if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) {
-      setToast("Invalid domain");
-      return;
-    }
+    if (!normalized) return setToast("Enter a domain");
+    if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) return setToast("Invalid domain");
 
     setDomainDraft((prev) => uniq([...prev, normalized]));
     setDomainInput("");
@@ -399,15 +381,10 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     setDomainSaving(false);
 
-    if (!res.ok) {
-      setToast(json?.error || "domains_save_failed");
-      return;
-    }
+    if (!res.ok) return setToast(json?.error || "domains_save_failed");
 
     const updatedKeys: Keys | null = json?.keys ?? null;
-    if (updatedKeys) {
-      setData((prev) => (prev ? { ...prev, keys: updatedKeys } : prev));
-    }
+    if (updatedKeys) setData((prev) => (prev ? { ...prev, keys: updatedKeys } : prev));
 
     setDomainDirty(false);
     setToast("Domains saved");
@@ -416,18 +393,13 @@ export default function CompanyDetailPage() {
   async function saveLimits() {
     if (!id) return;
 
-    // quick client validation
     let parsed: any = null;
     try {
       parsed = JSON.parse(limitsText || "{}");
     } catch {
-      setToast("Limits JSON invalid");
-      return;
+      return setToast("Limits JSON invalid");
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      setToast("Limits must be a JSON object");
-      return;
-    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setToast("Limits must be a JSON object");
 
     setLimitsSaving(true);
 
@@ -440,18 +412,64 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     setLimitsSaving(false);
 
-    if (!res.ok) {
-      setToast(json?.error || "limits_save_failed");
-      return;
-    }
+    if (!res.ok) return setToast(json?.error || "limits_save_failed");
 
     const updatedSettings: Settings | null = json?.settings ?? null;
-    if (updatedSettings) {
-      setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
-    }
+    if (updatedSettings) setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
 
     setLimitsDirty(false);
     setToast("Limits saved");
+  }
+
+  function inviteLink(token: string) {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin}/invite?token=${encodeURIComponent(token)}`;
+  }
+
+  async function createInvite() {
+    if (!id) return;
+    setInviteCreating(true);
+
+    const res = await fetch(`/api/admin/companies/${id}/invites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role: inviteRole,
+        email: inviteEmail.trim() || null,
+        expires_days: inviteDays,
+      }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setInviteCreating(false);
+
+    if (!res.ok) return setToast(json?.error || "invite_create_failed");
+
+    const inv: InviteRow | null = json?.invite ?? null;
+    if (inv) {
+      setInvites((prev) => [inv, ...prev]);
+      const link = inviteLink(inv.token);
+      await navigator.clipboard.writeText(link);
+      setToast("Invite created + link copied");
+    } else {
+      setToast("Invite created");
+    }
+
+    setInviteEmail("");
+    setInviteRole("admin");
+    setInviteDays(7);
+  }
+
+  async function revokeInvite(invite_id: string) {
+    if (!id) return;
+    const res = await fetch(`/api/admin/companies/${id}/invites?invite_id=${encodeURIComponent(invite_id)}`, {
+      method: "DELETE",
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "invite_revoke_failed");
+
+    setInvites((prev) => prev.map((x) => (x.id === invite_id ? { ...x, status: "revoked" } : x)));
+    setToast("Invite revoked");
   }
 
   async function testGetToken() {
@@ -465,10 +483,7 @@ export default function CompanyDetailPage() {
     });
 
     const json = await res.json().catch(() => null);
-    if (!res.ok) {
-      setToast(json?.error || "token_failed");
-      return;
-    }
+    if (!res.ok) return setToast(json?.error || "token_failed");
 
     setTestToken(json.token);
     setToast("Token received");
@@ -483,10 +498,7 @@ export default function CompanyDetailPage() {
     });
 
     const json = await res.json().catch(() => null);
-    if (!res.ok) {
-      setToast(json?.error || "conversation_failed");
-      return;
-    }
+    if (!res.ok) return setToast(json?.error || "conversation_failed");
 
     setTestConversationId(json.conversation.id);
     setTestLog([]);
@@ -544,10 +556,7 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     setKbIngesting(false);
 
-    if (!res.ok) {
-      setToast(json?.error || "ingest_failed");
-      return;
-    }
+    if (!res.ok) return setToast(json?.error || "ingest_failed");
 
     setToast(`Inserted ${json.chunks} chunks`);
     setKbText("");
@@ -560,33 +569,8 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     setLeadsLoading(false);
 
-    if (!res.ok) {
-      setToast(json?.error || "leads_failed");
-      return;
-    }
-
+    if (!res.ok) return setToast(json?.error || "leads_failed");
     setLeads(json.leads ?? []);
-  }
-
-  async function updateLead(lead_id: string, patch: { status?: string; lead_state?: string }) {
-    if (!id) return;
-    setLeadSaving(lead_id);
-    const res = await fetch(`/api/admin/companies/${id}/leads`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lead_id, ...patch }),
-    });
-    const json = await res.json().catch(() => null);
-    setLeadSaving(null);
-
-    if (!res.ok) {
-      setToast(json?.error || "lead_update_failed");
-      return;
-    }
-
-    const updated: LeadRow = json.lead;
-    setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-    setToast("Lead updated");
   }
 
   const filteredLeads = useMemo(() => {
@@ -713,17 +697,7 @@ export default function CompanyDetailPage() {
                       </button>
                     }
                   >
-                    <pre
-                      style={{
-                        margin: 0,
-                        whiteSpace: "pre-wrap",
-                        fontSize: 12,
-                        background: "#fafafa",
-                        border: "1px solid #eee",
-                        padding: 12,
-                        borderRadius: 12,
-                      }}
-                    >
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
                       {embedSnippet}
                     </pre>
                   </Card>
@@ -746,13 +720,8 @@ export default function CompanyDetailPage() {
                     <div>
                       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Public Key</div>
                       <div style={{ display: "flex", gap: 10 }}>
-                        <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>
-                          {data.keys?.public_key ?? "—"}
-                        </code>
-                        <button
-                          onClick={() => copy(data.keys?.public_key ?? "")}
-                          style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}
-                        >
+                        <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>{data.keys?.public_key ?? "—"}</code>
+                        <button onClick={() => copy(data.keys?.public_key ?? "")} style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}>
                           Copy
                         </button>
                       </div>
@@ -764,18 +733,13 @@ export default function CompanyDetailPage() {
                         <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>
                           {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "—"}
                         </code>
-                        <button
-                          onClick={() => copy(data.keys?.secret_key ?? "")}
-                          style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}
-                        >
+                        <button onClick={() => copy(data.keys?.secret_key ?? "")} style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}>
                           Copy
                         </button>
                       </div>
                     </div>
 
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>
-                      Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}
-                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}</div>
                   </div>
                 </Card>
               )}
@@ -829,17 +793,7 @@ export default function CompanyDetailPage() {
                         if (e.key === "Enter") addDomainFromInput();
                       }}
                     />
-                    <button
-                      onClick={addDomainFromInput}
-                      style={{
-                        padding: "10px 14px",
-                        borderRadius: 12,
-                        border: "1px solid #111",
-                        background: "#111",
-                        color: "#fff",
-                        cursor: "pointer",
-                      }}
-                    >
+                    <button onClick={addDomainFromInput} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}>
                       Add
                     </button>
                   </div>
@@ -870,17 +824,7 @@ export default function CompanyDetailPage() {
                             }}
                           >
                             <span>{d}</span>
-                            <button
-                              onClick={() => removeDomain(d)}
-                              style={{
-                                border: "1px solid #ddd",
-                                background: "#fff",
-                                padding: "2px 8px",
-                                borderRadius: 999,
-                                cursor: "pointer",
-                                fontSize: 12,
-                              }}
-                            >
+                            <button onClick={() => removeDomain(d)} style={{ border: "1px solid #ddd", background: "#fff", padding: "2px 8px", borderRadius: 999, cursor: "pointer", fontSize: 12 }}>
                               ×
                             </button>
                           </span>
@@ -956,14 +900,154 @@ export default function CompanyDetailPage() {
                 </Card>
               )}
 
+              {tab === "admins" && (
+                <div style={{ display: "grid", gap: 14 }}>
+                  <Card
+                    title="Create Invite"
+                    right={
+                      <button
+                        onClick={loadAdminsAndInvites}
+                        style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
+                      >
+                        Refresh
+                      </button>
+                    }
+                  >
+                    <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+                      Create an invite link and share it. (MVP: link is copied automatically.)
+                    </div>
+
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px", gap: 10 }}>
+                        <input
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          placeholder="Target email (optional)"
+                          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+                        />
+                        <select
+                          value={inviteRole}
+                          onChange={(e) => setInviteRole(e.target.value)}
+                          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+                        >
+                          <option value="admin">admin</option>
+                          <option value="member">member</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+                        <input
+                          type="number"
+                          min={1}
+                          max={30}
+                          value={inviteDays}
+                          onChange={(e) => setInviteDays(Number(e.target.value || 7))}
+                          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+                          title="Expires in days"
+                        />
+                      </div>
+
+                      <button
+                        onClick={createInvite}
+                        disabled={inviteCreating}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: 12,
+                          border: "1px solid #111",
+                          background: "#111",
+                          color: "#fff",
+                          cursor: inviteCreating ? "not-allowed" : "pointer",
+                          width: "fit-content",
+                        }}
+                      >
+                        {inviteCreating ? "Creating…" : "Create Invite + Copy Link"}
+                      </button>
+
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>
+                        Accept URL: <code>/invite?token=...</code> (User must be logged in.)
+                      </div>
+                    </div>
+                  </Card>
+
+                  <Card title="Company Admins">
+                    {adminsLoading ? (
+                      <div style={{ opacity: 0.75 }}>Loading…</div>
+                    ) : admins.length === 0 ? (
+                      <div style={{ opacity: 0.75 }}>No admins found.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {admins.map((a) => (
+                          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: 10, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                            <div style={{ fontSize: 13 }}>
+                              <div><b>User:</b> <code>{a.user_id}</code></div>
+                              <div style={{ opacity: 0.8 }}><b>Role:</b> {a.role}</div>
+                            </div>
+                            <div style={{ fontSize: 12, opacity: 0.7, whiteSpace: "nowrap" }}>
+                              {a.created_at ? new Date(a.created_at).toLocaleString() : "—"}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card title="Invites">
+                    {adminsLoading ? (
+                      <div style={{ opacity: 0.75 }}>Loading…</div>
+                    ) : invites.length === 0 ? (
+                      <div style={{ opacity: 0.75 }}>No invites yet.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {invites.map((i) => {
+                          const link = inviteLink(i.token);
+                          const expired = new Date(i.expires_at).getTime() < Date.now();
+                          return (
+                            <div key={i.id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                                <div style={{ fontSize: 13 }}>
+                                  <div><b>Status:</b> {i.status}{expired && i.status === "pending" ? " (expired)" : ""}</div>
+                                  <div style={{ opacity: 0.85 }}><b>Role:</b> {i.role} {i.email ? ` · ${i.email}` : ""}</div>
+                                  <div style={{ opacity: 0.75, fontSize: 12 }}>
+                                    Expires: {i.expires_at ? new Date(i.expires_at).toLocaleString() : "—"}
+                                  </div>
+                                </div>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  <button
+                                    onClick={() => copy(link)}
+                                    style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
+                                  >
+                                    Copy Link
+                                  </button>
+                                  <button
+                                    onClick={() => revokeInvite(i.id)}
+                                    disabled={i.status !== "pending"}
+                                    style={{
+                                      border: "1px solid #ddd",
+                                      background: i.status === "pending" ? "#fff" : "#eee",
+                                      padding: "8px 10px",
+                                      borderRadius: 10,
+                                      cursor: i.status === "pending" ? "pointer" : "not-allowed",
+                                    }}
+                                  >
+                                    Revoke
+                                  </button>
+                                </div>
+                              </div>
+                              <div style={{ marginTop: 8, fontSize: 12 }}>
+                                <code style={{ wordBreak: "break-all" }}>{link}</code>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              )}
+
               {tab === "embed" && (
                 <Card
                   title="Embed Snippet"
                   right={
-                    <button
-                      onClick={() => copy(embedSnippet)}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
+                    <button onClick={() => copy(embedSnippet)} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>
                       Copy
                     </button>
                   }
@@ -971,17 +1055,7 @@ export default function CompanyDetailPage() {
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Put this script on the client website. It loads the floating iframe widget.
                   </div>
-                  <pre
-                    style={{
-                      margin: 0,
-                      whiteSpace: "pre-wrap",
-                      fontSize: 12,
-                      background: "#fafafa",
-                      border: "1px solid #eee",
-                      padding: 12,
-                      borderRadius: 12,
-                    }}
-                  >
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
                     {embedSnippet}
                   </pre>
                 </Card>
@@ -991,22 +1065,15 @@ export default function CompanyDetailPage() {
                 <Card
                   title="Billing"
                   right={
-                    <button
-                      onClick={loadBilling}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
+                    <button onClick={loadBilling} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>
                       Refresh billing
                     </button>
                   }
                 >
-                  <TrialNotice billingInfo={billingInfo} />
-
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Start a subscription (Checkout) or manage the current subscription (Customer Portal).
                   </div>
-
                   <BillingActions companyId={id as string} />
-
                   <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 14 }}>
                     <div style={{ fontWeight: 700, marginBottom: 8 }}>Current Billing Status</div>
 
@@ -1018,35 +1085,14 @@ export default function CompanyDetailPage() {
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                        <div>
-                          <b>Status:</b> {billingInfo.billing.status || "—"}
-                        </div>
-                        <div>
-                          <b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}
-                          {billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}
-                        </div>
-                        <div>
-                          <b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}
-                        </div>
-                        <div>
-                          <b>Current period end:</b>{" "}
-                          {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
-                        </div>
-                        <div>
-                          <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
-                        </div>
-                        <div>
-                          <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
-                        </div>
-                        <div style={{ fontSize: 12, opacity: 0.7 }}>
-                          Updated: {billingInfo.billing.updated_at ? new Date(billingInfo.billing.updated_at).toLocaleString() : "—"}
-                        </div>
+                        <div><b>Status:</b> {billingInfo.billing.status || "—"}</div>
+                        <div><b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}{billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}</div>
+                        <div><b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}</div>
+                        <div><b>Current period end:</b> {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}</div>
+                        <div><b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}</div>
+                        <div><b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}</div>
                       </div>
                     )}
-
-                    <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-                      After Checkout completes, Stripe Webhooks will update <code>company_billing</code> automatically.
-                    </div>
                   </div>
                 </Card>
               )}
@@ -1054,29 +1100,13 @@ export default function CompanyDetailPage() {
               {tab === "test-chat" && (
                 <Card title="Test Chat">
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                    <button
-                      onClick={testGetToken}
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: 12,
-                        border: "1px solid #111",
-                        background: "#111",
-                        color: "#fff",
-                        cursor: "pointer",
-                      }}
-                    >
+                    <button onClick={testGetToken} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}>
                       Get Token
                     </button>
-                    <button
-                      onClick={testStartConversation}
-                      style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                    >
+                    <button onClick={testStartConversation} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
                       Start Conversation
                     </button>
-                    <button
-                      onClick={() => setTestLog([])}
-                      style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                    >
+                    <button onClick={() => setTestLog([])} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
                       Clear Log
                     </button>
                   </div>
@@ -1110,11 +1140,7 @@ export default function CompanyDetailPage() {
                           if (e.key === "Enter") testSend();
                         }}
                       />
-                      <button
-                        onClick={testSend}
-                        disabled={testSending}
-                        style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}
-                      >
+                      <button onClick={testSend} disabled={testSending} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}>
                         {testSending ? "Sending…" : "Send"}
                       </button>
                     </div>
@@ -1126,10 +1152,7 @@ export default function CompanyDetailPage() {
                 <Card
                   title="Knowledge Ingest"
                   right={
-                    <button
-                      onClick={() => setKbText("")}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
+                    <button onClick={() => setKbText("")} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>
                       Clear
                     </button>
                   }
@@ -1141,44 +1164,20 @@ export default function CompanyDetailPage() {
                   <div style={{ display: "grid", gap: 10 }}>
                     <div>
                       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Title (optional)</div>
-                      <input
-                        value={kbTitle}
-                        onChange={(e) => setKbTitle(e.target.value)}
-                        placeholder="e.g. FAQ, About us, Pricing"
-                        style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
-                      />
+                      <input value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} placeholder="e.g. FAQ, About us, Pricing" style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd" }} />
                     </div>
 
                     <div>
                       <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Content</div>
-                      <textarea
-                        value={kbText}
-                        onChange={(e) => setKbText(e.target.value)}
-                        placeholder="Paste website text, FAQ, product descriptions..."
-                        style={{ width: "100%", minHeight: 220, padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
-                      />
+                      <textarea value={kbText} onChange={(e) => setKbText(e.target.value)} placeholder="Paste website text, FAQ, product descriptions..." style={{ width: "100%", minHeight: 220, padding: 12, borderRadius: 12, border: "1px solid #ddd" }} />
                     </div>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button
-                        onClick={ingestKnowledge}
-                        disabled={kbIngesting}
-                        style={{
-                          padding: "10px 14px",
-                          borderRadius: 12,
-                          border: "1px solid #111",
-                          background: "#111",
-                          color: "#fff",
-                          cursor: "pointer",
-                        }}
-                      >
+                      <button onClick={ingestKnowledge} disabled={kbIngesting} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}>
                         {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
                       </button>
 
-                      <button
-                        onClick={() => setTab("test-chat")}
-                        style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                      >
+                      <button onClick={() => setTab("test-chat")} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
                         Go to Test-Chat →
                       </button>
                     </div>
@@ -1192,7 +1191,49 @@ export default function CompanyDetailPage() {
 
               {tab === "leads" && (
                 <Card title="Leads Dashboard">
-                  <div style={{ opacity: 0.75 }}>Leads UI unverändert – bleibt wie bei dir im Projekt.</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    <input
+                      value={leadQuery}
+                      onChange={(e) => setLeadQuery(e.target.value)}
+                      placeholder="Search…"
+                      style={{ flex: 1, minWidth: 240, padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+                    />
+                    <select
+                      value={leadBand}
+                      onChange={(e) => setLeadBand(e.target.value as any)}
+                      style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+                    >
+                      <option value="all">all</option>
+                      <option value="cold">cold</option>
+                      <option value="warm">warm</option>
+                      <option value="hot">hot</option>
+                    </select>
+                    <button onClick={loadLeads} disabled={leadsLoading} style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
+                      {leadsLoading ? "Loading…" : "Refresh"}
+                    </button>
+                  </div>
+
+                  {leadsLoading ? (
+                    <div style={{ opacity: 0.75 }}>Loading…</div>
+                  ) : filteredLeads.length === 0 ? (
+                    <div style={{ opacity: 0.75 }}>No leads.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {filteredLeads.map((l) => (
+                        <div key={l.id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                            <div style={{ fontSize: 13 }}>
+                              <div style={{ fontWeight: 700 }}>{l.name || l.email || l.phone || "Lead"}</div>
+                              <div style={{ opacity: 0.8 }}>{l.score_band} · {l.score_total}</div>
+                            </div>
+                            <div style={{ fontSize: 12, opacity: 0.7, whiteSpace: "nowrap" }}>
+                              {l.created_at ? new Date(l.created_at).toLocaleString() : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </Card>
               )}
             </>
