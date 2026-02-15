@@ -9,6 +9,14 @@ type EnsureCompanyResp =
   | { company_id: string; created: boolean }
   | { error: string };
 
+function getSiteUrl() {
+  // prefer explicit env (prod), fallback to window origin
+  const envUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  if (envUrl && envUrl.startsWith("http")) return envUrl.replace(/\/+$/, "");
+  if (typeof window !== "undefined") return window.location.origin;
+  return "";
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -46,30 +54,27 @@ export default function SignupPage() {
         return;
       }
 
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : undefined;
+      const siteUrl = getSiteUrl();
+      const emailRedirectTo = siteUrl ? `${siteUrl}/auth/callback` : undefined;
 
       const { data, error } = await supabase.auth.signUp({
         email: trimmedEmail,
         password,
         options: {
-          // When email confirmation is ON, Supabase will redirect here after click.
-          emailRedirectTo: origin ? `${origin}/auth/callback` : undefined,
+          emailRedirectTo,
         },
       });
 
       if (error) throw error;
 
-      // If confirmation is OFF, user session exists immediately -> we can onboard now.
-      // If confirmation is ON, there is no session yet -> show info, user must confirm then login.
-      const hasSession = !!data.session;
-
-      if (!hasSession) {
+      // Confirmation ON -> no session -> user must confirm then login
+      if (!data.session) {
         setMsg("Account created. Please confirm your email, then log in to finish onboarding.");
         router.push("/login");
         return;
       }
 
+      // Confirmation OFF -> session exists -> onboard now
       const ensured = await ensureCompany(trimmedCompany);
       router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
     } catch (err: any) {

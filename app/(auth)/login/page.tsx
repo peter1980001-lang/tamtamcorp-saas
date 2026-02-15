@@ -9,10 +9,6 @@ type EnsureCompanyResp =
   | { company_id: string; created: boolean }
   | { error: string };
 
-type MeCompaniesResp =
-  | { companies: Array<{ company_id: string; role: string; company: { id: string; name: string } }> }
-  | { error: string };
-
 export default function LoginPage() {
   const router = useRouter();
   const supabase = useMemo(() => supabaseBrowser(), []);
@@ -30,41 +26,31 @@ export default function LoginPage() {
     });
 
     const data = (await res.json()) as EnsureCompanyResp;
-    if (!res.ok) throw new Error("error" in data ? data.error : "Ensure-company failed");
+
+    if (!res.ok) {
+      const errMsg = "error" in data ? data.error : "Ensure-company failed";
+      throw new Error(errMsg);
+    }
     if ("error" in data) throw new Error(data.error);
+
     return data;
   }
 
-  async function fetchMyCompanies() {
-    const res = await fetch("/api/me/companies", { method: "GET" });
-    const data = (await res.json()) as MeCompaniesResp;
-    if (!res.ok) throw new Error("error" in data ? data.error : "Me-companies failed");
-    if ("error" in data) throw new Error(data.error);
-    return data.companies;
+  async function finishOnboardingAndRedirect() {
+    const ensured = await ensureCompany();
+    router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
   }
 
-  async function redirectToFirstCompanyOrSignup() {
-    try {
-      const companies = await fetchMyCompanies();
-      if (companies.length > 0) {
-        router.push(`/admin/companies/${companies[0].company_id}?tab=billing`);
-        return;
-      }
-
-      // If no mapping exists, create one (first confirmed login onboarding case)
-      const ensured = await ensureCompany();
-      router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
-    } catch {
-      router.push("/signup");
-    }
-  }
-
+  // If user comes from /auth/callback and already has a session, finish onboarding.
   useEffect(() => {
-    // If user is already logged in (e.g. after /auth/callback), finish onboarding automatically.
     (async () => {
       const { data } = await supabase.auth.getUser();
       if (data?.user) {
-        await redirectToFirstCompanyOrSignup();
+        try {
+          await finishOnboardingAndRedirect();
+        } catch {
+          // do nothing (show login UI if something fails)
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,8 +74,7 @@ export default function LoginPage() {
       });
       if (error) throw error;
 
-      // Ensure onboarding (idempotent)
-      await redirectToFirstCompanyOrSignup();
+      await finishOnboardingAndRedirect();
     } catch (err: any) {
       setMsg(err?.message ?? "Login failed.");
     } finally {
@@ -101,7 +86,7 @@ export default function LoginPage() {
     <div style={{ maxWidth: 440, margin: "48px auto", padding: 16 }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Login</h1>
       <p style={{ opacity: 0.8, marginBottom: 24 }}>
-        Sign in and we’ll route you to your company.
+        Sign in to complete onboarding and open your company.
       </p>
 
       <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
@@ -162,7 +147,14 @@ export default function LoginPage() {
         </button>
 
         {msg ? (
-          <div style={{ marginTop: 8, padding: 12, borderRadius: 12, background: "#f7f7f7" }}>
+          <div
+            style={{
+              marginTop: 8,
+              padding: 12,
+              borderRadius: 12,
+              background: "#f7f7f7",
+            }}
+          >
             {msg}
           </div>
         ) : null}
