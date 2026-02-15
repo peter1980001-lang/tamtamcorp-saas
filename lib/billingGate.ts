@@ -4,8 +4,17 @@ export type BillingDecision =
   | { ok: true; plan_key: string; limits: { per_minute: number; per_day: number } }
   | { ok: false; code: "payment_required"; message: string };
 
+function toInt(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.floor(n) : fallback;
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export async function checkBillingGate(company_id: string): Promise<BillingDecision> {
-  // company_billing.plan_key comes from webhook mapping
+  // 1) billing state
   const { data: billing, error: bErr } = await supabaseServer
     .from("company_billing")
     .select("status, plan_key")
@@ -13,7 +22,6 @@ export async function checkBillingGate(company_id: string): Promise<BillingDecis
     .maybeSingle();
 
   if (bErr) {
-    // fail closed
     return {
       ok: false,
       code: "payment_required",
@@ -27,7 +35,7 @@ export async function checkBillingGate(company_id: string): Promise<BillingDecis
   const active =
     status === "active" ||
     status === "trialing" ||
-    status === "past_due"; // decide if you want to allow past_due; can change later
+    status === "past_due"; // you can tighten later
 
   if (!active || !plan_key) {
     return {
@@ -37,13 +45,12 @@ export async function checkBillingGate(company_id: string): Promise<BillingDecis
     };
   }
 
-// IMPORTANT: we read entitlements_json.rate_limits
-const { data: plan, error: pErr } = await supabaseServer
-  .from("billing_plans")
-  .select("plan_key, entitlements_json, is_active")
-  .eq("plan_key", plan_key)
-  .maybeSingle();
-
+  // 2) plan entitlements limits (ceiling)
+  const { data: plan, error: pErr } = await supabaseServer
+    .from("billing_plans")
+    .select("plan_key, entitlements_json, is_active")
+    .eq("plan_key", plan_key)
+    .maybeSingle();
 
   if (pErr || !plan || !plan.is_active) {
     return {
@@ -53,16 +60,43 @@ const { data: plan, error: pErr } = await supabaseServer
     };
   }
 
-  const rl = (plan.entitlements_json || {}).rate_limits || {};
-  const per_minute = Number(rl.per_minute ?? 10);
-  const per_day = Number(rl.per_day ?? 1000);
+  const planRl = (plan.entitlements_json || {}).rate_limits || {};
+  const plan_per_minute = clamp(toInt(planRl.per_minute, 10), 1, 600);
+  const plan_per_day = clamp(toInt(planRl.per_day, 1000), 1, 200000);
+
+  // 3) company_settings overrides (can only LOWER, never raise above plan)
+  const { data: settings, error: sErr } = await supabaseServer
+    .from("company_settings")
+    .select("limits_json")
+    .eq("company_id", company_id)
+    .maybeSingle();
+
+  if (sErr) {
+    // fail closed: keep plan limits (still safe)
+    return {
+      ok: true,
+      plan_key,
+      limits: { per_minute: plan_per_minute, per_day: plan_per_day },
+    };
+  }
+
+  const limits_json = settings?.limits_json || {};
+  // support both: limits_json.chat.rate_limits or limits_json.rate_limits
+  const chat = limits_json?.chat ?? limits_json ?? {};
+  const companyRl = chat?.rate_limits ?? {};
+
+  const company_per_minute = toInt(companyRl.per_minute, plan_per_minute);
+  const company_per_day = toInt(companyRl.per_day, plan_per_day);
+
+  const eff_per_minute = clamp(Math.min(plan_per_minute, company_per_minute), 1, 600);
+  const eff_per_day = clamp(Math.min(plan_per_day, company_per_day), 1, 200000);
 
   return {
     ok: true,
     plan_key,
     limits: {
-      per_minute: Number.isFinite(per_minute) ? per_minute : 10,
-      per_day: Number.isFinite(per_day) ? per_day : 1000,
+      per_minute: eff_per_minute,
+      per_day: eff_per_day,
     },
   };
 }

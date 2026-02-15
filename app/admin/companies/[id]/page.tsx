@@ -85,13 +85,6 @@ function mask(s: string) {
   return s.slice(0, 6) + "…" + s.slice(-4);
 }
 
-function fmt(dt?: string | null) {
-  if (!dt) return "—";
-  const d = new Date(dt);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
-}
-
 function badge(text: string, bg: string, fg: string) {
   return (
     <span
@@ -134,7 +127,6 @@ function TrialNotice(props: { billingInfo: any }) {
   const msLeft = end.getTime() - now.getTime();
   const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
 
-  // only show exactly for 3/2/1 days (as requested)
   if (![1, 2, 3].includes(daysLeft)) return null;
 
   const text =
@@ -205,8 +197,17 @@ export default function CompanyDetailPage() {
   async function load() {
     if (!id) return;
     setLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}`);
-    const json = await res.json();
+
+    const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      setToast(json?.error || "company_load_failed");
+      setData(null);
+      setLoading(false);
+      return;
+    }
+
     setData(json);
     setLoading(false);
   }
@@ -214,12 +215,14 @@ export default function CompanyDetailPage() {
   async function loadBilling() {
     if (!id) return;
     setBillingLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}/billing`);
-    const json = await res.json();
+
+    const res = await fetch(`/api/admin/companies/${id}/billing`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+
     setBillingLoading(false);
 
     if (!res.ok) {
-      setToast(json.error || "billing_load_failed");
+      setToast(json?.error || "billing_load_failed");
       return;
     }
 
@@ -253,9 +256,16 @@ export default function CompanyDetailPage() {
       setToast("Trial started");
       setTimeout(() => loadBilling(), 600);
     }
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams]);
+
+  // ✅ When switching to "limits", reload once to reflect DB changes immediately
+  useEffect(() => {
+    if (tab === "limits") load();
+    if (tab === "billing") loadBilling();
+    if (tab === "leads") loadLeads();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -273,11 +283,11 @@ export default function CompanyDetailPage() {
     if (!id) return;
     setRotating(true);
     const res = await fetch(`/api/admin/companies/${id}/rotate-keys`, { method: "POST" });
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     setRotating(false);
 
     if (!res.ok) {
-      setToast(json.error || "rotate_failed");
+      setToast(json?.error || "rotate_failed");
       return;
     }
 
@@ -295,9 +305,9 @@ export default function CompanyDetailPage() {
       body: JSON.stringify({ public_key: pk }),
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     if (!res.ok) {
-      setToast(json.error || "token_failed");
+      setToast(json?.error || "token_failed");
       return;
     }
 
@@ -313,9 +323,9 @@ export default function CompanyDetailPage() {
       headers: { Authorization: `Bearer ${testToken}` },
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     if (!res.ok) {
-      setToast(json.error || "conversation_failed");
+      setToast(json?.error || "conversation_failed");
       return;
     }
 
@@ -332,7 +342,8 @@ export default function CompanyDetailPage() {
     setTestSending(true);
     setTestLog((l) => [...l, { role: "user", text: testInput }]);
 
-    const res = await fetch("/api/chat", {
+    // ✅ IMPORTANT: use widget route (not /api/chat)
+    const res = await fetch("/api/widget/message", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -344,11 +355,11 @@ export default function CompanyDetailPage() {
       }),
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     setTestSending(false);
 
     if (!res.ok) {
-      setToast(json.error || "chat_failed");
+      setToast(json?.error || "chat_failed");
       setTestLog((l) => [...l, { role: "error", text: JSON.stringify(json) }]);
       return;
     }
@@ -372,11 +383,11 @@ export default function CompanyDetailPage() {
       }),
     });
 
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     setKbIngesting(false);
 
     if (!res.ok) {
-      setToast(json.error || "ingest_failed");
+      setToast(json?.error || "ingest_failed");
       return;
     }
 
@@ -387,12 +398,12 @@ export default function CompanyDetailPage() {
   async function loadLeads() {
     if (!id) return;
     setLeadsLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}/leads`);
-    const json = await res.json();
+    const res = await fetch(`/api/admin/companies/${id}/leads`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
     setLeadsLoading(false);
 
     if (!res.ok) {
-      setToast(json.error || "leads_failed");
+      setToast(json?.error || "leads_failed");
       return;
     }
 
@@ -407,11 +418,11 @@ export default function CompanyDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lead_id, ...patch }),
     });
-    const json = await res.json();
+    const json = await res.json().catch(() => null);
     setLeadSaving(null);
 
     if (!res.ok) {
-      setToast(json.error || "lead_update_failed");
+      setToast(json?.error || "lead_update_failed");
       return;
     }
 
@@ -419,12 +430,6 @@ export default function CompanyDetailPage() {
     setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
     setToast("Lead updated");
   }
-
-  useEffect(() => {
-    if (tab === "leads") loadLeads();
-    if (tab === "billing") loadBilling();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
 
   const filteredLeads = useMemo(() => {
     const q = leadQuery.trim().toLowerCase();
@@ -534,7 +539,9 @@ export default function CompanyDetailPage() {
                       </div>
                       <div>
                         <b>Chat Mode:</b>{" "}
-                        {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid (default)"}
+                        {data.settings?.branding_json?.chat?.mode ??
+                          data.settings?.limits_json?.chat?.mode ??
+                          "hybrid (default)"}
                       </div>
                     </div>
                   </Card>
@@ -600,7 +607,9 @@ export default function CompanyDetailPage() {
                       </div>
                     </div>
 
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}</div>
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>
+                      Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}
+                    </div>
                   </div>
                 </Card>
               )}
@@ -622,7 +631,7 @@ export default function CompanyDetailPage() {
               )}
 
               {tab === "limits" && (
-                <Card title="Limits">
+                <Card title="Limits" right={<button onClick={load} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>Refresh</button>}>
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Stored in <code>company_settings.limits_json</code>.
                   </div>
@@ -644,7 +653,9 @@ export default function CompanyDetailPage() {
                     </button>
                   }
                 >
-                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>Put this script on the client website. It loads the floating iframe widget.</div>
+                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+                    Put this script on the client website. It loads the floating iframe widget.
+                  </div>
                   <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
                     {embedSnippet}
                   </pre>
@@ -663,7 +674,6 @@ export default function CompanyDetailPage() {
                     </button>
                   }
                 >
-                  {/* ✅ NEW: Trial countdown hint (3/2/1 days) */}
                   <TrialNotice billingInfo={billingInfo} />
 
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
@@ -679,7 +689,8 @@ export default function CompanyDetailPage() {
                       <div style={{ opacity: 0.75 }}>Loading billing…</div>
                     ) : !billingInfo?.billing ? (
                       <div style={{ opacity: 0.75 }}>
-                        No billing row yet. After first Checkout, Stripe webhook will create/update <code>company_billing</code>.
+                        No billing row yet. After first Checkout, Stripe webhook will create/update{" "}
+                        <code>company_billing</code>.
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
@@ -695,7 +706,9 @@ export default function CompanyDetailPage() {
                         </div>
                         <div>
                           <b>Current period end:</b>{" "}
-                          {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
+                          {billingInfo.billing.current_period_end
+                            ? new Date(billingInfo.billing.current_period_end).toLocaleString()
+                            : "—"}
                         </div>
                         <div>
                           <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
@@ -704,7 +717,10 @@ export default function CompanyDetailPage() {
                           <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
                         </div>
                         <div style={{ fontSize: 12, opacity: 0.7 }}>
-                          Updated: {billingInfo.billing.updated_at ? new Date(billingInfo.billing.updated_at).toLocaleString() : "—"}
+                          Updated:{" "}
+                          {billingInfo.billing.updated_at
+                            ? new Date(billingInfo.billing.updated_at).toLocaleString()
+                            : "—"}
                         </div>
                       </div>
                     )}
