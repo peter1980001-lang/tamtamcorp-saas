@@ -142,42 +142,44 @@ async function fetchHtml(url: string) {
   return { ok: true as const, html };
 }
 
-function extractTextAndLinks(baseUrl: string, html: string) {
+/**
+ * Fallback for client-rendered pages:
+ * Jina Reader returns readable text from the fully rendered page.
+ */
+async function fetchJinaText(url: string) {
+  const clean = normalizeUrl(url);
+  if (!clean) return { ok: false as const, status: 400, error: "invalid_url" };
+
+  // r.jina.ai/http(s)://...
+  const prefix = clean.startsWith("https://") ? "https://r.jina.ai/https://" : "https://r.jina.ai/http://";
+  const target = clean.replace(/^https?:\/\//i, "");
+
+  const res = await fetch(prefix + target, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "user-agent": "TamTamCorpBot/1.0 (+https://tamtamcorp.tech)",
+      accept: "text/plain",
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return { ok: false as const, status: res.status, error: `jina_failed_${res.status}` };
+  const text = normalizeText(await res.text());
+  return { ok: true as const, text };
+}
+
+function extractLinks(baseUrl: string, html: string) {
   const $ = cheerio.load(html);
-
-  $("script,style,noscript,svg,canvas").remove();
-
-  const title = String($("title").first().text() || "").trim() || baseUrl;
-
   const links: string[] = [];
   $("a[href]").each((_i, el) => {
     const href = String($(el).attr("href") || "").trim();
     if (!href) return;
     try {
-      const abs = new URL(href, baseUrl).toString();
-      links.push(abs);
+      links.push(new URL(href, baseUrl).toString());
     } catch {}
   });
-
-  const metaDesc = String($('meta[name="description"]').attr("content") || "").trim();
-  const ogTitle = String($('meta[property="og:title"]').attr("content") || "").trim();
-  const ogDesc = String($('meta[property="og:description"]').attr("content") || "").trim();
-
-  const main = $("main").first();
-  const bodyText = normalizeText((main.length ? main : $("body")).text()).slice(0, 60000);
-
-  const combined =
-    [
-      metaDesc ? `META: ${metaDesc}` : "",
-      ogTitle ? `OG_TITLE: ${ogTitle}` : "",
-      ogDesc ? `OG_DESC: ${ogDesc}` : "",
-      bodyText ? `BODY: ${bodyText}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-      .trim();
-
-  return { title, text: combined, links };
+  return links;
 }
 
 function detectSectionType(title: string) {
@@ -191,7 +193,20 @@ function detectSectionType(title: string) {
   return "general";
 }
 
-function extractStructuredSections(pageUrl: string, html: string) {
+function extractTitleFromHtml(pageUrl: string, html: string) {
+  try {
+    const $ = cheerio.load(html);
+    return String($("title").first().text() || "").trim() || pageUrl;
+  } catch {
+    return pageUrl;
+  }
+}
+
+/**
+ * Extract structured sections from HTML when server HTML actually contains content.
+ * If not, caller will use Jina fallback and treat it as one section.
+ */
+function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
   const $ = cheerio.load(html);
 
   $("script,style,noscript,svg,canvas,iframe").remove();
@@ -201,33 +216,26 @@ function extractStructuredSections(pageUrl: string, html: string) {
   const docTitle = String($("title").first().text() || "").trim() || pageUrl;
   const root = $("main").first().length ? $("main").first() : $("body");
 
+  const sections: Array<{ title: string; content: string; order: number }> = [];
+  const h2s = root.find("h2").toArray();
+
+  // Collect text with broad selectors (for pricing cards etc.)
   function regionText(region: any) {
     const parts: string[] = [];
-
-    region.find("h1,h2,h3").each((_i: any, el: any) => {
-      const t = normalizeText($(el).text());
-      if (t) parts.push(t);
-    });
-
-    region.find("p,li,div,span,a,button,td,th").each((_i: any, el: any) => {
+    region.find("h1,h2,h3,p,li,div,span,a,button,td,th").each((_i: any, el: any) => {
       const t = normalizeText($(el).text());
       if (!t) return;
       if (t.length < 20) return;
       parts.push(t);
     });
-
     return normalizeText(parts.join("\n"));
   }
-
-  const sections: Array<{ title: string; content: string; order: number }> = [];
-
-  const h2s = root.find("h2").toArray();
 
   if (h2s.length === 0) {
     const all = regionText(root);
     const h1 = normalizeText(root.find("h1").first().text());
     const title = h1 || "Page Content";
-    if (all && all.length >= 80) {
+    if (all && all.length >= 200) {
       sections.push({ title, content: all, order: 1 });
     }
     return { docTitle, sections };
@@ -256,14 +264,14 @@ function extractStructuredSections(pageUrl: string, html: string) {
       content = regionText(wrapper);
     } else {
       const parent = h2.parent();
-      const block = parent.find("*").toArray().slice(0, 400);
+      const block = parent.find("*").toArray().slice(0, 600);
       const wrapper = $("<div></div>");
       for (const el of block) wrapper.append($(el).clone());
       content = regionText(wrapper);
     }
 
     content = normalizeText(`${secTitle}\n${content}`);
-    if (content && content.length >= 80) {
+    if (content && content.length >= 200) {
       sections.push({ title: secTitle, content, order });
     }
   }
@@ -352,6 +360,7 @@ export async function upsertBranding(company_id: string, brandingPatch: any) {
   return { ok: true as const, updated: true as const, branding: next };
 }
 
+// Manual + PDF ingestion helper
 export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
   const chunks = chunkTextSmart(params.content);
   if (chunks.length === 0) return { ok: true as const, inserted: 0 };
@@ -433,19 +442,21 @@ export async function importFromWebsite(params: {
 
   const pagesRaw: Array<{ url: string; title: string; html: string; links: string[]; brandingText: string }> = [];
 
+  // homepage first
   const first = await fetchHtml(startUrl);
   if (!first.ok) return { ok: false, error: first.error, details: { url: startUrl, status: first.status } };
 
-  const firstExtract = extractTextAndLinks(startUrl, first.html);
+  const firstTitle = extractTitleFromHtml(startUrl, first.html);
+  const firstLinks = extractLinks(startUrl, first.html);
   pagesRaw.push({
     url: startUrl,
-    title: firstExtract.title,
+    title: firstTitle,
     html: first.html,
-    links: firstExtract.links,
-    brandingText: firstExtract.text,
+    links: firstLinks,
+    brandingText: normalizeText(first.html),
   });
 
-  const linkCandidates = unique(firstExtract.links)
+  const linkCandidates = unique(firstLinks)
     .map((x) => normalizeUrl(x))
     .filter(Boolean)
     .filter((x) => isSameOrigin(x, startUrl))
@@ -460,15 +471,42 @@ export async function importFromWebsite(params: {
     const f = await fetchHtml(u);
     if (!f.ok) continue;
 
-    const ex = extractTextAndLinks(u, f.html);
-    pagesRaw.push({ url: u, title: ex.title, html: f.html, links: ex.links, brandingText: ex.text });
+    const t = extractTitleFromHtml(u, f.html);
+    const links = extractLinks(u, f.html);
+    pagesRaw.push({ url: u, title: t, html: f.html, links, brandingText: normalizeText(f.html) });
   }
 
   let totalInserted = 0;
   const pagesOut: Array<{ url: string; title: string }> = [];
 
   for (const p of pagesRaw) {
-    const structured = extractStructuredSections(p.url, p.html);
+    // Try HTML extraction first
+    let structured = extractStructuredSectionsFromHtml(p.url, p.html);
+
+    // If too thin => Jina fallback
+    const totalChars = structured.sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
+    if (structured.sections.length === 0 || totalChars < 800) {
+      const jina = await fetchJinaText(p.url);
+      if (jina.ok) {
+        const jinaText = jina.text;
+
+        // one strong section
+        structured = {
+          docTitle: p.title,
+          sections: [
+            {
+              title: "Page Content",
+              content: jinaText,
+              order: 1,
+            },
+          ],
+        };
+
+        // use jina text for branding too (much better than raw html)
+        p.brandingText = jinaText;
+      }
+    }
+
     if (structured.sections.length) {
       const ins = await insertStructuredWebsite({
         company_id: params.company_id,
@@ -478,11 +516,13 @@ export async function importFromWebsite(params: {
       });
       totalInserted += ins;
     }
+
     pagesOut.push({ url: p.url, title: structured.docTitle || p.title });
   }
 
+  // Branding extraction from readable text (Jina if available)
   const combinedText = pagesRaw
-    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${p.brandingText}`)
+    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${normalizeText(p.brandingText).slice(0, 60000)}`)
     .join("\n\n---\n\n");
 
   const profile = await extractBrandingFromText({
