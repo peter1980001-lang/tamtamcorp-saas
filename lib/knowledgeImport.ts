@@ -1,8 +1,6 @@
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
-import * as pdfParse from "pdf-parse";
 import { supabaseServer } from "@/lib/supabaseServer";
-
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -94,13 +92,11 @@ function pickPriorityLinks(baseUrl: string, links: string[]) {
       for (const w of want) {
         if (path === w || path.startsWith(w + "/")) score += 10;
       }
-      // home gets slightly higher
       if (path === "/" || path === "") score += 5;
       return { u, score };
     })
     .sort((a, b) => b.score - a.score);
 
-  // keep in order, remove duplicates
   return scored.map((x) => x.u);
 }
 
@@ -131,7 +127,6 @@ function extractTextAndLinks(baseUrl: string, html: string) {
   const $ = cheerio.load(html);
 
   const title = String($("title").first().text() || "").trim();
-  // remove scripts/styles/noscript
   $("script,style,noscript").remove();
 
   const text = String($("body").text() || "").replace(/\s+/g, " ").trim();
@@ -144,9 +139,7 @@ function extractTextAndLinks(baseUrl: string, html: string) {
     try {
       const abs = new URL(href, baseUrl).toString();
       links.push(abs);
-    } catch {
-      // ignore
-    }
+    } catch {}
   });
 
   return { title: title || baseUrl, text, links };
@@ -154,7 +147,7 @@ function extractTextAndLinks(baseUrl: string, html: string) {
 
 async function extractBrandingFromText(input: {
   companyNameHint?: string;
-  homepageUrl?: string;
+  homepageUrl?: string | null;
   combinedText: string;
 }) {
   const prompt = [
@@ -199,7 +192,6 @@ async function extractBrandingFromText(input: {
   try {
     return JSON.parse(raw);
   } catch {
-    // hard fallback: do not break import if parsing fails
     return null;
   }
 }
@@ -228,20 +220,13 @@ export async function upsertBranding(company_id: string, brandingPatch: any) {
 
   const { error: upErr } = await supabaseServer
     .from("company_settings")
-    .upsert(
-      { company_id, branding_json: next },
-      { onConflict: "company_id" }
-    );
+    .upsert({ company_id, branding_json: next }, { onConflict: "company_id" });
 
   if (upErr) return { ok: false as const, error: upErr.message };
   return { ok: true as const, updated: true as const, branding: next };
 }
 
-export async function insertKnowledgeChunks(params: {
-  company_id: string;
-  title: string;
-  content: string;
-}) {
+export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
   const chunks = chunkText(params.content);
   if (chunks.length === 0) return { ok: true as const, inserted: 0 };
 
@@ -265,13 +250,12 @@ export async function importFromWebsite(params: {
   url: string;
   maxPages?: number;
   companyNameHint?: string;
-}) : Promise<ImportResult | { ok: false; error: string; details?: any }> {
+}): Promise<ImportResult | { ok: false; error: string; details?: any }> {
   const startUrl = normalizeUrl(params.url);
   if (!startUrl) return { ok: false, error: "invalid_url" };
 
   const maxPages = Math.max(1, Math.min(10, Number(params.maxPages || 5)));
 
-  // Crawl: start page → collect links → pick priority → fetch up to maxPages
   const pages: Array<{ url: string; title: string; text: string; links: string[] }> = [];
 
   const first = await fetchHtml(startUrl);
@@ -289,16 +273,13 @@ export async function importFromWebsite(params: {
     if (!f.ok) continue;
 
     const ex = extractTextAndLinks(u, f.html);
-    // skip ultra-thin pages
     if (ex.text.length < 300) continue;
 
     pages.push({ url: u, title: ex.title, text: ex.text, links: ex.links });
   }
 
   const combinedText = pages
-    .map((p) => {
-      return `URL: ${p.url}\nTITLE: ${p.title}\n\n${p.text}`;
-    })
+    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${p.text}`)
     .join("\n\n---\n\n");
 
   const title = `Website Import: ${new URL(startUrl).host}`;
@@ -344,9 +325,16 @@ export async function importFromPdf(params: {
   filename: string;
   buffer: Buffer;
   companyNameHint?: string;
-}) : Promise<ImportResult | { ok: false; error: string; details?: any }> {
-  const data = await (pdfParse as any).default(params.buffer);
-  const text = String(data.text || "").replace(/\s+/g, " ").trim();
+}): Promise<ImportResult | { ok: false; error: string; details?: any }> {
+  // ✅ dynamic import avoids Turbopack ESM default-export issues
+  const mod: any = await import("pdf-parse");
+  const pdfParseFn = mod?.default || mod;
+  if (typeof pdfParseFn !== "function") {
+    return { ok: false, error: "pdf_parse_import_failed" };
+  }
+
+  const data = await pdfParseFn(params.buffer);
+  const text = String(data?.text || "").replace(/\s+/g, " ").trim();
 
   if (!text || text.length < 200) {
     return { ok: false, error: "pdf_text_too_short" };
@@ -359,7 +347,7 @@ export async function importFromPdf(params: {
 
   const profile = await extractBrandingFromText({
     companyNameHint: params.companyNameHint,
-    homepageUrl: null as any,
+    homepageUrl: null,
     combinedText: text,
   });
 
