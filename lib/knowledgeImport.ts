@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
+import crypto from "crypto";
 import { supabaseServer } from "@/lib/supabaseServer";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -7,20 +8,47 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 export type ImportResult = {
   ok: true;
   pages?: Array<{ url: string; title: string }>;
-  pdf?: { filename: string };
   chunksInserted: number;
   brandingUpdated: boolean;
   brandingPreview?: any;
 };
 
-function chunkText(text: string, size = 900, overlap = 120) {
+function hash(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
+}
+
+function normalizeText(text: string) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function detectSectionType(title: string) {
+  const t = title.toLowerCase();
+  if (t.includes("price") || t.includes("pricing") || t.includes("preis")) return "pricing";
+  if (t.includes("faq") || t.includes("question")) return "faq";
+  if (t.includes("contact") || t.includes("kontakt")) return "contact";
+  if (t.includes("feature") || t.includes("service") || t.includes("solution")) return "feature";
+  if (t.includes("about") || t.includes("company")) return "about";
+  return "general";
+}
+
+function chunkTextSmart(text: string, size = 900, overlap = 120) {
+  const clean = normalizeText(text);
   const chunks: string[] = [];
-  const clean = String(text || "").replace(/\s+/g, " ").trim();
   let i = 0;
+
   while (i < clean.length) {
-    chunks.push(clean.slice(i, i + size));
-    i += size - overlap;
+    const end = Math.min(clean.length, i + size);
+    let slice = clean.slice(i, end);
+
+    const lastSpace = slice.lastIndexOf(" ");
+    if (lastSpace > 200 && end !== clean.length) {
+      slice = slice.slice(0, lastSpace);
+    }
+
+    chunks.push(slice.trim());
+    i += slice.length - overlap;
   }
+
   return chunks.filter(Boolean);
 }
 
@@ -29,54 +57,97 @@ async function embedBatch(chunks: string[]) {
     model: "text-embedding-3-small",
     input: chunks,
   });
-  return emb.data.map((x) => x.embedding as unknown as number[]);
+  return emb.data.map((x) => x.embedding as number[]);
 }
 
-function normalizeUrl(u: string) {
-  try {
-    const url = new URL(u);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return "";
+async function insertStructuredChunks(params: {
+  company_id: string;
+  page_url: string;
+  doc_title: string;
+  sections: Array<{ title: string; content: string; order: number }>;
+}) {
+  let totalInserted = 0;
+
+  const doc_id = hash(params.page_url);
+
+  for (const section of params.sections) {
+    const chunks = chunkTextSmart(section.content);
+    if (!chunks.length) continue;
+
+    const vectors = await embedBatch(chunks);
+
+    const rows = chunks.map((c, idx) => ({
+      company_id: params.company_id,
+      source_type: "website",
+      source_ref: params.page_url,
+      title: section.title,
+      content: c,
+      metadata: {
+        doc_id,
+        page_url: params.page_url,
+        doc_title: params.doc_title,
+        section_title: section.title,
+        section_type: detectSectionType(section.title),
+        section_order: section.order,
+        chunk_index: idx,
+      },
+      embedding: vectors[idx],
+    }));
+
+    const { error } = await supabaseServer.from("knowledge_chunks").insert(rows);
+    if (error) throw new Error(error.message);
+
+    totalInserted += rows.length;
   }
+
+  return totalInserted;
 }
 
-function isSameOrigin(a: string, b: string) {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
+function extractStructuredSections(baseUrl: string, html: string) {
+  const $ = cheerio.load(html);
+  $("script,style,noscript,svg,canvas").remove();
+
+  const pageTitle = $("title").first().text().trim() || baseUrl;
+
+  const sections: Array<{ title: string; content: string; order: number }> = [];
+
+  let currentSection = {
+    title: "Introduction",
+    content: "",
+    order: 0,
+  };
+
+  let orderIndex = 0;
+
+  $("body")
+    .find("h2, h3, p, li")
+    .each((_i, el) => {
+      const tag = el.tagName.toLowerCase();
+      const text = normalizeText($(el).text());
+      if (!text) return;
+
+      if (tag === "h2") {
+        if (currentSection.content.length > 100) {
+          sections.push(currentSection);
+        }
+        orderIndex += 1;
+        currentSection = {
+          title: text,
+          content: "",
+          order: orderIndex,
+        };
+      } else if (tag === "h3") {
+        currentSection.content += `\n\n${text}\n`;
+      } else {
+        currentSection.content += ` ${text}`;
+      }
+    });
+
+  if (currentSection.content.length > 100) {
+    sections.push(currentSection);
   }
-}
 
-function isLikelyHtmlPath(pathname: string) {
-  const p = String(pathname || "").toLowerCase();
-  if (p.endsWith(".pdf")) return false;
-  if (p.match(/\.(jpg|jpeg|png|webp|gif|svg|ico|css|js|mp4|mov|avi|zip)$/i)) return false;
-  return true;
-}
-
-const COMMON_PATHS = [
-  "/",
-  "/about",
-  "/about-us",
-  "/company",
-  "/services",
-  "/service",
-  "/products",
-  "/solutions",
-  "/pricing",
-  "/prices",
-  "/contact",
-  "/impressum",
-  "/faq",
-  "/terms",
-  "/privacy",
-];
-
-function unique(arr: string[]) {
-  return Array.from(new Set(arr));
+  return { pageTitle, sections };
 }
 
 async function fetchHtml(url: string) {
@@ -84,334 +155,58 @@ async function fetchHtml(url: string) {
     method: "GET",
     redirect: "follow",
     headers: {
-      "user-agent": "TamTamCorpBot/1.0 (+https://tamtamcorp.tech)",
-      accept: "text/html,application/xhtml+xml",
+      "user-agent": "TamTamCorpBot/1.0",
+      accept: "text/html",
     },
     cache: "no-store",
   });
 
+  if (!res.ok) return null;
+
   const ct = String(res.headers.get("content-type") || "").toLowerCase();
-  if (!res.ok) {
-    return { ok: false as const, status: res.status, error: `fetch_failed_${res.status}` };
-  }
-  if (!ct.includes("text/html") && !ct.includes("application/xhtml+xml")) {
-    return { ok: false as const, status: 415, error: "not_html" };
-  }
+  if (!ct.includes("text/html")) return null;
 
-  const html = await res.text();
-  return { ok: true as const, html };
-}
-
-function extractReadableText($: cheerio.CheerioAPI) {
-  // remove noise
-  $("script,style,noscript,svg,canvas").remove();
-
-  const metaDesc = String($('meta[name="description"]').attr("content") || "").trim();
-  const ogTitle = String($('meta[property="og:title"]').attr("content") || "").trim();
-  const ogDesc = String($('meta[property="og:description"]').attr("content") || "").trim();
-
-  // Prefer structured text rather than full body.text()
-  const parts: string[] = [];
-
-  const h1 = $("h1").first().text().trim();
-  if (h1) parts.push(`H1: ${h1}`);
-
-  const headings = $("h2,h3")
-    .slice(0, 20)
-    .map((_i, el) => $(el).text().trim())
-    .get()
-    .filter(Boolean);
-  if (headings.length) parts.push("HEADINGS:\n" + headings.join("\n"));
-
-  const paras = $("p,li")
-    .slice(0, 200)
-    .map((_i, el) => $(el).text().trim())
-    .get()
-    .map((t) => t.replace(/\s+/g, " ").trim())
-    .filter((t) => t.length >= 40); // keep meaningful lines
-  if (paras.length) parts.push("TEXT:\n" + paras.join("\n"));
-
-  const fallbackBody = $("body").text().replace(/\s+/g, " ").trim();
-
-  const combined =
-    [
-      metaDesc ? `META: ${metaDesc}` : "",
-      ogTitle ? `OG_TITLE: ${ogTitle}` : "",
-      ogDesc ? `OG_DESC: ${ogDesc}` : "",
-      parts.join("\n\n"),
-      // if structured extraction is too thin, include body text as fallback
-      parts.join("\n").length < 400 ? `BODY_FALLBACK: ${fallbackBody.slice(0, 30000)}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  return combined;
-}
-
-function extractTextAndLinks(baseUrl: string, html: string) {
-  const $ = cheerio.load(html);
-
-  const title = String($("title").first().text() || "").trim() || baseUrl;
-
-  const text = extractReadableText($);
-
-  const links: string[] = [];
-  $("a[href]").each((_i, el) => {
-    const href = String($(el).attr("href") || "").trim();
-    if (!href) return;
-
-    try {
-      const abs = new URL(href, baseUrl).toString();
-      links.push(abs);
-    } catch {}
-  });
-
-  return { title, text, links };
-}
-
-async function extractBrandingFromText(input: {
-  companyNameHint?: string;
-  homepageUrl?: string | null;
-  combinedText: string;
-}) {
-  const prompt = [
-    "You are an expert brand strategist and company analyst.",
-    "Extract a compact company profile and branding hints from the provided text.",
-    "Return STRICT JSON only (no markdown).",
-    "",
-    "JSON schema:",
-    "{",
-    '  "company_name": string | null,',
-    '  "tagline": string | null,',
-    '  "summary": string | null,',
-    '  "products_services": string[],',
-    '  "industries": string[],',
-    '  "target_customers": string[],',
-    '  "tone": "formal"|"friendly"|"luxury"|"technical"|"playful"|"neutral"|null,',
-    '  "brand_colors": { "primary": string|null, "secondary": string|null, "accent": string|null },',
-    '  "logo_url": string | null,',
-    '  "contact": { "email": string|null, "phone": string|null, "address": string|null, "website": string|null }',
-    "}",
-    "",
-    "Rules:",
-    "- If you cannot find something, use null or []",
-    "- brand_colors must be hex if present (e.g. #111111), otherwise nulls",
-    "- Keep summary <= 80 words",
-    "",
-    `Hints: companyNameHint=${input.companyNameHint || ""} homepageUrl=${input.homepageUrl || ""}`,
-    "",
-    "TEXT:",
-    input.combinedText.slice(0, 120000),
-  ].join("\n");
-
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    messages: [{ role: "system", content: prompt }],
-  });
-
-  const raw = String(r.choices?.[0]?.message?.content || "").trim();
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-export async function upsertBranding(company_id: string, brandingPatch: any) {
-  if (!brandingPatch || typeof brandingPatch !== "object") {
-    return { ok: true as const, updated: false as const };
-  }
-
-  const { data, error } = await supabaseServer
-    .from("company_settings")
-    .select("company_id, branding_json")
-    .eq("company_id", company_id)
-    .maybeSingle();
-
-  if (error) return { ok: false as const, error: error.message };
-
-  const current = (data as any)?.branding_json ?? {};
-  const next = {
-    ...current,
-    brand: {
-      ...(current.brand ?? {}),
-      ...brandingPatch,
-    },
-  };
-
-  const { error: upErr } = await supabaseServer
-    .from("company_settings")
-    .upsert({ company_id, branding_json: next }, { onConflict: "company_id" });
-
-  if (upErr) return { ok: false as const, error: upErr.message };
-  return { ok: true as const, updated: true as const, branding: next };
-}
-
-export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
-  const chunks = chunkText(params.content);
-  if (chunks.length === 0) return { ok: true as const, inserted: 0 };
-
-  const vectors = await embedBatch(chunks);
-
-  const rows = chunks.map((c, idx) => ({
-    company_id: params.company_id,
-    title: params.title,
-    content: c,
-    embedding: vectors[idx],
-  }));
-
-  const { error } = await supabaseServer.from("knowledge_chunks").insert(rows);
-  if (error) return { ok: false as const, error: error.message };
-
-  return { ok: true as const, inserted: chunks.length };
+  return res.text();
 }
 
 export async function importFromWebsite(params: {
   company_id: string;
   url: string;
   maxPages?: number;
-  companyNameHint?: string;
-}): Promise<ImportResult | { ok: false; error: string; details?: any }> {
-  const startUrl = normalizeUrl(params.url);
-  if (!startUrl) return { ok: false, error: "invalid_url" };
-
+}): Promise<ImportResult | { ok: false; error: string }> {
   const maxPages = Math.max(1, Math.min(10, Number(params.maxPages || 5)));
-  const origin = new URL(startUrl).origin;
+  const visited = new Set<string>();
+  const toVisit = [params.url];
+  let totalChunks = 0;
+  const pages: Array<{ url: string; title: string }> = [];
 
-  // build candidate list: homepage + common paths + discovered links
-  const baseCandidates = COMMON_PATHS.map((p) => normalizeUrl(origin + p)).filter(Boolean);
+  while (toVisit.length && visited.size < maxPages) {
+    const current = toVisit.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
 
-  const pages: Array<{ url: string; title: string; text: string; links: string[] }> = [];
+    const html = await fetchHtml(current);
+    if (!html) continue;
 
-  // Fetch homepage first
-  const first = await fetchHtml(startUrl);
-  if (!first.ok) return { ok: false, error: first.error, details: { url: startUrl, status: first.status } };
+    const { pageTitle, sections } = extractStructuredSections(current, html);
 
-  const firstExtract = extractTextAndLinks(startUrl, first.html);
-  pages.push({ url: startUrl, title: firstExtract.title, text: firstExtract.text, links: firstExtract.links });
+    if (sections.length) {
+      const inserted = await insertStructuredChunks({
+        company_id: params.company_id,
+        page_url: current,
+        doc_title: pageTitle,
+        sections,
+      });
+      totalChunks += inserted;
+    }
 
-  // Include additional candidates from links + common paths
-  const linkCandidates = unique(firstExtract.links)
-    .map((x) => normalizeUrl(x))
-    .filter(Boolean)
-    .filter((x) => isSameOrigin(x, startUrl))
-    .filter((x) => isLikelyHtmlPath(new URL(x).pathname));
-
-  const candidates = unique([...baseCandidates, ...linkCandidates]).filter((u) => u !== startUrl);
-
-  for (const u of candidates) {
-    if (pages.length >= maxPages) break;
-    if (pages.some((p) => p.url === u)) continue;
-
-    const f = await fetchHtml(u);
-    if (!f.ok) continue;
-
-    const ex = extractTextAndLinks(u, f.html);
-
-    // ✅ do NOT skip thin pages anymore (they can still contain important info)
-    pages.push({ url: u, title: ex.title, text: ex.text, links: ex.links });
+    pages.push({ url: current, title: pageTitle });
   }
-
-  const combinedText = pages
-    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${p.text}`)
-    .join("\n\n---\n\n");
-
-  const title = `Website Import: ${new URL(startUrl).host}`;
-  const ins = await insertKnowledgeChunks({ company_id: params.company_id, title, content: combinedText });
-  if (!ins.ok) return { ok: false, error: "knowledge_insert_failed", details: ins.error };
-
-  const profile = await extractBrandingFromText({
-    companyNameHint: params.companyNameHint,
-    homepageUrl: startUrl,
-    combinedText,
-  });
-
-  const brandPatch = profile
-    ? {
-        company_name: profile.company_name ?? null,
-        tagline: profile.tagline ?? null,
-        summary: profile.summary ?? null,
-        products_services: Array.isArray(profile.products_services) ? profile.products_services : [],
-        industries: Array.isArray(profile.industries) ? profile.industries : [],
-        target_customers: Array.isArray(profile.target_customers) ? profile.target_customers : [],
-        tone: profile.tone ?? null,
-        brand_colors: profile.brand_colors ?? { primary: null, secondary: null, accent: null },
-        logo_url: profile.logo_url ?? null,
-        contact: profile.contact ?? { email: null, phone: null, address: null, website: startUrl },
-        homepage_url: startUrl,
-      }
-    : null;
-
-  const up = await upsertBranding(params.company_id, brandPatch);
-  if (!up.ok) return { ok: false, error: "branding_update_failed", details: up.error };
 
   return {
     ok: true,
-    pages: pages.map((p) => ({ url: p.url, title: p.title })),
-    chunksInserted: ins.inserted,
-    brandingUpdated: !!brandPatch,
-    brandingPreview: brandPatch || undefined,
-  };
-}
-
-export async function importFromPdf(params: {
-  company_id: string;
-  filename: string;
-  buffer: Buffer;
-  companyNameHint?: string;
-}): Promise<ImportResult | { ok: false; error: string; details?: any }> {
-  const mod: any = await import("pdf-parse");
-  const pdfParseFn = mod?.default || mod;
-  if (typeof pdfParseFn !== "function") {
-    return { ok: false, error: "pdf_parse_import_failed" };
-  }
-
-  const data = await pdfParseFn(params.buffer);
-  const text = String(data?.text || "").replace(/\s+/g, " ").trim();
-
-  if (!text || text.length < 200) {
-    return { ok: false, error: "pdf_text_too_short" };
-  }
-
-  const title = `PDF Import: ${params.filename || "document.pdf"}`;
-
-  const ins = await insertKnowledgeChunks({ company_id: params.company_id, title, content: text });
-  if (!ins.ok) return { ok: false, error: "knowledge_insert_failed", details: ins.error };
-
-  const profile = await extractBrandingFromText({
-    companyNameHint: params.companyNameHint,
-    homepageUrl: null,
-    combinedText: text,
-  });
-
-  const brandPatch = profile
-    ? {
-        company_name: profile.company_name ?? null,
-        tagline: profile.tagline ?? null,
-        summary: profile.summary ?? null,
-        products_services: Array.isArray(profile.products_services) ? profile.products_services : [],
-        industries: Array.isArray(profile.industries) ? profile.industries : [],
-        target_customers: Array.isArray(profile.target_customers) ? profile.target_customers : [],
-        tone: profile.tone ?? null,
-        brand_colors: profile.brand_colors ?? { primary: null, secondary: null, accent: null },
-        logo_url: profile.logo_url ?? null,
-        contact: profile.contact ?? { email: null, phone: null, address: null, website: null },
-      }
-    : null;
-
-  const up = await upsertBranding(params.company_id, brandPatch);
-  if (!up.ok) return { ok: false, error: "branding_update_failed", details: up.error };
-
-  return {
-    ok: true,
-    pdf: { filename: params.filename },
-    chunksInserted: ins.inserted,
-    brandingUpdated: !!brandPatch,
-    brandingPreview: brandPatch || undefined,
+    pages,
+    chunksInserted: totalChunks,
+    brandingUpdated: false,
   };
 }
