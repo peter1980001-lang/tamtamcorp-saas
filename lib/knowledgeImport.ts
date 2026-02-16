@@ -44,9 +44,7 @@ function normalizeUrl(u: string) {
 
 function isSameOrigin(a: string, b: string) {
   try {
-    const ua = new URL(a);
-    const ub = new URL(b);
-    return ua.origin === ub.origin;
+    return new URL(a).origin === new URL(b).origin;
   } catch {
     return false;
   }
@@ -59,45 +57,26 @@ function isLikelyHtmlPath(pathname: string) {
   return true;
 }
 
-function pickPriorityLinks(baseUrl: string, links: string[]) {
-  const want = [
-    "/about",
-    "/about-us",
-    "/company",
-    "/services",
-    "/service",
-    "/products",
-    "/pricing",
-    "/solutions",
-    "/contact",
-    "/impressum",
-    "/faq",
-  ];
+const COMMON_PATHS = [
+  "/",
+  "/about",
+  "/about-us",
+  "/company",
+  "/services",
+  "/service",
+  "/products",
+  "/solutions",
+  "/pricing",
+  "/prices",
+  "/contact",
+  "/impressum",
+  "/faq",
+  "/terms",
+  "/privacy",
+];
 
-  const base = new URL(baseUrl);
-  const normalized = Array.from(
-    new Set(
-      links
-        .map((x) => normalizeUrl(x))
-        .filter(Boolean)
-        .filter((x) => isSameOrigin(x, baseUrl))
-        .filter((x) => isLikelyHtmlPath(new URL(x).pathname))
-    )
-  );
-
-  const scored = normalized
-    .map((u) => {
-      const path = new URL(u).pathname.toLowerCase();
-      let score = 0;
-      for (const w of want) {
-        if (path === w || path.startsWith(w + "/")) score += 10;
-      }
-      if (path === "/" || path === "") score += 5;
-      return { u, score };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return scored.map((x) => x.u);
+function unique(arr: string[]) {
+  return Array.from(new Set(arr));
 }
 
 async function fetchHtml(url: string) {
@@ -123,13 +102,60 @@ async function fetchHtml(url: string) {
   return { ok: true as const, html };
 }
 
+function extractReadableText($: cheerio.CheerioAPI) {
+  // remove noise
+  $("script,style,noscript,svg,canvas").remove();
+
+  const metaDesc = String($('meta[name="description"]').attr("content") || "").trim();
+  const ogTitle = String($('meta[property="og:title"]').attr("content") || "").trim();
+  const ogDesc = String($('meta[property="og:description"]').attr("content") || "").trim();
+
+  // Prefer structured text rather than full body.text()
+  const parts: string[] = [];
+
+  const h1 = $("h1").first().text().trim();
+  if (h1) parts.push(`H1: ${h1}`);
+
+  const headings = $("h2,h3")
+    .slice(0, 20)
+    .map((_i, el) => $(el).text().trim())
+    .get()
+    .filter(Boolean);
+  if (headings.length) parts.push("HEADINGS:\n" + headings.join("\n"));
+
+  const paras = $("p,li")
+    .slice(0, 200)
+    .map((_i, el) => $(el).text().trim())
+    .get()
+    .map((t) => t.replace(/\s+/g, " ").trim())
+    .filter((t) => t.length >= 40); // keep meaningful lines
+  if (paras.length) parts.push("TEXT:\n" + paras.join("\n"));
+
+  const fallbackBody = $("body").text().replace(/\s+/g, " ").trim();
+
+  const combined =
+    [
+      metaDesc ? `META: ${metaDesc}` : "",
+      ogTitle ? `OG_TITLE: ${ogTitle}` : "",
+      ogDesc ? `OG_DESC: ${ogDesc}` : "",
+      parts.join("\n\n"),
+      // if structured extraction is too thin, include body text as fallback
+      parts.join("\n").length < 400 ? `BODY_FALLBACK: ${fallbackBody.slice(0, 30000)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  return combined;
+}
+
 function extractTextAndLinks(baseUrl: string, html: string) {
   const $ = cheerio.load(html);
 
-  const title = String($("title").first().text() || "").trim();
-  $("script,style,noscript").remove();
+  const title = String($("title").first().text() || "").trim() || baseUrl;
 
-  const text = String($("body").text() || "").replace(/\s+/g, " ").trim();
+  const text = extractReadableText($);
 
   const links: string[] = [];
   $("a[href]").each((_i, el) => {
@@ -142,7 +168,7 @@ function extractTextAndLinks(baseUrl: string, html: string) {
     } catch {}
   });
 
-  return { title: title || baseUrl, text, links };
+  return { title, text, links };
 }
 
 async function extractBrandingFromText(input: {
@@ -255,16 +281,29 @@ export async function importFromWebsite(params: {
   if (!startUrl) return { ok: false, error: "invalid_url" };
 
   const maxPages = Math.max(1, Math.min(10, Number(params.maxPages || 5)));
+  const origin = new URL(startUrl).origin;
+
+  // build candidate list: homepage + common paths + discovered links
+  const baseCandidates = COMMON_PATHS.map((p) => normalizeUrl(origin + p)).filter(Boolean);
 
   const pages: Array<{ url: string; title: string; text: string; links: string[] }> = [];
 
+  // Fetch homepage first
   const first = await fetchHtml(startUrl);
   if (!first.ok) return { ok: false, error: first.error, details: { url: startUrl, status: first.status } };
 
   const firstExtract = extractTextAndLinks(startUrl, first.html);
   pages.push({ url: startUrl, title: firstExtract.title, text: firstExtract.text, links: firstExtract.links });
 
-  const candidates = pickPriorityLinks(startUrl, firstExtract.links);
+  // Include additional candidates from links + common paths
+  const linkCandidates = unique(firstExtract.links)
+    .map((x) => normalizeUrl(x))
+    .filter(Boolean)
+    .filter((x) => isSameOrigin(x, startUrl))
+    .filter((x) => isLikelyHtmlPath(new URL(x).pathname));
+
+  const candidates = unique([...baseCandidates, ...linkCandidates]).filter((u) => u !== startUrl);
+
   for (const u of candidates) {
     if (pages.length >= maxPages) break;
     if (pages.some((p) => p.url === u)) continue;
@@ -273,8 +312,8 @@ export async function importFromWebsite(params: {
     if (!f.ok) continue;
 
     const ex = extractTextAndLinks(u, f.html);
-    if (ex.text.length < 300) continue;
 
+    // ✅ do NOT skip thin pages anymore (they can still contain important info)
     pages.push({ url: u, title: ex.title, text: ex.text, links: ex.links });
   }
 
@@ -326,7 +365,6 @@ export async function importFromPdf(params: {
   buffer: Buffer;
   companyNameHint?: string;
 }): Promise<ImportResult | { ok: false; error: string; details?: any }> {
-  // ✅ dynamic import avoids Turbopack ESM default-export issues
   const mod: any = await import("pdf-parse");
   const pdfParseFn = mod?.default || mod;
   if (typeof pdfParseFn !== "function") {
