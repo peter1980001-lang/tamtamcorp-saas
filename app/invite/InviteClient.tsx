@@ -7,6 +7,14 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnon);
 
+function safeNextUrl(v: string): string {
+  if (!v) return "/invite";
+  if (!v.startsWith("/")) return "/invite";
+  if (v.startsWith("//")) return "/invite";
+  if (v.includes("://")) return "/invite";
+  return v;
+}
+
 export default function InviteClient(props: { token: string }) {
   const token = String(props.token || "").trim();
 
@@ -14,7 +22,10 @@ export default function InviteClient(props: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
 
-  const loginUrl = useMemo(() => "/login", []);
+  const loginUrl = useMemo(() => {
+    const next = safeNextUrl(token ? `/invite?token=${encodeURIComponent(token)}` : "/invite");
+    return `/login?next=${encodeURIComponent(next)}`;
+  }, [token]);
 
   useEffect(() => {
     async function run() {
@@ -89,7 +100,7 @@ export default function InviteClient(props: { token: string }) {
               >
                 Go to Login
               </a>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Nach dem Login: diese Invite-URL erneut öffnen.</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Nach dem Login wirst du automatisch wieder hierher geleitet.</div>
             </div>
           )}
 
@@ -102,7 +113,7 @@ export default function InviteClient(props: { token: string }) {
                 Company ID: <code>{companyId || "—"}</code>
               </div>
               <a
-                href={companyId ? `/admin/companies/${companyId}` : "/admin"}
+                href={companyId ? `/admin/companies/${companyId}?tab=admins` : "/admin"}
                 style={{
                   display: "inline-block",
                   padding: "10px 12px",

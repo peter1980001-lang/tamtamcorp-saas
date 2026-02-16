@@ -2,16 +2,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
-type EnsureCompanyResp =
-  | { company_id: string; created: boolean }
-  | { error: string };
+type EnsureCompanyResp = { company_id: string; created: boolean } | { error: string };
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => supabaseBrowser(), []);
+
+  const nextParam = String(searchParams?.get("next") || "").trim();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,12 +37,28 @@ export default function LoginPage() {
     return data;
   }
 
+  function safeNextUrlOrNull(v: string): string | null {
+    // allow only internal paths
+    if (!v) return null;
+    if (!v.startsWith("/")) return null;
+    if (v.startsWith("//")) return null;
+    if (v.includes("://")) return null;
+    return v;
+  }
+
   async function finishOnboardingAndRedirect() {
     const ensured = await ensureCompany();
+
+    const safeNext = safeNextUrlOrNull(nextParam);
+    if (safeNext) {
+      router.push(safeNext);
+      return;
+    }
+
     router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
   }
 
-  // If user comes from /auth/callback and already has a session, finish onboarding.
+  // If user already has a session, finish onboarding (and go to next if provided)
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();

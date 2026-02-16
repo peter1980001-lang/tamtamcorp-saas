@@ -1,65 +1,91 @@
 export const runtime = "nodejs";
 
-import { NextResponse } from "next/server";
-import { requireOwner } from "@/lib/adminGuard";
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwner();
-  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
-
-  const { id } = await ctx.params;
-  const company_id = String(id || "").trim();
-  if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
-
-  const { data, error } = await supabaseServer
-    .from("company_admins")
-    .select("id, company_id, user_id, role, created_at")
-    .eq("company_id", company_id)
-    .order("created_at", { ascending: false });
-
-  if (error) return NextResponse.json({ error: "db_failed", details: error.message }, { status: 500 });
-  return NextResponse.json({ admins: data ?? [] });
+function toRole(input: any) {
+  const r = String(input || "").trim().toLowerCase();
+  // must match your CHECK constraint values in company_admins.role
+  if (r === "owner") return "owner";
+  if (r === "admin") return "admin";
+  if (r === "member") return "member";
+  if (r === "viewer") return "viewer";
+  return null;
 }
 
-export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwner();
-  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
-
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+
+  const auth = await requireCompanyAccess(company_id);
+  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
   const body = await req.json().catch(() => null);
   const user_id = String(body?.user_id || "").trim();
-  const role = String(body?.role || "admin").trim();
+  const role = toRole(body?.role);
 
-  if (!user_id) return NextResponse.json({ error: "missing_user_id" }, { status: 400 });
+  if (!user_id || !role) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
 
-  const { data, error } = await supabaseServer
+  const { data: updated, error: uErr } = await supabaseServer
     .from("company_admins")
-    .upsert({ company_id, user_id, role }, { onConflict: "company_id,user_id" })
-    .select("id, company_id, user_id, role, created_at")
+    .update({ role })
+    .eq("company_id", company_id)
+    .eq("user_id", user_id)
+    .select("id,company_id,user_id,role,created_at")
     .maybeSingle();
 
-  if (error) return NextResponse.json({ error: "db_failed", details: error.message }, { status: 500 });
-  return NextResponse.json({ admin: data });
+  if (uErr) return NextResponse.json({ error: "admin_role_update_failed", details: uErr.message }, { status: 500 });
+  if (!updated) return NextResponse.json({ error: "admin_not_found" }, { status: 404 });
+
+  return NextResponse.json({ ok: true, admin: updated }, { status: 200, headers: { "cache-control": "no-store" } });
 }
 
-export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwner();
-  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
-
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
 
+  const auth = await requireCompanyAccess(company_id);
+  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
+
   const url = new URL(req.url);
-  const admin_id = String(url.searchParams.get("admin_id") || "").trim();
-  if (!admin_id) return NextResponse.json({ error: "missing_admin_id" }, { status: 400 });
+  const user_id = String(url.searchParams.get("user_id") || "").trim();
+  if (!user_id) return NextResponse.json({ error: "missing_user_id" }, { status: 400 });
 
-  const { error } = await supabaseServer.from("company_admins").delete().eq("id", admin_id).eq("company_id", company_id);
-  if (error) return NextResponse.json({ error: "db_failed", details: error.message }, { status: 500 });
+  // Prevent deleting last admin mapping
+  const { data: countRows, error: cErr } = await supabaseServer
+    .from("company_admins")
+    .select("id", { count: "exact", head: true })
+    .eq("company_id", company_id);
 
-  return NextResponse.json({ ok: true });
+  if (cErr) return NextResponse.json({ error: "admin_count_failed", details: cErr.message }, { status: 500 });
+
+  const total = Number((countRows as any)?.length ?? 0); // head:true returns empty array in some clients; count is not exposed here consistently
+  // fallback: fetch rows count in a compatible way
+  let effectiveCount = total;
+  if (!Number.isFinite(effectiveCount) || effectiveCount <= 0) {
+    const { data: rows2, error: c2Err } = await supabaseServer
+      .from("company_admins")
+      .select("id")
+      .eq("company_id", company_id)
+      .limit(1000);
+    if (c2Err) return NextResponse.json({ error: "admin_count_failed", details: c2Err.message }, { status: 500 });
+    effectiveCount = (rows2 ?? []).length;
+  }
+
+  if (effectiveCount <= 1) {
+    return NextResponse.json({ error: "cannot_remove_last_admin" }, { status: 409, headers: { "cache-control": "no-store" } });
+  }
+
+  const { error: dErr } = await supabaseServer
+    .from("company_admins")
+    .delete()
+    .eq("company_id", company_id)
+    .eq("user_id", user_id);
+
+  if (dErr) return NextResponse.json({ error: "admin_remove_failed", details: dErr.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true }, { status: 200, headers: { "cache-control": "no-store" } });
 }

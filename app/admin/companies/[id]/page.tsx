@@ -13,7 +13,15 @@ type Keys = {
   created_at: string;
 };
 type Settings = { company_id: string; limits_json: any; branding_json: any };
-type DetailResponse = { company: Company; keys: Keys | null; settings: Settings };
+
+type AdminRow = {
+  id: string;
+  company_id: string;
+  user_id: string;
+  email?: string | null;
+  role: string;
+  created_at: string;
+};
 
 type InviteRow = {
   id: string;
@@ -30,13 +38,7 @@ type InviteRow = {
   created_by: string | null;
 };
 
-type AdminRow = {
-  id: string;
-  company_id: string;
-  user_id: string;
-  role: string;
-  created_at: string;
-};
+type DetailResponse = { company: Company; keys: Keys | null; settings: Settings; admins?: AdminRow[] };
 
 type LeadRow = {
   id: string;
@@ -60,18 +62,7 @@ type LeadRow = {
   updated_at: string;
 };
 
-const tabs = [
-  "overview",
-  "keys",
-  "domains",
-  "limits",
-  "admins",
-  "embed",
-  "billing",
-  "test-chat",
-  "knowledge",
-  "leads",
-] as const;
+const tabs = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
 type Tab = (typeof tabs)[number];
 
 function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
@@ -120,12 +111,7 @@ function mask(s: string) {
 }
 
 function normalizeHost(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "")
-    .replace(/:\d+$/, "");
+  return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "");
 }
 
 function uniq(arr: string[]) {
@@ -174,6 +160,7 @@ export default function CompanyDetailPage() {
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [adminsLoading, setAdminsLoading] = useState(false);
+  const [adminMutating, setAdminMutating] = useState<string | null>(null);
 
   const [inviteRole, setInviteRole] = useState("admin");
   const [inviteEmail, setInviteEmail] = useState("");
@@ -213,6 +200,7 @@ export default function CompanyDetailPage() {
     }
 
     setData(json);
+    setAdmins(json?.admins ?? []);
     setLoading(false);
   }
 
@@ -233,7 +221,7 @@ export default function CompanyDetailPage() {
     setBillingInfo(json);
   }
 
-  async function loadAdminsAndInvites() {
+  async function loadInvites() {
     if (!id) return;
     setAdminsLoading(true);
     const res = await fetch(`/api/admin/companies/${id}/invites`, { cache: "no-store" });
@@ -241,10 +229,11 @@ export default function CompanyDetailPage() {
     setAdminsLoading(false);
 
     if (!res.ok) {
-      setToast(json?.error || "admins_invites_load_failed");
+      setToast(json?.error || "invites_load_failed");
       return;
     }
 
+    // keep admins in sync too (route returns both)
     setAdmins(json.admins ?? []);
     setInvites(json.invites ?? []);
   }
@@ -286,7 +275,7 @@ export default function CompanyDetailPage() {
     }
 
     if (tab === "billing") loadBilling();
-    if (tab === "admins") loadAdminsAndInvites();
+    if (tab === "admins") loadInvites();
     if (tab === "leads") loadLeads();
 
     if (tab === "domains") {
@@ -455,6 +444,9 @@ export default function CompanyDetailPage() {
       setToast("Invite created");
     }
 
+    // refresh admins/invites from server
+    await loadInvites();
+
     setInviteEmail("");
     setInviteRole("admin");
     setInviteDays(7);
@@ -470,6 +462,42 @@ export default function CompanyDetailPage() {
 
     setInvites((prev) => prev.map((x) => (x.id === invite_id ? { ...x, status: "revoked" } : x)));
     setToast("Invite revoked");
+  }
+
+  async function setAdminRole(user_id: string, role: string) {
+    if (!id) return;
+    setAdminMutating(user_id);
+
+    const res = await fetch(`/api/admin/companies/${id}/admins`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id, role }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setAdminMutating(null);
+
+    if (!res.ok) return setToast(json?.error || "admin_role_update_failed");
+
+    setToast("Role updated");
+    await load();
+  }
+
+  async function removeAdmin(user_id: string) {
+    if (!id) return;
+    setAdminMutating(user_id);
+
+    const res = await fetch(`/api/admin/companies/${id}/admins?user_id=${encodeURIComponent(user_id)}`, {
+      method: "DELETE",
+    });
+
+    const json = await res.json().catch(() => null);
+    setAdminMutating(null);
+
+    if (!res.ok) return setToast(json?.error || "admin_remove_failed");
+
+    setToast("Admin removed");
+    await load();
   }
 
   async function testGetToken() {
@@ -578,15 +606,7 @@ export default function CompanyDetailPage() {
     return leads.filter((l) => {
       if (leadBand !== "all" && l.score_band !== leadBand) return false;
       if (!q) return true;
-      const hay = [
-        l.name || "",
-        l.email || "",
-        l.phone || "",
-        l.status || "",
-        l.lead_state || "",
-        l.score_band || "",
-        JSON.stringify(l.qualification_json || {}),
-      ]
+      const hay = [l.name || "", l.email || "", l.phone || "", l.status || "", l.lead_state || "", l.score_band || "", JSON.stringify(l.qualification_json || {})]
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
@@ -906,7 +926,7 @@ export default function CompanyDetailPage() {
                     title="Create Invite"
                     right={
                       <button
-                        onClick={loadAdminsAndInvites}
+                        onClick={loadInvites}
                         style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
                       >
                         Refresh
@@ -933,6 +953,7 @@ export default function CompanyDetailPage() {
                           <option value="admin">admin</option>
                           <option value="member">member</option>
                           <option value="viewer">viewer</option>
+                          <option value="owner">owner</option>
                         </select>
                         <input
                           type="number"
@@ -962,7 +983,7 @@ export default function CompanyDetailPage() {
                       </button>
 
                       <div style={{ fontSize: 12, opacity: 0.7 }}>
-                        Accept URL: <code>/invite?token=...</code> (User must be logged in.)
+                        Accept URL: <code>/invite?token=...</code>
                       </div>
                     </div>
                   </Card>
@@ -975,13 +996,59 @@ export default function CompanyDetailPage() {
                     ) : (
                       <div style={{ display: "grid", gap: 8 }}>
                         {admins.map((a) => (
-                          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: 10, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+                          <div
+                            key={a.id}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 10,
+                              padding: 10,
+                              border: "1px solid #eee",
+                              borderRadius: 12,
+                              background: "#fafafa",
+                              alignItems: "center",
+                            }}
+                          >
                             <div style={{ fontSize: 13 }}>
-                              <div><b>User:</b> <code>{a.user_id}</code></div>
-                              <div style={{ opacity: 0.8 }}><b>Role:</b> {a.role}</div>
+                              <div>
+                                <b>User:</b> <code>{a.user_id}</code> {a.email ? <span style={{ opacity: 0.75 }}>({a.email})</span> : null}
+                              </div>
+                              <div style={{ opacity: 0.8 }}>
+                                <b>Role:</b> {a.role}
+                              </div>
+                              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                                Added: {a.created_at ? new Date(a.created_at).toLocaleString() : "—"}
+                              </div>
                             </div>
-                            <div style={{ fontSize: 12, opacity: 0.7, whiteSpace: "nowrap" }}>
-                              {a.created_at ? new Date(a.created_at).toLocaleString() : "—"}
+
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                              <select
+                                value={a.role}
+                                onChange={(e) => setAdminRole(a.user_id, e.target.value)}
+                                disabled={adminMutating === a.user_id}
+                                style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+                                title="Change role"
+                              >
+                                <option value="owner">owner</option>
+                                <option value="admin">admin</option>
+                                <option value="member">member</option>
+                                <option value="viewer">viewer</option>
+                              </select>
+
+                              <button
+                                onClick={() => removeAdmin(a.user_id)}
+                                disabled={adminMutating === a.user_id}
+                                style={{
+                                  border: "1px solid #ddd",
+                                  background: "#fff",
+                                  padding: "10px 12px",
+                                  borderRadius: 12,
+                                  cursor: adminMutating === a.user_id ? "not-allowed" : "pointer",
+                                }}
+                                title="Remove admin"
+                              >
+                                Remove
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -1003,8 +1070,13 @@ export default function CompanyDetailPage() {
                             <div key={i.id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                                 <div style={{ fontSize: 13 }}>
-                                  <div><b>Status:</b> {i.status}{expired && i.status === "pending" ? " (expired)" : ""}</div>
-                                  <div style={{ opacity: 0.85 }}><b>Role:</b> {i.role} {i.email ? ` · ${i.email}` : ""}</div>
+                                  <div>
+                                    <b>Status:</b> {i.status}
+                                    {expired && i.status === "pending" ? " (expired)" : ""}
+                                  </div>
+                                  <div style={{ opacity: 0.85 }}>
+                                    <b>Role:</b> {i.role} {i.email ? ` · ${i.email}` : ""}
+                                  </div>
                                   <div style={{ opacity: 0.75, fontSize: 12 }}>
                                     Expires: {i.expires_at ? new Date(i.expires_at).toLocaleString() : "—"}
                                   </div>
@@ -1055,9 +1127,7 @@ export default function CompanyDetailPage() {
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Put this script on the client website. It loads the floating iframe widget.
                   </div>
-                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
-                    {embedSnippet}
-                  </pre>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>{embedSnippet}</pre>
                 </Card>
               )}
 
@@ -1073,7 +1143,9 @@ export default function CompanyDetailPage() {
                   <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
                     Start a subscription (Checkout) or manage the current subscription (Customer Portal).
                   </div>
+
                   <BillingActions companyId={id as string} />
+
                   <div style={{ marginTop: 14, borderTop: "1px solid #eee", paddingTop: 14 }}>
                     <div style={{ fontWeight: 700, marginBottom: 8 }}>Current Billing Status</div>
 
@@ -1085,12 +1157,26 @@ export default function CompanyDetailPage() {
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                        <div><b>Status:</b> {billingInfo.billing.status || "—"}</div>
-                        <div><b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}{billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}</div>
-                        <div><b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}</div>
-                        <div><b>Current period end:</b> {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}</div>
-                        <div><b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}</div>
-                        <div><b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}</div>
+                        <div>
+                          <b>Status:</b> {billingInfo.billing.status || "—"}
+                        </div>
+                        <div>
+                          <b>Plan:</b> {billingInfo.billing.plan_key || billingInfo.plan?.plan_key || "—"}
+                          {billingInfo.plan?.name ? ` (${billingInfo.plan.name})` : ""}
+                        </div>
+                        <div>
+                          <b>Price ID:</b> {billingInfo.billing.stripe_price_id || billingInfo.plan?.stripe_price_id || "—"}
+                        </div>
+                        <div>
+                          <b>Current period end:</b>{" "}
+                          {billingInfo.billing.current_period_end ? new Date(billingInfo.billing.current_period_end).toLocaleString() : "—"}
+                        </div>
+                        <div>
+                          <b>Stripe Customer:</b> {billingInfo.billing.stripe_customer_id ? "set" : "—"}
+                        </div>
+                        <div>
+                          <b>Stripe Subscription:</b> {billingInfo.billing.stripe_subscription_id ? "set" : "—"}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1192,17 +1278,8 @@ export default function CompanyDetailPage() {
               {tab === "leads" && (
                 <Card title="Leads Dashboard">
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                    <input
-                      value={leadQuery}
-                      onChange={(e) => setLeadQuery(e.target.value)}
-                      placeholder="Search…"
-                      style={{ flex: 1, minWidth: 240, padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
-                    />
-                    <select
-                      value={leadBand}
-                      onChange={(e) => setLeadBand(e.target.value as any)}
-                      style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
-                    >
+                    <input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search…" style={{ flex: 1, minWidth: 240, padding: 12, borderRadius: 12, border: "1px solid #ddd" }} />
+                    <select value={leadBand} onChange={(e) => setLeadBand(e.target.value as any)} style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}>
                       <option value="all">all</option>
                       <option value="cold">cold</option>
                       <option value="warm">warm</option>
@@ -1224,11 +1301,11 @@ export default function CompanyDetailPage() {
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                             <div style={{ fontSize: 13 }}>
                               <div style={{ fontWeight: 700 }}>{l.name || l.email || l.phone || "Lead"}</div>
-                              <div style={{ opacity: 0.8 }}>{l.score_band} · {l.score_total}</div>
+                              <div style={{ opacity: 0.8 }}>
+                                {l.score_band} · {l.score_total}
+                              </div>
                             </div>
-                            <div style={{ fontSize: 12, opacity: 0.7, whiteSpace: "nowrap" }}>
-                              {l.created_at ? new Date(l.created_at).toLocaleString() : "—"}
-                            </div>
+                            <div style={{ fontSize: 12, opacity: 0.7, whiteSpace: "nowrap" }}>{l.created_at ? new Date(l.created_at).toLocaleString() : "—"}</div>
                           </div>
                         </div>
                       ))}
