@@ -1,44 +1,18 @@
 (function () {
   var script = document.currentScript;
-  if (!script) {
-    var scripts = document.getElementsByTagName("script");
-    script = scripts && scripts.length ? scripts[scripts.length - 1] : null;
-  }
   if (!script) return;
 
-  var client =
-    script.getAttribute("data-client") ||
-    script.getAttribute("data-public-key") ||
-    script.getAttribute("data-publicKey");
+  var publicKey = script.getAttribute("data-public-key") || script.getAttribute("data-client") || "";
+  publicKey = String(publicKey || "").trim();
 
-  if (!client) {
-    console.error("[TamTam Widget] Missing data-client (or data-public-key).");
+  if (!publicKey) {
+    console.error("[TamTam Widget] Missing data-public-key");
     return;
   }
 
-  var host =
-    script.getAttribute("data-host") ||
-    (function () {
-      try {
-        return new URL(script.src).origin;
-      } catch (e) {
-        return window.location.origin;
-      }
-    })();
-
-  var position = (script.getAttribute("data-position") || "right").toLowerCase();
-  if (position !== "left" && position !== "right") position = "right";
-
-  var zIndex = String(script.getAttribute("data-z") || "2147483000");
-
-  // ✅ customer site host-only
-  var siteHost = (function () {
-    try {
-      return window.location.host.toLowerCase();
-    } catch (e) {
-      return "";
-    }
-  })();
+  var host = script.getAttribute("data-host") || "https://tamtamcorp-saas-pcwl.vercel.app";
+  var position = script.getAttribute("data-position") || "right";
+  var zIndex = script.getAttribute("data-z") || "2147483000";
 
   var btn = document.createElement("button");
   btn.innerText = "Chat";
@@ -70,13 +44,20 @@
   frameWrap.style.display = "none";
 
   var iframe = document.createElement("iframe");
-  // ✅ pass site host to widget page
+  var site = window.location.origin;
+  var v = Date.now();
+
+  // ✅ pass both public_key and legacy client for compatibility + pass site for allowlist
   iframe.src =
     host.replace(/\/$/, "") +
-    "/widget?client=" +
-    encodeURIComponent(client) +
+    "/widget?public_key=" +
+    encodeURIComponent(publicKey) +
+    "&client=" +
+    encodeURIComponent(publicKey) +
     "&site=" +
-    encodeURIComponent(siteHost);
+    encodeURIComponent(site) +
+    "&v=" +
+    encodeURIComponent(String(v));
 
   iframe.style.width = "100%";
   iframe.style.height = "100%";
@@ -91,11 +72,6 @@
 
   btn.addEventListener("click", toggle);
 
-  function mount() {
-    if (!document.body) return setTimeout(mount, 25);
-    document.body.appendChild(btn);
-    document.body.appendChild(frameWrap);
-    console.log("[TamTam Widget] mounted", { host: host, client: client, site: siteHost });
-  }
-  mount();
+  document.body.appendChild(btn);
+  document.body.appendChild(frameWrap);
 })();

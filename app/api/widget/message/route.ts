@@ -32,7 +32,9 @@ function makeBuckets(now: Date) {
   const min_bucket = `minute:${yyyy}-${mm}-${dd}T${hh}:${mi}`;
   const day_bucket = `day:${yyyy}-${mm}-${dd}`;
 
-  const reset_minute = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0));
+  const reset_minute = new Date(
+    Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0)
+  );
   reset_minute.setUTCMinutes(reset_minute.getUTCMinutes() + 1);
 
   const reset_day = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
@@ -68,11 +70,27 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   const dayCount = Number(byBucket.get(day_bucket)?.count ?? 0);
 
   if (per_minute > 0 && minuteCount >= per_minute) {
-    return { ok: false as const, status: 429, error: "rate_limited", scope: "minute", limit: per_minute, count: minuteCount, reset_hint: reset_minute };
+    return {
+      ok: false as const,
+      status: 429,
+      error: "rate_limited",
+      scope: "minute",
+      limit: per_minute,
+      count: minuteCount,
+      reset_hint: reset_minute,
+    };
   }
 
   if (per_day > 0 && dayCount >= per_day) {
-    return { ok: false as const, status: 429, error: "rate_limited", scope: "day", limit: per_day, count: dayCount, reset_hint: reset_day };
+    return {
+      ok: false as const,
+      status: 429,
+      error: "rate_limited",
+      scope: "day",
+      limit: per_day,
+      count: dayCount,
+      reset_hint: reset_day,
+    };
   }
 
   const nowIso = new Date().toISOString();
@@ -100,10 +118,8 @@ type Lang = "de" | "en";
 
 function detectLang(text: string): Lang {
   const t = String(text || "").toLowerCase();
-
-  // quick german signals
   if (/[äöüß]/i.test(t)) return "de";
-  const germanHits = [" ich ", " du ", " nicht ", " und ", " oder ", " bitte ", " kann ", " helfen ", " was ", " wie ", " warum ", " wo ", " wir "];
+  const germanHits = [" ich ", " du ", " nicht ", " und ", " oder ", " bitte ", " kann ", " helfen ", " was ", " wie ", " warum ", " wo ", " wir ", " angebot ", " preis ", " kosten "];
   let score = 0;
   for (const w of germanHits) if (t.includes(w.trim())) score += 1;
   return score >= 2 ? "de" : "en";
@@ -113,6 +129,35 @@ function defaultUnknown(lang: Lang) {
   return lang === "de"
     ? "Ich habe dazu in den bereitgestellten Informationen keine ausreichenden Details."
     : "I don’t have enough information in the provided knowledge to answer that.";
+}
+
+function defaultLeadPrompt(lang: Lang) {
+  return lang === "de"
+    ? "Damit wir dir schnell und passend helfen können: Wie heißt du, und wie können wir dich erreichen (E-Mail oder Telefonnummer)? Optional: Budget & Zeitrahmen."
+    : "So we can help you quickly: what’s your name, and how can we reach you (email or phone)? Optional: budget & timeline.";
+}
+
+// -------------------- LEAD INTENT HEURISTICS --------------------
+
+function includesAny(hay: string, needles: string[]) {
+  for (const n of needles) if (hay.includes(n)) return true;
+  return false;
+}
+
+function detectCommercialIntent(text: string): boolean {
+  const t = String(text || "").toLowerCase();
+  return includesAny(t, [
+    "price", "pricing", "cost", "quote", "offer", "proposal", "demo", "trial", "subscribe", "plan", "package",
+    "book", "appointment", "call", "contact", "sales",
+    "preis", "preise", "kosten", "angebot", "offerte", "beratung", "termin", "anruf", "kontakt", "demo", "paket", "abo", "plan",
+  ]);
+}
+
+function detectContactSharing(text: string): boolean {
+  const t = String(text || "");
+  const email = /[^\s@]+@[^\s@]+\.[^\s@]+/.test(t);
+  const phone = /(\+?\d[\d\s().-]{7,}\d)/.test(t);
+  return email || phone;
 }
 
 // -------------------- KNOWLEDGE (RAG) --------------------
@@ -151,7 +196,7 @@ function extractKeywords(q: string) {
   const stop = new Set([
     "the","and","or","but","to","a","an","of","in","on","for","with","from","at","by",
     "ich","du","er","sie","wir","ihr","und","oder","aber","zu","der","die","das","ein","eine",
-    "can","could","would","should","help","please","want","learn","new","language"
+    "can","could","would","should","help","please","want",
   ]);
 
   return Array.from(
@@ -217,16 +262,19 @@ async function getCompanyChatConfig(company_id: string) {
   const limits = (data as any)?.limits_json ?? {};
   const chat = branding?.chat ?? limits?.chat ?? {};
 
-  const mode = String(chat?.mode || "hybrid");
+  const mode = String(chat?.mode || "hybrid"); // "knowledge_only" | "hybrid"
   const model = String(chat?.model || "gpt-4o-mini");
   const temperature = Number.isFinite(Number(chat?.temperature)) ? Number(chat.temperature) : 0.2;
   const max_chunks = Number.isFinite(Number(chat?.max_chunks)) ? Math.max(0, Math.min(20, Number(chat.max_chunks))) : 6;
 
   const system_prompt = String(chat?.system_prompt || "").trim();
-  const unknown_answer = String(chat?.unknown_answer || "").trim(); // may be empty -> we apply default per lang
+  const unknown_answer = String(chat?.unknown_answer || "").trim();
   const include_sources = Boolean(chat?.include_sources ?? false);
 
-  return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources };
+  // optional: greeting
+  const greeting = String(chat?.greeting || "").trim();
+
+  return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources, greeting };
 }
 
 // ✅ Allow GET for quick health check
@@ -310,6 +358,7 @@ export async function POST(req: Request) {
     system_prompt: "",
     unknown_answer: "",
     include_sources: false,
+    greeting: "",
   };
 
   const unknown = cfg.unknown_answer || defaultUnknown(userLang);
@@ -357,10 +406,7 @@ export async function POST(req: Request) {
     const res = NextResponse.json({
       reply,
       need_lead_capture: true,
-      lead_prompt:
-        userLang === "de"
-          ? "Damit wir dir gezielt helfen können: Hinterlasse kurz deine Kontaktdaten und worum es geht."
-          : "To help you properly, please leave your contact details and what you’re looking for.",
+      lead_prompt: defaultLeadPrompt(userLang),
       sources: cfg.include_sources ? [] : undefined,
     });
 
@@ -369,13 +415,41 @@ export async function POST(req: Request) {
     return res;
   }
 
-  const systemParts: string[] = [];
+  // -------------------- SALES CONCIERGE SYSTEM PROMPT --------------------
 
+  const salesStyle =
+    userLang === "de"
+      ? [
+          "Du bist ein freundlicher, aber direkter Sales-/Support-Assistent der Firma.",
+          "Ziel: Nutzer schnell zur passenden Lösung führen und bei echtem Bedarf einen Lead erfassen.",
+          "Stelle maximal 2 kurze Rückfragen, wenn es hilft (z.B. Ziel, Budget, Zeitrahmen).",
+          "Biete proaktiv Hilfe an und schlage die nächsten Schritte vor.",
+          "Wenn der Nutzer nach Preisen/Angebot/Demo/Termin fragt: frage gezielt nach Name + E-Mail oder Telefonnummer + Zeitrahmen.",
+          "Antworte immer in der Sprache der letzten User-Nachricht.",
+        ].join("\n")
+      : [
+          "You are a friendly but direct sales/support assistant for the company.",
+          "Goal: quickly guide users to the right solution and capture a lead when appropriate.",
+          "Ask at most 2 short follow-up questions when useful (e.g., goal, budget, timeline).",
+          "Proactively offer help and propose next steps.",
+          "If user asks for pricing/quote/demo/call: ask for name + email or phone + timeline.",
+          "Always answer in the same language as the user’s latest message.",
+        ].join("\n");
+
+  const systemParts: string[] = [];
   if (cfg.system_prompt) systemParts.push(cfg.system_prompt);
 
+  // Optional greeting hint (for first useful reply)
+  if (cfg.greeting) {
+    systemParts.push(
+      userLang === "de"
+        ? `Begrüßungsvorschlag (nur wenn passend, nicht jedes Mal): "${cfg.greeting}"`
+        : `Greeting suggestion (only if appropriate, not every time): "${cfg.greeting}"`
+    );
+  }
+
   systemParts.push(
-    "You are the company's assistant.",
-    "Always answer in the same language as the user's latest message.",
+    salesStyle,
     "Use the provided KNOWLEDGE CONTEXT as the primary source of truth.",
     `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${unknown}".`,
     "Be concise and accurate.",
@@ -396,7 +470,14 @@ export async function POST(req: Request) {
   let reply = String(completion.choices?.[0]?.message?.content || "").trim();
   if (!reply) reply = unknown;
 
-  const needLead = reply === unknown; // exact rule we enforce
+  // -------------------- LEAD TRIGGERS --------------------
+  // 1) exact unknown => lead capture
+  // 2) commercial intent => lead capture
+  // 3) user shares contact info => lead capture (we show the form to store it)
+  const commercial = detectCommercialIntent(message);
+  const contactShared = detectContactSharing(message);
+
+  const needLead = reply === unknown || commercial || contactShared;
 
   // Store assistant reply
   const { error: insAsstErr } = await supabaseServer.from("messages").insert({
@@ -412,16 +493,12 @@ export async function POST(req: Request) {
   const res = NextResponse.json({
     reply,
     need_lead_capture: needLead,
-    lead_prompt:
-      needLead
-        ? (userLang === "de"
-            ? "Damit wir dir gezielt helfen können: Hinterlasse kurz deine Kontaktdaten und worum es geht."
-            : "To help you properly, please leave your contact details and what you’re looking for.")
-        : undefined,
+    lead_prompt: needLead ? defaultLeadPrompt(userLang) : undefined,
     sources: cfg.include_sources ? sources : undefined,
   });
 
   res.headers.set("x-tamtam-rag", rag_mode);
   res.headers.set("x-tamtam-lang", userLang);
+  res.headers.set("x-tamtam-commercial", commercial ? "1" : "0");
   return res;
 }

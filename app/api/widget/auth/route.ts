@@ -11,23 +11,18 @@ function normalizeHost(input: string) {
   return s
     .replace(/^https?:\/\//i, "")
     .replace(/\/.*$/, "") // keep only host[:port]
+    .replace(/:\d+$/, "") // drop port
     .toLowerCase();
-}
-
-function normalizeHostOnly(input: string) {
-  // stricter: also remove port (allowlist is host-only)
-  const h = normalizeHost(input);
-  return h.replace(/:\d+$/, "");
 }
 
 function getHostFromHeaders(req: Request) {
   const origin = req.headers.get("origin") || "";
   const referer = req.headers.get("referer") || "";
 
-  const h1 = normalizeHostOnly(origin);
+  const h1 = normalizeHost(origin);
   if (h1) return h1;
 
-  const h2 = normalizeHostOnly(referer);
+  const h2 = normalizeHost(referer);
   if (h2) return h2;
 
   return "";
@@ -36,9 +31,8 @@ function getHostFromHeaders(req: Request) {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
-  const public_key = String(body?.public_key || "").trim();
-  const site = normalizeHostOnly(body?.site || ""); // ✅ from iframe query via widget page
-
+  // ✅ accept either public_key or legacy client param
+  const public_key = String(body?.public_key || body?.client || "").trim();
   if (!public_key.startsWith("pk_")) {
     return NextResponse.json({ error: "invalid_public_key" }, { status: 400 });
   }
@@ -62,20 +56,19 @@ export async function POST(req: Request) {
     isOwner = false;
   }
 
-  // Strict allowlist for real customers
   if (!isOwner) {
-    const host = site || getHostFromHeaders(req);
+    // ✅ IMPORTANT: prefer explicit "site" sent from loader/iframe (parent site)
+    // This is required because iframe same-origin requests won't carry parent origin reliably.
+    const siteHost = normalizeHost(body?.site || "");
+    const headerHost = getHostFromHeaders(req);
 
+    const host = siteHost || headerHost;
     if (!host) {
-      return NextResponse.json(
-        { error: "missing_origin", hint: "Provide site host from widget-loader (iframe-safe)." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "missing_origin" }, { status: 400 });
     }
 
     const allowed = (keyRow.allowed_domains || [])
       .map((d: any) => String(d || "").trim().toLowerCase())
-      .map((d: string) => d.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/:\d+$/, ""))
       .filter(Boolean);
 
     if (allowed.length === 0) {
@@ -83,13 +76,15 @@ export async function POST(req: Request) {
     }
 
     if (!allowed.includes(host)) {
-      return NextResponse.json({ error: "domain_not_allowed", host, allowed }, { status: 403 });
+      return NextResponse.json({ error: "domain_not_allowed", host }, { status: 403 });
     }
   }
 
-  const token = jwt.sign({ company_id: keyRow.company_id, public_key }, process.env.WIDGET_JWT_SECRET!, {
-    expiresIn: "20m",
-  });
+  const token = jwt.sign(
+    { company_id: keyRow.company_id, public_key },
+    process.env.WIDGET_JWT_SECRET!,
+    { expiresIn: "20m" }
+  );
 
   return NextResponse.json({ token, company_id: keyRow.company_id });
 }
