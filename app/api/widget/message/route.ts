@@ -32,9 +32,7 @@ function makeBuckets(now: Date) {
   const min_bucket = `minute:${yyyy}-${mm}-${dd}T${hh}:${mi}`;
   const day_bucket = `day:${yyyy}-${mm}-${dd}`;
 
-  const reset_minute = new Date(
-    Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0)
-  );
+  const reset_minute = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), 0, 0));
   reset_minute.setUTCMinutes(reset_minute.getUTCMinutes() + 1);
 
   const reset_day = new Date(Date.UTC(yyyy, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
@@ -70,27 +68,11 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   const dayCount = Number(byBucket.get(day_bucket)?.count ?? 0);
 
   if (per_minute > 0 && minuteCount >= per_minute) {
-    return {
-      ok: false as const,
-      status: 429,
-      error: "rate_limited",
-      scope: "minute",
-      limit: per_minute,
-      count: minuteCount,
-      reset_hint: reset_minute,
-    };
+    return { ok: false as const, status: 429, error: "rate_limited", scope: "minute", limit: per_minute, count: minuteCount, reset_hint: reset_minute };
   }
 
   if (per_day > 0 && dayCount >= per_day) {
-    return {
-      ok: false as const,
-      status: 429,
-      error: "rate_limited",
-      scope: "day",
-      limit: per_day,
-      count: dayCount,
-      reset_hint: reset_day,
-    };
+    return { ok: false as const, status: 429, error: "rate_limited", scope: "day", limit: per_day, count: dayCount, reset_hint: reset_day };
   }
 
   const nowIso = new Date().toISOString();
@@ -112,6 +94,27 @@ async function enforceRateLimitsViaUsageCounters(company_id: string, limits: { p
   return { ok: true as const };
 }
 
+// -------------------- LANGUAGE --------------------
+
+type Lang = "de" | "en";
+
+function detectLang(text: string): Lang {
+  const t = String(text || "").toLowerCase();
+
+  // quick german signals
+  if (/[äöüß]/i.test(t)) return "de";
+  const germanHits = [" ich ", " du ", " nicht ", " und ", " oder ", " bitte ", " kann ", " helfen ", " was ", " wie ", " warum ", " wo ", " wir "];
+  let score = 0;
+  for (const w of germanHits) if (t.includes(w.trim())) score += 1;
+  return score >= 2 ? "de" : "en";
+}
+
+function defaultUnknown(lang: Lang) {
+  return lang === "de"
+    ? "Ich habe dazu in den bereitgestellten Informationen keine ausreichenden Details."
+    : "I don’t have enough information in the provided knowledge to answer that.";
+}
+
 // -------------------- KNOWLEDGE (RAG) --------------------
 
 async function embedQuery(text: string): Promise<number[]> {
@@ -122,7 +125,7 @@ async function embedQuery(text: string): Promise<number[]> {
   return r.data[0].embedding as unknown as number[];
 }
 
-async function matchKnowledgeChunksRPC(company_id: string, embedding: number[], match_count: number) {
+async function matchKnowledgeChunks(company_id: string, embedding: number[], match_count: number) {
   const tries: Array<{ args: any }> = [
     { args: { p_company_id: company_id, p_query_embedding: embedding, p_match_count: match_count } },
     { args: { company_id, query_embedding: embedding, match_count } },
@@ -136,21 +139,21 @@ async function matchKnowledgeChunksRPC(company_id: string, embedding: number[], 
     const { data, error } = await supabaseServer.rpc("match_knowledge_chunks", t.args);
     if (!error) {
       const rows = Array.isArray(data) ? data : [];
-      return { ok: true as const, rows, source: "rpc" as const };
+      return { ok: true as const, rows };
     }
     lastErr = error;
   }
 
-  return { ok: false as const, rows: [] as any[], error: lastErr?.message || "match_knowledge_chunks_failed", source: "rpc" as const };
+  return { ok: false as const, rows: [] as any[], error: lastErr?.message || "match_knowledge_chunks_failed" };
 }
 
-// ✅ Fallback retrieval when RPC returns 0 (threshold too strict, or function is picky)
 function extractKeywords(q: string) {
   const stop = new Set([
     "the","and","or","but","to","a","an","of","in","on","for","with","from","at","by",
     "ich","du","er","sie","wir","ihr","und","oder","aber","zu","der","die","das","ein","eine",
     "can","could","would","should","help","please","want","learn","new","language"
   ]);
+
   return Array.from(
     new Set(
       String(q || "")
@@ -166,9 +169,8 @@ function extractKeywords(q: string) {
 
 async function fallbackKeywordSearch(company_id: string, query: string, limit: number) {
   const kws = extractKeywords(query);
-  if (kws.length === 0) return { ok: true as const, rows: [] as any[], source: "fallback" as const };
+  if (kws.length === 0) return { ok: true as const, rows: [] as any[] };
 
-  // Supabase OR syntax: "content.ilike.%a%,content.ilike.%b%"
   const or = kws.map((k) => `content.ilike.%${k}%`).join(",");
 
   const { data, error } = await supabaseServer
@@ -179,8 +181,8 @@ async function fallbackKeywordSearch(company_id: string, query: string, limit: n
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  if (error) return { ok: false as const, rows: [] as any[], error: error.message, source: "fallback" as const };
-  return { ok: true as const, rows: Array.isArray(data) ? data : [], source: "fallback" as const };
+  if (error) return { ok: false as const, rows: [] as any[], error: error.message };
+  return { ok: true as const, rows: Array.isArray(data) ? data : [] };
 }
 
 function buildContext(rows: any[]) {
@@ -213,16 +215,15 @@ async function getCompanyChatConfig(company_id: string) {
 
   const branding = (data as any)?.branding_json ?? {};
   const limits = (data as any)?.limits_json ?? {};
-
   const chat = branding?.chat ?? limits?.chat ?? {};
 
-  const mode = String(chat?.mode || "hybrid"); // "knowledge_only" | "hybrid"
+  const mode = String(chat?.mode || "hybrid");
   const model = String(chat?.model || "gpt-4o-mini");
   const temperature = Number.isFinite(Number(chat?.temperature)) ? Number(chat.temperature) : 0.2;
   const max_chunks = Number.isFinite(Number(chat?.max_chunks)) ? Math.max(0, Math.min(20, Number(chat.max_chunks))) : 6;
 
   const system_prompt = String(chat?.system_prompt || "").trim();
-  const unknown_answer = String(chat?.unknown_answer || "I don’t have enough information to answer that.").trim();
+  const unknown_answer = String(chat?.unknown_answer || "").trim(); // may be empty -> we apply default per lang
   const include_sources = Boolean(chat?.include_sources ?? false);
 
   return { mode, model, temperature, max_chunks, system_prompt, unknown_answer, include_sources };
@@ -267,6 +268,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
 
+  const userLang = detectLang(message);
+
   // Billing gate
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) {
@@ -289,7 +292,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "db_insert_user_message_failed", details: insUserErr.message }, { status: 500 });
   }
 
-  // Load recent history (keep small for speed)
+  // Load recent history
   const { data: history, error: hErr } = await supabaseServer
     .from("messages")
     .select("role,content,created_at")
@@ -299,16 +302,17 @@ export async function POST(req: Request) {
 
   if (hErr) return NextResponse.json({ error: "db_history_failed", details: hErr.message }, { status: 500 });
 
-  // Chat config + Knowledge
   const cfg = (await getCompanyChatConfig(company_id)) ?? {
     mode: "hybrid",
     model: "gpt-4o-mini",
     temperature: 0.2,
     max_chunks: 6,
     system_prompt: "",
-    unknown_answer: "I don’t have enough information to answer that.",
+    unknown_answer: "",
     include_sources: false,
   };
+
+  const unknown = cfg.unknown_answer || defaultUnknown(userLang);
 
   let context = "";
   let sources: any[] = [];
@@ -316,14 +320,13 @@ export async function POST(req: Request) {
 
   try {
     const emb = await embedQuery(message);
+    const match = await matchKnowledgeChunks(company_id, emb, cfg.max_chunks);
 
-    const match = await matchKnowledgeChunksRPC(company_id, emb, cfg.max_chunks);
     if (match.ok && match.rows.length > 0) {
       sources = match.rows;
       context = buildContext(match.rows);
       rag_mode = "rpc";
     } else {
-      // ✅ fallback keyword search if RPC returns 0
       const fb = await fallbackKeywordSearch(company_id, message, cfg.max_chunks);
       if (fb.ok && fb.rows.length > 0) {
         sources = fb.rows;
@@ -334,12 +337,12 @@ export async function POST(req: Request) {
       }
     }
   } catch {
-    // fail soft: context stays empty
+    // fail soft
   }
 
-  // ✅ enforce knowledge-only when configured
+  // If knowledge_only and no context -> unknown + lead capture signal
   if (cfg.mode === "knowledge_only" && !context) {
-    const reply = cfg.unknown_answer;
+    const reply = unknown;
 
     const { error: insAsstErr } = await supabaseServer.from("messages").insert({
       conversation_id,
@@ -351,8 +354,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "db_insert_assistant_message_failed", details: insAsstErr.message }, { status: 500 });
     }
 
-    const res = NextResponse.json({ reply, sources: cfg.include_sources ? [] : undefined });
+    const res = NextResponse.json({
+      reply,
+      need_lead_capture: true,
+      lead_prompt:
+        userLang === "de"
+          ? "Damit wir dir gezielt helfen können: Hinterlasse kurz deine Kontaktdaten und worum es geht."
+          : "To help you properly, please leave your contact details and what you’re looking for.",
+      sources: cfg.include_sources ? [] : undefined,
+    });
+
     res.headers.set("x-tamtam-rag", rag_mode);
+    res.headers.set("x-tamtam-lang", userLang);
     return res;
   }
 
@@ -362,8 +375,9 @@ export async function POST(req: Request) {
 
   systemParts.push(
     "You are the company's assistant.",
+    "Always answer in the same language as the user's latest message.",
     "Use the provided KNOWLEDGE CONTEXT as the primary source of truth.",
-    `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${cfg.unknown_answer}".`,
+    `If the answer is not contained in the KNOWLEDGE CONTEXT, reply exactly with: "${unknown}".`,
     "Be concise and accurate.",
     "",
     "KNOWLEDGE CONTEXT:",
@@ -380,7 +394,9 @@ export async function POST(req: Request) {
   });
 
   let reply = String(completion.choices?.[0]?.message?.content || "").trim();
-  if (!reply) reply = cfg.unknown_answer;
+  if (!reply) reply = unknown;
+
+  const needLead = reply === unknown; // exact rule we enforce
 
   // Store assistant reply
   const { error: insAsstErr } = await supabaseServer.from("messages").insert({
@@ -395,8 +411,17 @@ export async function POST(req: Request) {
 
   const res = NextResponse.json({
     reply,
+    need_lead_capture: needLead,
+    lead_prompt:
+      needLead
+        ? (userLang === "de"
+            ? "Damit wir dir gezielt helfen können: Hinterlasse kurz deine Kontaktdaten und worum es geht."
+            : "To help you properly, please leave your contact details and what you’re looking for.")
+        : undefined,
     sources: cfg.include_sources ? sources : undefined,
   });
-  res.headers.set("x-tamtam-rag", rag_mode); // rpc | fallback | empty
+
+  res.headers.set("x-tamtam-rag", rag_mode);
+  res.headers.set("x-tamtam-lang", userLang);
   return res;
 }
