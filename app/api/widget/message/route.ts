@@ -164,7 +164,7 @@ function getLangFromBranding(branding_json: any): Lang | null {
 }
 
 function unknownByLang(lang: Lang) {
-  return lang === "de" ? "Ich weiß es nicht basierend auf den bereitgestellten Informationen." : "I don’t know based on the provided information.";
+  return lang === "de" ? "Dazu habe ich in den bereitgestellten Informationen keine Antwort." : "I don’t have enough information to answer that.";
 }
 
 function languageSystemRule(lang: Lang) {
