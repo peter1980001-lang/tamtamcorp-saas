@@ -159,7 +159,6 @@ function extractTextAndLinks(baseUrl: string, html: string) {
     } catch {}
   });
 
-  // Branding text (lightweight)
   const metaDesc = String($('meta[name="description"]').attr("content") || "").trim();
   const ogTitle = String($('meta[property="og:title"]').attr("content") || "").trim();
   const ogDesc = String($('meta[property="og:description"]').attr("content") || "").trim();
@@ -192,51 +191,38 @@ function detectSectionType(title: string) {
   return "general";
 }
 
-/**
- * IMPORTANT:
- * Many modern sites don't use <p>/<li> for pricing cards; content is often in div/span/a/button.
- * So we extract from main/body text blocks and group by H2 sections.
- */
 function extractStructuredSections(pageUrl: string, html: string) {
   const $ = cheerio.load(html);
 
-  // remove heavy noise + chrome
   $("script,style,noscript,svg,canvas,iframe").remove();
   $("header,nav,footer").remove();
-  // common noise containers
   $('[role="navigation"],[aria-label="breadcrumb"],[aria-label="navigation"],.nav,.navbar,.footer,.header').remove();
 
   const docTitle = String($("title").first().text() || "").trim() || pageUrl;
-
   const root = $("main").first().length ? $("main").first() : $("body");
 
-  // helper: extract meaningful text from a region
-  function regionText(region: cheerio.Cheerio<cheerio.Element>) {
-    // prefer semantic elements but include div/span/a/button/td/th for modern layouts
+  function regionText(region: any) {
     const parts: string[] = [];
 
-    region.find("h1,h2,h3").each((_i, el) => {
+    region.find("h1,h2,h3").each((_i: any, el: any) => {
       const t = normalizeText($(el).text());
       if (t) parts.push(t);
     });
 
-    region.find("p,li,div,span,a,button,td,th").each((_i, el) => {
+    region.find("p,li,div,span,a,button,td,th").each((_i: any, el: any) => {
       const t = normalizeText($(el).text());
       if (!t) return;
-      // skip super short junk
       if (t.length < 20) return;
       parts.push(t);
     });
 
-    const joined = normalizeText(parts.join("\n"));
-    return joined;
+    return normalizeText(parts.join("\n"));
   }
 
   const sections: Array<{ title: string; content: string; order: number }> = [];
 
   const h2s = root.find("h2").toArray();
 
-  // If the page has no H2, treat everything as one section
   if (h2s.length === 0) {
     const all = regionText(root);
     const h1 = normalizeText(root.find("h1").first().text());
@@ -247,38 +233,14 @@ function extractStructuredSections(pageUrl: string, html: string) {
     return { docTitle, sections };
   }
 
-  // Intro section: content before first H2
-  const firstH2 = h2s[0];
-  const before = root.clone();
-  // remove everything from first H2 onwards (approx)
-  const firstH2Sel = $(firstH2);
-  // We can't "cut" DOM easily; just take text of root and subtract? too messy.
-  // Practical: build intro from elements before first h2 using traversal:
-  const introParts: string[] = [];
-  root.contents().each((_i, el) => {
-    const $el = $(el as any);
-    if ($el.is("h2")) return false; // stop iteration
-    const txt = normalizeText($el.text());
-    if (txt && txt.length >= 30) introParts.push(txt);
-    return;
-  });
-  const introText = normalizeText(introParts.join("\n"));
-  if (introText && introText.length >= 80) {
-    sections.push({ title: "Introduction", content: introText, order: 0 });
-  }
-
-  // Each H2 becomes a section; gather text until next H2
   let order = 0;
   for (let i = 0; i < h2s.length; i++) {
     order += 1;
     const h2 = $(h2s[i]);
-    const nextH2 = i + 1 < h2s.length ? $(h2s[i + 1]) : null;
-
     const secTitle = normalizeText(h2.text()) || `Section ${order}`;
 
-    // collect siblings between this H2 and next H2
-    const regionEls: cheerio.Element[] = [];
-    let cur = h2[0].nextSibling as any;
+    const regionEls: any[] = [];
+    let cur: any = (h2[0] as any).nextSibling;
 
     while (cur) {
       const $cur = $(cur);
@@ -287,24 +249,20 @@ function extractStructuredSections(pageUrl: string, html: string) {
       cur = cur.nextSibling;
     }
 
-    // If the section content is not direct siblings (wrapped), fallback to nextUntil on parents
     let content = "";
     if (regionEls.length) {
       const wrapper = $("<div></div>");
       for (const el of regionEls) wrapper.append($(el).clone());
       content = regionText(wrapper);
     } else {
-      // fallback: take text from parent container until next h2 in DOM order
       const parent = h2.parent();
-      const block = parent.find("*").toArray().slice(0, 300);
+      const block = parent.find("*").toArray().slice(0, 400);
       const wrapper = $("<div></div>");
       for (const el of block) wrapper.append($(el).clone());
       content = regionText(wrapper);
     }
 
-    // Ensure the H2 title is included (important for retrieval)
     content = normalizeText(`${secTitle}\n${content}`);
-
     if (content && content.length >= 80) {
       sections.push({ title: secTitle, content, order });
     }
@@ -394,7 +352,6 @@ export async function upsertBranding(company_id: string, brandingPatch: any) {
   return { ok: true as const, updated: true as const, branding: next };
 }
 
-// Legacy helper for manual + pdf
 export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
   const chunks = chunkTextSmart(params.content);
   if (chunks.length === 0) return { ok: true as const, inserted: 0 };
