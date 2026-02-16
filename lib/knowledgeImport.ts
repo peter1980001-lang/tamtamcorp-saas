@@ -17,7 +17,9 @@ export type ImportResult = {
 function normalizeText(text: string) {
   return String(text || "")
     .replace(/\r\n/g, "\n")
-    .replace(/\s+/g, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -31,7 +33,7 @@ function chunkTextSmart(text: string, size = 900, overlap = 120) {
   const chunks: string[] = [];
   let i = 0;
 
-  const minBreak = Math.max(150, Math.floor(size * 0.55));
+  const minBreak = Math.max(180, Math.floor(size * 0.55));
 
   while (i < clean.length) {
     const end = Math.min(clean.length, i + size);
@@ -143,12 +145,10 @@ async function fetchHtml(url: string) {
 function extractTextAndLinks(baseUrl: string, html: string) {
   const $ = cheerio.load(html);
 
-  // remove noise
   $("script,style,noscript,svg,canvas").remove();
 
   const title = String($("title").first().text() || "").trim() || baseUrl;
 
-  // Links
   const links: string[] = [];
   $("a[href]").each((_i, el) => {
     const href = String($(el).attr("href") || "").trim();
@@ -159,40 +159,23 @@ function extractTextAndLinks(baseUrl: string, html: string) {
     } catch {}
   });
 
-  // Lightweight readable text (kept for branding extraction)
+  // Branding text (lightweight)
   const metaDesc = String($('meta[name="description"]').attr("content") || "").trim();
   const ogTitle = String($('meta[property="og:title"]').attr("content") || "").trim();
   const ogDesc = String($('meta[property="og:description"]').attr("content") || "").trim();
 
-  const parts: string[] = [];
-  const h1 = $("h1").first().text().trim();
-  if (h1) parts.push(`H1: ${h1}`);
-
-  const headings = $("h2,h3")
-    .slice(0, 40)
-    .map((_i, el) => $(el).text().trim())
-    .get()
-    .filter(Boolean);
-  if (headings.length) parts.push("HEADINGS:\n" + headings.join("\n"));
-
-  const paras = $("p,li")
-    .slice(0, 400)
-    .map((_i, el) => $(el).text().trim())
-    .get()
-    .map((t) => t.replace(/\s+/g, " ").trim())
-    .filter((t) => t.length >= 40);
-  if (paras.length) parts.push("TEXT:\n" + paras.join("\n"));
+  const main = $("main").first();
+  const bodyText = normalizeText((main.length ? main : $("body")).text()).slice(0, 60000);
 
   const combined =
     [
       metaDesc ? `META: ${metaDesc}` : "",
       ogTitle ? `OG_TITLE: ${ogTitle}` : "",
       ogDesc ? `OG_DESC: ${ogDesc}` : "",
-      parts.join("\n\n"),
+      bodyText ? `BODY: ${bodyText}` : "",
     ]
       .filter(Boolean)
       .join("\n\n")
-      .replace(/\s+/g, " ")
       .trim();
 
   return { title, text: combined, links };
@@ -209,39 +192,123 @@ function detectSectionType(title: string) {
   return "general";
 }
 
+/**
+ * IMPORTANT:
+ * Many modern sites don't use <p>/<li> for pricing cards; content is often in div/span/a/button.
+ * So we extract from main/body text blocks and group by H2 sections.
+ */
 function extractStructuredSections(pageUrl: string, html: string) {
   const $ = cheerio.load(html);
-  $("script,style,noscript,svg,canvas").remove();
+
+  // remove heavy noise + chrome
+  $("script,style,noscript,svg,canvas,iframe").remove();
+  $("header,nav,footer").remove();
+  // common noise containers
+  $('[role="navigation"],[aria-label="breadcrumb"],[aria-label="navigation"],.nav,.navbar,.footer,.header').remove();
 
   const docTitle = String($("title").first().text() || "").trim() || pageUrl;
 
-  const sections: Array<{ title: string; content: string; order: number }> = [];
-  let current = { title: "Introduction", content: "", order: 0 };
-  let order = 0;
+  const root = $("main").first().length ? $("main").first() : $("body");
 
-  $("body")
-    .find("h2,h3,p,li")
-    .each((_i, el) => {
-      const tag = String((el as any).tagName || "").toLowerCase();
-      const txt = normalizeText($(el).text());
-      if (!txt) return;
+  // helper: extract meaningful text from a region
+  function regionText(region: cheerio.Cheerio<cheerio.Element>) {
+    // prefer semantic elements but include div/span/a/button/td/th for modern layouts
+    const parts: string[] = [];
 
-      if (tag === "h2") {
-        if (current.content.trim().length >= 120) sections.push(current);
-        order += 1;
-        current = { title: txt, content: "", order };
-        return;
-      }
-
-      if (tag === "h3") {
-        current.content += `\n\n${txt}\n`;
-        return;
-      }
-
-      current.content += ` ${txt}`;
+    region.find("h1,h2,h3").each((_i, el) => {
+      const t = normalizeText($(el).text());
+      if (t) parts.push(t);
     });
 
-  if (current.content.trim().length >= 120) sections.push(current);
+    region.find("p,li,div,span,a,button,td,th").each((_i, el) => {
+      const t = normalizeText($(el).text());
+      if (!t) return;
+      // skip super short junk
+      if (t.length < 20) return;
+      parts.push(t);
+    });
+
+    const joined = normalizeText(parts.join("\n"));
+    return joined;
+  }
+
+  const sections: Array<{ title: string; content: string; order: number }> = [];
+
+  const h2s = root.find("h2").toArray();
+
+  // If the page has no H2, treat everything as one section
+  if (h2s.length === 0) {
+    const all = regionText(root);
+    const h1 = normalizeText(root.find("h1").first().text());
+    const title = h1 || "Page Content";
+    if (all && all.length >= 80) {
+      sections.push({ title, content: all, order: 1 });
+    }
+    return { docTitle, sections };
+  }
+
+  // Intro section: content before first H2
+  const firstH2 = h2s[0];
+  const before = root.clone();
+  // remove everything from first H2 onwards (approx)
+  const firstH2Sel = $(firstH2);
+  // We can't "cut" DOM easily; just take text of root and subtract? too messy.
+  // Practical: build intro from elements before first h2 using traversal:
+  const introParts: string[] = [];
+  root.contents().each((_i, el) => {
+    const $el = $(el as any);
+    if ($el.is("h2")) return false; // stop iteration
+    const txt = normalizeText($el.text());
+    if (txt && txt.length >= 30) introParts.push(txt);
+    return;
+  });
+  const introText = normalizeText(introParts.join("\n"));
+  if (introText && introText.length >= 80) {
+    sections.push({ title: "Introduction", content: introText, order: 0 });
+  }
+
+  // Each H2 becomes a section; gather text until next H2
+  let order = 0;
+  for (let i = 0; i < h2s.length; i++) {
+    order += 1;
+    const h2 = $(h2s[i]);
+    const nextH2 = i + 1 < h2s.length ? $(h2s[i + 1]) : null;
+
+    const secTitle = normalizeText(h2.text()) || `Section ${order}`;
+
+    // collect siblings between this H2 and next H2
+    const regionEls: cheerio.Element[] = [];
+    let cur = h2[0].nextSibling as any;
+
+    while (cur) {
+      const $cur = $(cur);
+      if ($cur.is("h2")) break;
+      regionEls.push(cur);
+      cur = cur.nextSibling;
+    }
+
+    // If the section content is not direct siblings (wrapped), fallback to nextUntil on parents
+    let content = "";
+    if (regionEls.length) {
+      const wrapper = $("<div></div>");
+      for (const el of regionEls) wrapper.append($(el).clone());
+      content = regionText(wrapper);
+    } else {
+      // fallback: take text from parent container until next h2 in DOM order
+      const parent = h2.parent();
+      const block = parent.find("*").toArray().slice(0, 300);
+      const wrapper = $("<div></div>");
+      for (const el of block) wrapper.append($(el).clone());
+      content = regionText(wrapper);
+    }
+
+    // Ensure the H2 title is included (important for retrieval)
+    content = normalizeText(`${secTitle}\n${content}`);
+
+    if (content && content.length >= 80) {
+      sections.push({ title: secTitle, content, order });
+    }
+  }
 
   return { docTitle, sections };
 }
@@ -327,10 +394,7 @@ export async function upsertBranding(company_id: string, brandingPatch: any) {
   return { ok: true as const, updated: true as const, branding: next };
 }
 
-/**
- * Legacy helper used by PDF/manual ingestion: chunks + embeddings + insert.
- * Keeps working for all non-website imports.
- */
+// Legacy helper for manual + pdf
 export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
   const chunks = chunkTextSmart(params.content);
   if (chunks.length === 0) return { ok: true as const, inserted: 0 };
@@ -353,10 +417,6 @@ export async function insertKnowledgeChunks(params: { company_id: string; title:
   return { ok: true as const, inserted: chunks.length };
 }
 
-/**
- * NEW structured website insert:
- * per page -> per section -> per chunk, with metadata for doc/section ordering.
- */
 async function insertStructuredWebsite(params: {
   company_id: string;
   page_url: string;
@@ -393,6 +453,7 @@ async function insertStructuredWebsite(params: {
 
     const { error } = await supabaseServer.from("knowledge_chunks").insert(rows);
     if (error) throw new Error(error.message);
+
     inserted += rows.length;
   }
 
@@ -415,7 +476,6 @@ export async function importFromWebsite(params: {
 
   const pagesRaw: Array<{ url: string; title: string; html: string; links: string[]; brandingText: string }> = [];
 
-  // Fetch homepage first
   const first = await fetchHtml(startUrl);
   if (!first.ok) return { ok: false, error: first.error, details: { url: startUrl, status: first.status } };
 
@@ -447,7 +507,6 @@ export async function importFromWebsite(params: {
     pagesRaw.push({ url: u, title: ex.title, html: f.html, links: ex.links, brandingText: ex.text });
   }
 
-  // Insert structured knowledge: per page -> per sections
   let totalInserted = 0;
   const pagesOut: Array<{ url: string; title: string }> = [];
 
@@ -465,7 +524,6 @@ export async function importFromWebsite(params: {
     pagesOut.push({ url: p.url, title: structured.docTitle || p.title });
   }
 
-  // Branding extraction uses combined lightweight readable text (not the chunks)
   const combinedText = pagesRaw
     .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${p.brandingText}`)
     .join("\n\n---\n\n");
