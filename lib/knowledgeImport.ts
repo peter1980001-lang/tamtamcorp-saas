@@ -27,18 +27,28 @@ function hash16(input: string) {
   return crypto.createHash("sha256").update(String(input || "")).digest("hex").slice(0, 16);
 }
 
+function isWs(ch: string) {
+  return ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
+}
+
+// ✅ never start chunks mid-word (overlap safe)
 function chunkTextSmart(text: string, size = 900, overlap = 120) {
   const clean = normalizeText(text);
   if (!clean) return [];
+
   const chunks: string[] = [];
   let i = 0;
 
   const minBreak = Math.max(180, Math.floor(size * 0.55));
 
   while (i < clean.length) {
+    // skip leading whitespace
+    while (i < clean.length && isWs(clean[i])) i++;
+
     const end = Math.min(clean.length, i + size);
-    if (end === clean.length) {
-      chunks.push(clean.slice(i).trim());
+    if (end >= clean.length) {
+      const last = clean.slice(i).trim();
+      if (last) chunks.push(last);
       break;
     }
 
@@ -56,11 +66,26 @@ function chunkTextSmart(text: string, size = 900, overlap = 120) {
 
     const cut = candidates.length ? Math.max(...candidates) : window.length;
 
-    const chunk = clean.slice(i, i + cut).trim();
+    // ensure chunk end is not mid-word
+    let cutAbs = i + cut;
+    if (cutAbs < clean.length && !isWs(clean[cutAbs])) {
+      // move left to whitespace if possible
+      let j = cutAbs;
+      while (j > i + minBreak && !isWs(clean[j])) j--;
+      if (isWs(clean[j])) cutAbs = j;
+    }
+
+    const chunk = clean.slice(i, cutAbs).trim();
     if (chunk) chunks.push(chunk);
 
-    const next = i + cut - overlap;
-    i = Math.max(i + 1, next);
+    let next = cutAbs - overlap;
+    next = Math.max(next, i + 1);
+
+    // ensure next start is not mid-word
+    if (next > 0 && next < clean.length && !isWs(clean[next]) && !isWs(clean[next - 1])) {
+      while (next < clean.length && !isWs(clean[next])) next++;
+    }
+    i = next;
   }
 
   return chunks.filter(Boolean);
@@ -101,6 +126,10 @@ function isLikelyHtmlPath(pathname: string) {
 
 const COMMON_PATHS = [
   "/",
+  "/leadgenerator",
+  "/pricing",
+  "/prices",
+  "/packages",
   "/about",
   "/about-us",
   "/company",
@@ -108,8 +137,6 @@ const COMMON_PATHS = [
   "/service",
   "/products",
   "/solutions",
-  "/pricing",
-  "/prices",
   "/contact",
   "/impressum",
   "/faq",
@@ -142,15 +169,11 @@ async function fetchHtml(url: string) {
   return { ok: true as const, html };
 }
 
-/**
- * Fallback for client-rendered pages:
- * Jina Reader returns readable text from the fully rendered page.
- */
+// ✅ client-side rendered pages fallback: fully readable text
 async function fetchJinaText(url: string) {
   const clean = normalizeUrl(url);
   if (!clean) return { ok: false as const, status: 400, error: "invalid_url" };
 
-  // r.jina.ai/http(s)://...
   const prefix = clean.startsWith("https://") ? "https://r.jina.ai/https://" : "https://r.jina.ai/http://";
   const target = clean.replace(/^https?:\/\//i, "");
 
@@ -182,17 +205,6 @@ function extractLinks(baseUrl: string, html: string) {
   return links;
 }
 
-function detectSectionType(title: string) {
-  const t = String(title || "").toLowerCase();
-  if (/(price|pricing|preise|preis|cost|paket|plan)/i.test(t)) return "pricing";
-  if (/(faq|fragen|frage|questions|q&a)/i.test(t)) return "faq";
-  if (/(contact|kontakt|reach|call|termin)/i.test(t)) return "contact";
-  if (/(feature|features|service|services|solution|solutions|leistungen)/i.test(t)) return "feature";
-  if (/(about|company|unternehmen|über uns)/i.test(t)) return "about";
-  if (/(privacy|datenschutz|terms|impressum|legal)/i.test(t)) return "legal";
-  return "general";
-}
-
 function extractTitleFromHtml(pageUrl: string, html: string) {
   try {
     const $ = cheerio.load(html);
@@ -202,10 +214,76 @@ function extractTitleFromHtml(pageUrl: string, html: string) {
   }
 }
 
-/**
- * Extract structured sections from HTML when server HTML actually contains content.
- * If not, caller will use Jina fallback and treat it as one section.
- */
+function detectSectionType(title: string) {
+  const t = String(title || "").toLowerCase();
+  if (/(price|pricing|preise|preis|cost|paket|plan|package)/i.test(t)) return "pricing";
+  if (/(faq|fragen|frage|questions|q&a)/i.test(t)) return "faq";
+  if (/(contact|kontakt|reach|call|termin)/i.test(t)) return "contact";
+  if (/(feature|features|service|services|solution|solutions|leistungen)/i.test(t)) return "feature";
+  if (/(about|company|unternehmen|über uns)/i.test(t)) return "about";
+  if (/(privacy|datenschutz|terms|impressum|legal)/i.test(t)) return "legal";
+  return "general";
+}
+
+function looksLikePricingLine(line: string) {
+  const s = String(line || "").trim();
+  if (!s) return false;
+  if (/(aed|usd|eur|\$|€|درهم)/i.test(s)) return true;
+  if (/(\/mo|\/month|per month|monthly|yearly|\/yr|\/year)/i.test(s)) return true;
+  if (/(starter|basic|pro|premium|enterprise|package|plan|paket)/i.test(s)) return true;
+  if (/^\d{2,6}(\.\d{1,2})?$/.test(s)) return true;
+  return false;
+}
+
+// ✅ build proper sections from Jina markdown-ish text
+function splitJinaIntoSections(jinaText: string) {
+  const lines = String(jinaText || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
+  const sections: Array<{ title: string; content: string; order: number }> = [];
+
+  let currentTitle = "Page Content";
+  let buf: string[] = [];
+  let order = 0;
+
+  function flush() {
+    const content = normalizeText(buf.join("\n"));
+    if (content && content.length >= 120) {
+      sections.push({ title: currentTitle, content, order: order || 1 });
+    }
+    buf = [];
+  }
+
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (!l) continue;
+
+    // headings
+    const m = l.match(/^(#{1,4})\s+(.*)$/);
+    if (m) {
+      flush();
+      order += 1;
+      currentTitle = normalizeText(m[2]) || `Section ${order}`;
+      continue;
+    }
+
+    // keep short pricing lines too
+    if (l.length < 14 && !looksLikePricingLine(l)) continue;
+
+    // remove obvious junk
+    if (/^(cookie|cookies|privacy policy|terms of service|accept all|reject all)$/i.test(l)) continue;
+
+    buf.push(l);
+  }
+
+  flush();
+
+  if (sections.length === 0) {
+    const all = normalizeText(jinaText);
+    if (all) sections.push({ title: "Page Content", content: all, order: 1 });
+  }
+
+  return sections;
+}
+
 function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
   const $ = cheerio.load(html);
 
@@ -219,13 +297,15 @@ function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
   const sections: Array<{ title: string; content: string; order: number }> = [];
   const h2s = root.find("h2").toArray();
 
-  // Collect text with broad selectors (for pricing cards etc.)
   function regionText(region: any) {
     const parts: string[] = [];
     region.find("h1,h2,h3,p,li,div,span,a,button,td,th").each((_i: any, el: any) => {
       const t = normalizeText($(el).text());
       if (!t) return;
-      if (t.length < 20) return;
+
+      // ✅ allow short lines (pricing cards)
+      if (t.length < 10 && !looksLikePricingLine(t)) return;
+
       parts.push(t);
     });
     return normalizeText(parts.join("\n"));
@@ -264,7 +344,7 @@ function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
       content = regionText(wrapper);
     } else {
       const parent = h2.parent();
-      const block = parent.find("*").toArray().slice(0, 600);
+      const block = parent.find("*").toArray().slice(0, 800);
       const wrapper = $("<div></div>");
       for (const el of block) wrapper.append($(el).clone());
       content = regionText(wrapper);
@@ -279,11 +359,7 @@ function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
   return { docTitle, sections };
 }
 
-async function extractBrandingFromText(input: {
-  companyNameHint?: string;
-  homepageUrl?: string | null;
-  combinedText: string;
-}) {
+async function extractBrandingFromText(input: { companyNameHint?: string; homepageUrl?: string | null; combinedText: string }) {
   const prompt = [
     "You are an expert brand strategist and company analyst.",
     "Extract a compact company profile and branding hints from the provided text.",
@@ -360,7 +436,6 @@ export async function upsertBranding(company_id: string, brandingPatch: any) {
   return { ok: true as const, updated: true as const, branding: next };
 }
 
-// Manual + PDF ingestion helper
 export async function insertKnowledgeChunks(params: { company_id: string; title: string; content: string }) {
   const chunks = chunkTextSmart(params.content);
   if (chunks.length === 0) return { ok: true as const, inserted: 0 };
@@ -440,20 +515,20 @@ export async function importFromWebsite(params: {
 
   const baseCandidates = COMMON_PATHS.map((p) => normalizeUrl(origin + p)).filter(Boolean);
 
-  const pagesRaw: Array<{ url: string; title: string; html: string; links: string[]; brandingText: string }> = [];
+  const pagesRaw: Array<{ url: string; title: string; html: string; links: string[]; readableText: string }> = [];
 
-  // homepage first
   const first = await fetchHtml(startUrl);
   if (!first.ok) return { ok: false, error: first.error, details: { url: startUrl, status: first.status } };
 
   const firstTitle = extractTitleFromHtml(startUrl, first.html);
   const firstLinks = extractLinks(startUrl, first.html);
+
   pagesRaw.push({
     url: startUrl,
     title: firstTitle,
     html: first.html,
     links: firstLinks,
-    brandingText: normalizeText(first.html),
+    readableText: "",
   });
 
   const linkCandidates = unique(firstLinks)
@@ -473,40 +548,30 @@ export async function importFromWebsite(params: {
 
     const t = extractTitleFromHtml(u, f.html);
     const links = extractLinks(u, f.html);
-    pagesRaw.push({ url: u, title: t, html: f.html, links, brandingText: normalizeText(f.html) });
+
+    pagesRaw.push({ url: u, title: t, html: f.html, links, readableText: "" });
   }
 
   let totalInserted = 0;
   const pagesOut: Array<{ url: string; title: string }> = [];
 
   for (const p of pagesRaw) {
-    // Try HTML extraction first
+    // Try HTML first
     let structured = extractStructuredSectionsFromHtml(p.url, p.html);
+    let totalChars = structured.sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
 
-    // If too thin => Jina fallback
-    const totalChars = structured.sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
-    if (structured.sections.length === 0 || totalChars < 800) {
+    // If thin => Jina fallback with real sections
+    if (structured.sections.length === 0 || totalChars < 1200) {
       const jina = await fetchJinaText(p.url);
       if (jina.ok) {
-        const jinaText = jina.text;
-
-        // one strong section
-        structured = {
-          docTitle: p.title,
-          sections: [
-            {
-              title: "Page Content",
-              content: jinaText,
-              order: 1,
-            },
-          ],
-        };
-
-        // use jina text for branding too (much better than raw html)
-        p.brandingText = jinaText;
+        const sections = splitJinaIntoSections(jina.text);
+        structured = { docTitle: p.title, sections };
+        p.readableText = jina.text;
+        totalChars = sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
       }
     }
 
+    // If still nothing, skip insert
     if (structured.sections.length) {
       const ins = await insertStructuredWebsite({
         company_id: params.company_id,
@@ -518,11 +583,18 @@ export async function importFromWebsite(params: {
     }
 
     pagesOut.push({ url: p.url, title: structured.docTitle || p.title });
+
+    // Ensure we have readable text for branding prompt
+    if (!p.readableText) {
+      const fallback = normalizeText(
+        structured.sections.map((s) => `## ${s.title}\n${s.content}`).join("\n\n")
+      );
+      p.readableText = fallback.slice(0, 60000);
+    }
   }
 
-  // Branding extraction from readable text (Jina if available)
   const combinedText = pagesRaw
-    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${normalizeText(p.brandingText).slice(0, 60000)}`)
+    .map((p) => `URL: ${p.url}\nTITLE: ${p.title}\n\n${normalizeText(p.readableText).slice(0, 60000)}`)
     .join("\n\n---\n\n");
 
   const profile = await extractBrandingFromText({
