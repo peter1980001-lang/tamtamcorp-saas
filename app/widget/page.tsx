@@ -4,59 +4,120 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type Msg = { role: "user" | "assistant"; text: string };
 
-function isValidEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+function getParam(name: string) {
+  const url = new URL(window.location.href);
+  return String(url.searchParams.get(name) || "").trim();
+}
+
+function storageKey(pk: string) {
+  return `tamtam_widget_conv_${pk}`;
 }
 
 export default function WidgetPage() {
-  const [client, setClient] = useState("");
-  const [token, setToken] = useState("");
-  const [greeting, setGreeting] = useState("Loading...");
+  const [publicKey, setPublicKey] = useState("");
+  const [token, setToken] = useState<string>("");
+  const [conversationId, setConversationId] = useState<string>("");
+  const [bootError, setBootError] = useState<string | null>(null);
 
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [messages, setMessages] = useState<Msg[]>([{ role: "assistant", text: "Hi! How can I help?" }]);
   const [input, setInput] = useState("");
-
-  // Lead capture
-  const [leadMode, setLeadMode] = useState(false);
-  const [leadName, setLeadName] = useState("");
-  const [leadEmail, setLeadEmail] = useState("");
-  const [leadPhone, setLeadPhone] = useState("");
-  const [leadSubmitting, setLeadSubmitting] = useState(false);
-
   const [chatBusy, setChatBusy] = useState(false);
 
   const chatBoxRef = useRef<HTMLDivElement | null>(null);
 
-  const canSend = useMemo(() => !!token && !chatBusy && input.trim().length > 0, [token, chatBusy, input]);
-
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    const c = url.searchParams.get("client") || "";
-    setClient(c);
-
-    (async () => {
-      // bootstrap
-      const boot = await fetch(`/api/bootstrap?client=${encodeURIComponent(c)}`);
-      const bootJson = await boot.json().catch(() => ({}));
-      const greet = bootJson?.brand?.greeting || "Hi! How can I help?";
-      setGreeting(greet);
-      setMessages([{ role: "assistant", text: greet }]);
-
-      // auth token
-      const auth = await fetch(`/api/widget/auth?client=${encodeURIComponent(c)}`);
-      const authJson = await auth.json().catch(() => ({}));
-      setToken(authJson?.token || "");
-    })();
-  }, []);
+  const canSend = useMemo(() => !!token && !!conversationId && !chatBusy && input.trim().length > 0, [token, conversationId, chatBusy, input]);
 
   useEffect(() => {
     // auto-scroll
     if (!chatBoxRef.current) return;
     chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
-  }, [messages, leadMode]);
+  }, [messages]);
+
+  async function bootstrap(pk: string) {
+    setBootError(null);
+
+    if (!pk) {
+      setBootError("missing_client_public_key");
+      return;
+    }
+
+    // 1) Auth (Widget JWT)
+    const authRes = await fetch("/api/widget/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // IMPORTANT: your backend expects public_key
+      body: JSON.stringify({ public_key: pk }),
+      cache: "no-store",
+    });
+
+    const authJson = await authRes.json().catch(() => null);
+
+    if (!authRes.ok) {
+      setToken("");
+      setConversationId("");
+      setBootError(String(authJson?.error || "widget_auth_failed"));
+      return;
+    }
+
+    const t = String(authJson?.token || "").trim();
+    if (!t) {
+      setBootError("missing_widget_token");
+      return;
+    }
+    setToken(t);
+
+    // 2) Conversation (try reuse from localStorage)
+    const cached = (() => {
+      try {
+        return localStorage.getItem(storageKey(pk)) || "";
+      } catch {
+        return "";
+      }
+    })();
+
+    if (cached) {
+      setConversationId(cached);
+      return;
+    }
+
+    const convRes = await fetch("/api/widget/conversation", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${t}` },
+      cache: "no-store",
+    });
+
+    const convJson = await convRes.json().catch(() => null);
+
+    if (!convRes.ok) {
+      setConversationId("");
+      setBootError(String(convJson?.error || "conversation_failed"));
+      return;
+    }
+
+    const cid = String(convJson?.conversation?.id || "").trim();
+    if (!cid) {
+      setBootError("missing_conversation_id");
+      return;
+    }
+
+    setConversationId(cid);
+    try {
+      localStorage.setItem(storageKey(pk), cid);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    const pk = getParam("client"); // loader uses ?client=pk_...
+    setPublicKey(pk);
+    bootstrap(pk);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function sendMessage() {
-    if (!token || chatBusy) return;
+    if (!token || !conversationId || chatBusy) return;
+
     const userMsg = input.trim();
     if (!userMsg) return;
 
@@ -65,104 +126,47 @@ export default function WidgetPage() {
     setInput("");
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ session_id: "demo", message: userMsg }),
-      });
-
-      const json = await res.json().catch(() => ({}));
-      const answerText = (json?.answer as string) || "Sorry — something went wrong.";
-
-      setMessages((prev) => [...prev, { role: "assistant", text: answerText }]);
-
-      // Trigger lead capture if fallback appears
-      if (answerText.toLowerCase().includes("leave your contact")) {
-        setLeadMode(true);
-      }
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: "Network error. Please try again." },
-      ]);
-    } finally {
-      setChatBusy(false);
-    }
-  }
-
-  async function submitLead() {
-    if (!token || leadSubmitting) return;
-
-    const name = leadName.trim() || null;
-    const emailRaw = leadEmail.trim();
-    const phoneRaw = leadPhone.trim();
-
-    if (!emailRaw && !phoneRaw) {
-      alert("Please provide at least an email or phone number.");
-      return;
-    }
-
-    if (emailRaw && !isValidEmail(emailRaw)) {
-      alert("Please enter a valid email address.");
-      return;
-    }
-
-    setLeadSubmitting(true);
-
-    try {
-      const res = await fetch("/api/lead", {
+      const res = await fetch("/api/widget/message", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          name,
-          email: emailRaw || null,
-          phone: phoneRaw || null,
-          note: "Lead captured from widget",
+          conversation_id: conversationId,
+          message: userMsg,
         }),
       });
 
-      const j = await res.json().catch(() => ({}));
+      const json = await res.json().catch(() => null);
 
-      if (j?.ok) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: "Thanks! We will contact you shortly." },
-        ]);
-        setLeadMode(false);
-        setLeadName("");
-        setLeadEmail("");
-        setLeadPhone("");
-      } else if (j?.error === "email_or_phone_required") {
-        alert("Please provide at least an email or phone number.");
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: "Could not submit. Please try again." },
-        ]);
+      if (!res.ok) {
+        const err = String(json?.error || "chat_failed");
+        setMessages((prev) => [...prev, { role: "assistant", text: `Error: ${err}` }]);
+        return;
       }
+
+      const reply = String(json?.reply || "").trim() || "…";
+      setMessages((prev) => [...prev, { role: "assistant", text: reply }]);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: "Network error. Please try again." },
-      ]);
+      setMessages((prev) => [...prev, { role: "assistant", text: "Network error. Please try again." }]);
     } finally {
-      setLeadSubmitting(false);
+      setChatBusy(false);
     }
   }
 
   return (
     <div style={{ fontFamily: "system-ui", padding: 16, maxWidth: 420 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>TamTam Widget (MVP)</div>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>TamTam Widget</div>
 
-      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 12 }}>
-        client: {client || "-"} | token: {token ? "✅" : "❌"} | status:{" "}
-        {chatBusy ? "thinking..." : "ready"}
+      <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10, lineHeight: 1.5 }}>
+        <div>client: <code>{publicKey || "-"}</code></div>
+        <div>token: {token ? "✅" : "❌"} · conversation: {conversationId ? "✅" : "❌"} · status: {chatBusy ? "thinking…" : "ready"}</div>
+        {bootError ? (
+          <div style={{ marginTop: 6, color: "#b00020" }}>
+            boot error: <code>{bootError}</code>
+          </div>
+        ) : null}
       </div>
 
       <div
@@ -171,7 +175,7 @@ export default function WidgetPage() {
           border: "1px solid #ddd",
           borderRadius: 12,
           padding: 12,
-          height: 260,
+          height: 300,
           overflow: "auto",
           background: "#fff",
         }}
@@ -179,7 +183,7 @@ export default function WidgetPage() {
         {messages.map((m, idx) => (
           <div key={idx} style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, opacity: 0.6 }}>{m.role}</div>
-            <div>{m.text}</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>
           </div>
         ))}
       </div>
@@ -188,8 +192,8 @@ export default function WidgetPage() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={token ? "Type..." : "Loading..."}
-          disabled={!token || chatBusy}
+          placeholder={token && conversationId ? "Type..." : "Loading..."}
+          disabled={!token || !conversationId || chatBusy}
           onKeyDown={(e) => {
             if (e.key === "Enter") sendMessage();
           }}
@@ -217,98 +221,8 @@ export default function WidgetPage() {
         </button>
       </div>
 
-      {leadMode && (
-        <div
-          style={{
-            marginTop: 12,
-            border: "1px solid #ddd",
-            borderRadius: 12,
-            padding: 12,
-            background: "#fff",
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Leave your contact</div>
-
-          <input
-            value={leadName}
-            onChange={(e) => setLeadName(e.target.value)}
-            placeholder="Name (optional)"
-            style={{
-              width: "100%",
-              padding: 10,
-              borderRadius: 10,
-              border: "1px solid #ddd",
-              marginBottom: 8,
-            }}
-          />
-
-          <input
-            value={leadEmail}
-            onChange={(e) => setLeadEmail(e.target.value)}
-            placeholder="Email (optional)"
-            style={{
-              width: "100%",
-              padding: 10,
-              borderRadius: 10,
-              border: "1px solid #ddd",
-              marginBottom: 8,
-            }}
-          />
-
-          <input
-            value={leadPhone}
-            onChange={(e) => setLeadPhone(e.target.value)}
-            placeholder="Phone (optional)"
-            style={{
-              width: "100%",
-              padding: 10,
-              borderRadius: 10,
-              border: "1px solid #ddd",
-              marginBottom: 8,
-            }}
-          />
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={submitLead}
-              disabled={leadSubmitting}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #111",
-                background: "#111",
-                color: "#fff",
-                opacity: leadSubmitting ? 0.7 : 1,
-                cursor: leadSubmitting ? "not-allowed" : "pointer",
-              }}
-            >
-              {leadSubmitting ? "Submitting..." : "Submit"}
-            </button>
-
-            <button
-              onClick={() => setLeadMode(false)}
-              disabled={leadSubmitting}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid #ddd",
-                background: "#fff",
-                color: "#111",
-                cursor: leadSubmitting ? "not-allowed" : "pointer",
-              }}
-            >
-              Close
-            </button>
-          </div>
-
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.65 }}>
-            Provide at least email or phone.
-          </div>
-        </div>
-      )}
-
-      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-        Greeting: {greeting}
+      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>
+        (MVP debug info shown — we remove this after customer test is stable.)
       </div>
     </div>
   );
