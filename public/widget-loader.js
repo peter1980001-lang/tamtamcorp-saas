@@ -1,5 +1,4 @@
 (function () {
-  // Prefer currentScript, fallback to last script tag (some builders break currentScript)
   var script = document.currentScript;
   if (!script) {
     var scripts = document.getElementsByTagName("script");
@@ -7,26 +6,20 @@
   }
   if (!script) return;
 
-  // ✅ Accept BOTH attribute names
   var client =
     script.getAttribute("data-client") ||
     script.getAttribute("data-public-key") ||
     script.getAttribute("data-publicKey");
 
   if (!client) {
-    console.error("[TamTam Widget] Missing data-client (or data-public-key). Example:");
-    console.error(
-      '<script src="https://YOUR-SAAS-DOMAIN/widget-loader.js" data-client="pk_..." ></script>'
-    );
+    console.error("[TamTam Widget] Missing data-client (or data-public-key).");
     return;
   }
 
-  // Host where the widget UI lives (defaults to the SaaS origin hosting this loader)
   var host =
     script.getAttribute("data-host") ||
     (function () {
       try {
-        // script.src origin (safer than window.location.origin on client site)
         return new URL(script.src).origin;
       } catch (e) {
         return window.location.origin;
@@ -38,7 +31,15 @@
 
   var zIndex = String(script.getAttribute("data-z") || "2147483000");
 
-  // Button
+  // ✅ customer site host-only
+  var siteHost = (function () {
+    try {
+      return window.location.host.toLowerCase();
+    } catch (e) {
+      return "";
+    }
+  })();
+
   var btn = document.createElement("button");
   btn.innerText = "Chat";
   btn.setAttribute("aria-label", "Open chat");
@@ -54,7 +55,6 @@
   btn.style.cursor = "pointer";
   btn.style.fontFamily = "system-ui";
 
-  // iFrame container
   var frameWrap = document.createElement("div");
   frameWrap.style.position = "fixed";
   frameWrap.style.bottom = "70px";
@@ -70,10 +70,14 @@
   frameWrap.style.display = "none";
 
   var iframe = document.createElement("iframe");
+  // ✅ pass site host to widget page
   iframe.src =
     host.replace(/\/$/, "") +
     "/widget?client=" +
-    encodeURIComponent(client);
+    encodeURIComponent(client) +
+    "&site=" +
+    encodeURIComponent(siteHost);
+
   iframe.style.width = "100%";
   iframe.style.height = "100%";
   iframe.style.border = "0";
@@ -87,12 +91,11 @@
 
   btn.addEventListener("click", toggle);
 
-  // Ensure body exists
   function mount() {
     if (!document.body) return setTimeout(mount, 25);
     document.body.appendChild(btn);
     document.body.appendChild(frameWrap);
-    console.log("[TamTam Widget] mounted", { host: host, client: client, position: position });
+    console.log("[TamTam Widget] mounted", { host: host, client: client, site: siteHost });
   }
   mount();
 })();

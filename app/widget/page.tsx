@@ -15,6 +15,7 @@ function storageKey(pk: string) {
 
 export default function WidgetPage() {
   const [publicKey, setPublicKey] = useState("");
+  const [site, setSite] = useState("");
   const [token, setToken] = useState<string>("");
   const [conversationId, setConversationId] = useState<string>("");
   const [bootError, setBootError] = useState<string | null>(null);
@@ -25,15 +26,17 @@ export default function WidgetPage() {
 
   const chatBoxRef = useRef<HTMLDivElement | null>(null);
 
-  const canSend = useMemo(() => !!token && !!conversationId && !chatBusy && input.trim().length > 0, [token, conversationId, chatBusy, input]);
+  const canSend = useMemo(
+    () => !!token && !!conversationId && !chatBusy && input.trim().length > 0,
+    [token, conversationId, chatBusy, input]
+  );
 
   useEffect(() => {
-    // auto-scroll
     if (!chatBoxRef.current) return;
     chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
   }, [messages]);
 
-  async function bootstrap(pk: string) {
+  async function bootstrap(pk: string, siteHost: string) {
     setBootError(null);
 
     if (!pk) {
@@ -41,12 +44,11 @@ export default function WidgetPage() {
       return;
     }
 
-    // 1) Auth (Widget JWT)
+    // 1) Auth (Widget JWT) — include site host
     const authRes = await fetch("/api/widget/auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // IMPORTANT: your backend expects public_key
-      body: JSON.stringify({ public_key: pk }),
+      body: JSON.stringify({ public_key: pk, site: siteHost || null }),
       cache: "no-store",
     });
 
@@ -66,7 +68,7 @@ export default function WidgetPage() {
     }
     setToken(t);
 
-    // 2) Conversation (try reuse from localStorage)
+    // 2) Conversation (reuse if available)
     const cached = (() => {
       try {
         return localStorage.getItem(storageKey(pk)) || "";
@@ -103,15 +105,15 @@ export default function WidgetPage() {
     setConversationId(cid);
     try {
       localStorage.setItem(storageKey(pk), cid);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   useEffect(() => {
-    const pk = getParam("client"); // loader uses ?client=pk_...
+    const pk = getParam("client");
+    const siteHost = getParam("site"); // from loader
     setPublicKey(pk);
-    bootstrap(pk);
+    setSite(siteHost);
+    bootstrap(pk, siteHost);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,7 +163,10 @@ export default function WidgetPage() {
 
       <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10, lineHeight: 1.5 }}>
         <div>client: <code>{publicKey || "-"}</code></div>
-        <div>token: {token ? "✅" : "❌"} · conversation: {conversationId ? "✅" : "❌"} · status: {chatBusy ? "thinking…" : "ready"}</div>
+        <div>site: <code>{site || "-"}</code></div>
+        <div>
+          token: {token ? "✅" : "❌"} · conversation: {conversationId ? "✅" : "❌"} · status: {chatBusy ? "thinking…" : "ready"}
+        </div>
         {bootError ? (
           <div style={{ marginTop: 6, color: "#b00020" }}>
             boot error: <code>{bootError}</code>
@@ -219,10 +224,6 @@ export default function WidgetPage() {
         >
           Send
         </button>
-      </div>
-
-      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>
-        (MVP debug info shown — we remove this after customer test is stable.)
       </div>
     </div>
   );
