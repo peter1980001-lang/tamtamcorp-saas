@@ -1,7 +1,8 @@
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
-import pdfParse from "pdf-parse";
+import * as pdfParse from "pdf-parse";
 import { supabaseServer } from "@/lib/supabaseServer";
+
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -344,7 +345,7 @@ export async function importFromPdf(params: {
   buffer: Buffer;
   companyNameHint?: string;
 }) : Promise<ImportResult | { ok: false; error: string; details?: any }> {
-  const data = await pdfParse(params.buffer);
+  const data = await (pdfParse as any).default(params.buffer);
   const text = String(data.text || "").replace(/\s+/g, " ").trim();
 
   if (!text || text.length < 200) {
