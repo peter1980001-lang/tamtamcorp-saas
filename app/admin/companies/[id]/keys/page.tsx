@@ -13,21 +13,72 @@ type KeysResp = {
   details?: string;
 };
 
+const UI = {
+  surface: "#FFFFFF",
+  border: "#E5E7EB",
+  text: "#111827",
+  text2: "#6B7280",
+  accent: "#3B82F6",
+  radius: 12,
+  radiusLg: 16,
+  shadow: "0 1px 0 rgba(16,24,40,0.03), 0 1px 2px rgba(16,24,40,0.04)",
+};
+
+function Card(props: { title: string; subtitle?: string; right?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div style={{ background: UI.surface, border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
+      <div style={{ padding: "18px 18px 0", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: UI.text }}>{props.title}</div>
+          {props.subtitle ? <div style={{ marginTop: 4, fontSize: 12.5, color: UI.text2, lineHeight: 1.45 }}>{props.subtitle}</div> : null}
+        </div>
+        {props.right}
+      </div>
+      <div style={{ padding: "14px 18px 18px" }}>{props.children}</div>
+    </div>
+  );
+}
+
+function Button(props: { children: React.ReactNode; onClick?: () => void; variant?: "primary" | "secondary"; disabled?: boolean }) {
+  const v = props.variant || "secondary";
+  return (
+    <button
+      onClick={props.onClick}
+      disabled={props.disabled}
+      style={{
+        padding: "10px 12px",
+        borderRadius: UI.radius,
+        border: v === "primary" ? `1px solid ${UI.accent}` : `1px solid ${UI.border}`,
+        background: v === "primary" ? UI.accent : "#fff",
+        color: v === "primary" ? "#fff" : UI.text,
+        cursor: props.disabled ? "not-allowed" : "pointer",
+        fontSize: 13.5,
+        fontWeight: 700,
+        opacity: props.disabled ? 0.6 : 1,
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
 function Field({ label, value, right }: { label: string; value: string; right?: React.ReactNode }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, opacity: 0.7 }}>{label}</div>
+      <div style={{ fontSize: 12.5, color: UI.text2 }}>{label}</div>
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         <input
           value={value}
           readOnly
           style={{
             width: "100%",
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid #ddd",
-            background: "#fff",
+            padding: "11px 12px",
+            borderRadius: UI.radius,
+            border: `1px solid ${UI.border}`,
+            background: "#FBFBFC",
             fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontSize: 12.5,
+            color: UI.text,
           }}
         />
         {right}
@@ -79,7 +130,6 @@ export default function KeysPage() {
       return;
     }
 
-    // IMPORTANT: Use rotate response as source of truth.
     setData(json);
     setShowSecret(true);
     setToast("Keys rotated");
@@ -96,107 +146,90 @@ export default function KeysPage() {
   const secretToShow = showSecret ? secretVisible || secretMasked : secretMasked;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 12, opacity: 0.65 }}>Company</div>
-            <h1 style={{ fontSize: 28, margin: "4px 0 0" }}>Keys</h1>
-            <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
-              {data?.keys_rotated_at ? `Created: ${new Date(data.keys_rotated_at).toLocaleString()}` : "Created: —"}
-            </div>
+    <div style={{ display: "grid", gap: 14 }}>
+      <Card
+        title="API Keys"
+        subtitle={
+          data?.keys_rotated_at
+            ? `Last rotation: ${new Date(data.keys_rotated_at).toLocaleString()}`
+            : "Rotate keys if a key was exposed or you want a fresh pair."
+        }
+        right={
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Button onClick={loadKeys} variant="secondary">Refresh</Button>
+            <Button onClick={rotate} variant="primary">Rotate keys</Button>
           </div>
+        }
+      >
+        {loading ? (
+          <div style={{ color: UI.text2 }}>Loading…</div>
+        ) : (
+          <div style={{ display: "grid", gap: 14 }}>
+            <Field
+              label="Public key"
+              value={publicKey || "—"}
+              right={
+                <Button
+                  onClick={() => {
+                    copyToClipboard(publicKey || "");
+                    setToast("Copied");
+                  }}
+                >
+                  Copy
+                </Button>
+              }
+            />
 
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={loadKeys}
-              style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-            >
-              Refresh
-            </button>
-            <button
-              onClick={rotate}
-              style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}
-            >
-              Rotate keys
-            </button>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 16, background: "#fff", border: "1px solid #eee", borderRadius: 16, padding: 16, display: "grid", gap: 14 }}>
-          {loading ? (
-            <div>Loading…</div>
-          ) : (
-            <>
-              <Field
-                label="Public Key"
-                value={publicKey || "—"}
-                right={
-                  <button
+            <Field
+              label="Secret key"
+              value={secretToShow || "—"}
+              right={
+                <div style={{ display: "flex", gap: 10 }}>
+                  <Button onClick={() => setShowSecret((v) => !v)}>{showSecret ? "Hide" : "Show"}</Button>
+                  <Button
                     onClick={() => {
-                      copyToClipboard(publicKey || "");
-                      setToast("Copied");
+                      copyToClipboard(secretVisible || "");
+                      setToast(secretVisible ? "Copied" : "Rotate to get full secret");
                     }}
-                    style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
                   >
                     Copy
-                  </button>
-                }
-              />
-
-              <Field
-                label="Secret Key"
-                value={secretToShow || "—"}
-                right={
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button
-                      onClick={() => setShowSecret((v) => !v)}
-                      style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                    >
-                      {showSecret ? "Hide" : "Show secret"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        copyToClipboard(secretVisible || "");
-                        setToast(secretVisible ? "Copied" : "Rotate to get full secret");
-                      }}
-                      style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                }
-              />
-
-              {!secretVisible && (
-                <div style={{ fontSize: 12, opacity: 0.65 }}>
-                  Hinweis: Aus Sicherheitsgründen wird der Secret Key nach dem Neuladen nur maskiert angezeigt. Nach “Rotate keys” siehst du ihn einmal vollständig.
+                  </Button>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              }
+            />
 
-        {toast && (
-          <div
-            style={{
-              position: "fixed",
-              bottom: 18,
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "#111",
-              color: "#fff",
-              padding: "10px 14px",
-              borderRadius: 999,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-            onClick={() => setToast(null)}
-          >
-            {toast}
+            {!secretVisible && (
+              <div style={{ fontSize: 12.5, color: UI.text2, lineHeight: 1.45 }}>
+                Hinweis: Der Secret Key wird nach Neuladen nur maskiert angezeigt. Nach <b>Rotate keys</b> siehst du ihn einmal vollständig.
+              </div>
+            )}
           </div>
         )}
-      </div>
+      </Card>
+
+      {toast && (
+        <div
+          onClick={() => setToast(null)}
+          style={{
+            position: "fixed",
+            right: 18,
+            bottom: 18,
+            background: "#fff",
+            color: UI.text,
+            padding: "12px 14px",
+            borderRadius: 16,
+            border: `1px solid ${UI.border}`,
+            boxShadow: UI.shadow,
+            cursor: "pointer",
+            fontSize: 13.5,
+            maxWidth: 360,
+          }}
+        >
+          <div style={{ fontWeight: 800, marginBottom: 2 }}>Notice</div>
+          <div style={{ color: UI.text2 }}>{toast}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: "#9CA3AF" }}>Click to dismiss</div>
+        </div>
+      )}
     </div>
   );
 }

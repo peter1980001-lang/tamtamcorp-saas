@@ -31,18 +31,15 @@ function isWs(ch: string) {
   return ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
 }
 
-// ✅ never start chunks mid-word (overlap safe)
 function chunkTextSmart(text: string, size = 900, overlap = 120) {
   const clean = normalizeText(text);
   if (!clean) return [];
 
   const chunks: string[] = [];
   let i = 0;
-
   const minBreak = Math.max(180, Math.floor(size * 0.55));
 
   while (i < clean.length) {
-    // skip leading whitespace
     while (i < clean.length && isWs(clean[i])) i++;
 
     const end = Math.min(clean.length, i + size);
@@ -66,10 +63,8 @@ function chunkTextSmart(text: string, size = 900, overlap = 120) {
 
     const cut = candidates.length ? Math.max(...candidates) : window.length;
 
-    // ensure chunk end is not mid-word
     let cutAbs = i + cut;
     if (cutAbs < clean.length && !isWs(clean[cutAbs])) {
-      // move left to whitespace if possible
       let j = cutAbs;
       while (j > i + minBreak && !isWs(clean[j])) j--;
       if (isWs(clean[j])) cutAbs = j;
@@ -81,10 +76,10 @@ function chunkTextSmart(text: string, size = 900, overlap = 120) {
     let next = cutAbs - overlap;
     next = Math.max(next, i + 1);
 
-    // ensure next start is not mid-word
     if (next > 0 && next < clean.length && !isWs(clean[next]) && !isWs(clean[next - 1])) {
       while (next < clean.length && !isWs(clean[next])) next++;
     }
+
     i = next;
   }
 
@@ -169,7 +164,7 @@ async function fetchHtml(url: string) {
   return { ok: true as const, html };
 }
 
-// ✅ client-side rendered pages fallback: fully readable text
+// optional legacy fallback (keep)
 async function fetchJinaText(url: string) {
   const clean = normalizeUrl(url);
   if (!clean) return { ok: false as const, status: 400, error: "invalid_url" };
@@ -190,6 +185,34 @@ async function fetchJinaText(url: string) {
   if (!res.ok) return { ok: false as const, status: res.status, error: `jina_failed_${res.status}` };
   const text = normalizeText(await res.text());
   return { ok: true as const, text };
+}
+
+async function fetchRenderedViaCrawler(url: string) {
+  const base = String(process.env.CRAWLER_BASE_URL || "").trim();
+  const secret = String(process.env.CRAWLER_SECRET || "").trim();
+  if (!base || !secret) return { ok: false as const, error: "crawler_not_configured" };
+
+  const res = await fetch(base.replace(/\/$/, "") + "/render", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-crawler-secret": secret,
+    },
+    body: JSON.stringify({ url, wait_ms: 650, timeout_ms: 30000 }),
+    cache: "no-store",
+  });
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    return { ok: false as const, error: "crawler_failed", details: json?.error || res.status, raw: json };
+  }
+
+  return {
+    ok: true as const,
+    title: String(json?.title || ""),
+    html: String(json?.html || ""),
+    text: String(json?.text || ""),
+  };
 }
 
 function extractLinks(baseUrl: string, html: string) {
@@ -235,9 +258,8 @@ function looksLikePricingLine(line: string) {
   return false;
 }
 
-// ✅ build proper sections from Jina markdown-ish text
-function splitJinaIntoSections(jinaText: string) {
-  const lines = String(jinaText || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
+function splitTextIntoSectionsByHeadings(text: string) {
+  const lines = String(text || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim());
   const sections: Array<{ title: string; content: string; order: number }> = [];
 
   let currentTitle = "Page Content";
@@ -256,7 +278,6 @@ function splitJinaIntoSections(jinaText: string) {
     const l = raw.trim();
     if (!l) continue;
 
-    // headings
     const m = l.match(/^(#{1,4})\s+(.*)$/);
     if (m) {
       flush();
@@ -265,10 +286,7 @@ function splitJinaIntoSections(jinaText: string) {
       continue;
     }
 
-    // keep short pricing lines too
     if (l.length < 14 && !looksLikePricingLine(l)) continue;
-
-    // remove obvious junk
     if (/^(cookie|cookies|privacy policy|terms of service|accept all|reject all)$/i.test(l)) continue;
 
     buf.push(l);
@@ -277,7 +295,7 @@ function splitJinaIntoSections(jinaText: string) {
   flush();
 
   if (sections.length === 0) {
-    const all = normalizeText(jinaText);
+    const all = normalizeText(text);
     if (all) sections.push({ title: "Page Content", content: all, order: 1 });
   }
 
@@ -302,10 +320,7 @@ function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
     region.find("h1,h2,h3,p,li,div,span,a,button,td,th").each((_i: any, el: any) => {
       const t = normalizeText($(el).text());
       if (!t) return;
-
-      // ✅ allow short lines (pricing cards)
       if (t.length < 10 && !looksLikePricingLine(t)) return;
-
       parts.push(t);
     });
     return normalizeText(parts.join("\n"));
@@ -344,7 +359,7 @@ function extractStructuredSectionsFromHtml(pageUrl: string, html: string) {
       content = regionText(wrapper);
     } else {
       const parent = h2.parent();
-      const block = parent.find("*").toArray().slice(0, 800);
+      const block = parent.find("*").toArray().slice(0, 900);
       const wrapper = $("<div></div>");
       for (const el of block) wrapper.append($(el).clone());
       content = regionText(wrapper);
@@ -523,13 +538,7 @@ export async function importFromWebsite(params: {
   const firstTitle = extractTitleFromHtml(startUrl, first.html);
   const firstLinks = extractLinks(startUrl, first.html);
 
-  pagesRaw.push({
-    url: startUrl,
-    title: firstTitle,
-    html: first.html,
-    links: firstLinks,
-    readableText: "",
-  });
+  pagesRaw.push({ url: startUrl, title: firstTitle, html: first.html, links: firstLinks, readableText: "" });
 
   const linkCandidates = unique(firstLinks)
     .map((x) => normalizeUrl(x))
@@ -556,39 +565,56 @@ export async function importFromWebsite(params: {
   const pagesOut: Array<{ url: string; title: string }> = [];
 
   for (const p of pagesRaw) {
-    // Try HTML first
-    let structured = extractStructuredSectionsFromHtml(p.url, p.html);
+    let html = p.html;
+    let title = p.title;
+
+    // 1) extract from server html
+    let structured = extractStructuredSectionsFromHtml(p.url, html);
     let totalChars = structured.sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
 
-    // If thin => Jina fallback with real sections
-    if (structured.sections.length === 0 || totalChars < 1200) {
-      const jina = await fetchJinaText(p.url);
-      if (jina.ok) {
-        const sections = splitJinaIntoSections(jina.text);
-        structured = { docTitle: p.title, sections };
-        p.readableText = jina.text;
-        totalChars = sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
+    // 2) if thin => crawler render (professional, self-hosted)
+    if (structured.sections.length === 0 || totalChars < 1600) {
+      const rendered = await fetchRenderedViaCrawler(p.url);
+      if (rendered.ok && rendered.html) {
+        html = rendered.html;
+        title = rendered.title || title;
+        structured = extractStructuredSectionsFromHtml(p.url, html);
+        totalChars = structured.sections.reduce((sum, s) => sum + (s.content?.length || 0), 0);
+
+        // if still thin, use rendered text as sections
+        if (structured.sections.length === 0 || totalChars < 1200) {
+          const sec = splitTextIntoSectionsByHeadings(rendered.text || "");
+          structured = { docTitle: title, sections: sec };
+        }
+
+        p.readableText = normalizeText(rendered.text || "").slice(0, 60000);
       }
     }
 
-    // If still nothing, skip insert
+    // 3) fallback only if crawler not configured/failed
+    if (!p.readableText) {
+      const jina = await fetchJinaText(p.url);
+      if (jina.ok) {
+        const sec = splitTextIntoSectionsByHeadings(jina.text);
+        if (structured.sections.length === 0) structured = { docTitle: title, sections: sec };
+        if (!p.readableText) p.readableText = jina.text.slice(0, 60000);
+      }
+    }
+
     if (structured.sections.length) {
       const ins = await insertStructuredWebsite({
         company_id: params.company_id,
         page_url: p.url,
-        doc_title: structured.docTitle,
+        doc_title: structured.docTitle || title,
         sections: structured.sections,
       });
       totalInserted += ins;
     }
 
-    pagesOut.push({ url: p.url, title: structured.docTitle || p.title });
+    pagesOut.push({ url: p.url, title: structured.docTitle || title });
 
-    // Ensure we have readable text for branding prompt
     if (!p.readableText) {
-      const fallback = normalizeText(
-        structured.sections.map((s) => `## ${s.title}\n${s.content}`).join("\n\n")
-      );
+      const fallback = normalizeText(structured.sections.map((s) => `## ${s.title}\n${s.content}`).join("\n\n"));
       p.readableText = fallback.slice(0, 60000);
     }
   }
