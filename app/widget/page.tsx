@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 
 type Msg = { role: "user" | "assistant"; text: string };
 
@@ -498,7 +501,28 @@ export default function WidgetPage() {
         <div ref={boxRef} className="tt-chat">
           {messages.map((m, idx) => (
             <div key={idx} className={`tt-row ${m.role}`}>
-              <div className={`tt-bubble ${m.role}`}>{m.text}</div>
+              <div className={`tt-bubble ${m.role}`}>
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      a: ({ node, ...props }) => (
+        <a
+          {...props}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: "var(--tt-accent)",
+            textDecoration: "underline",
+            fontWeight: 600,
+          }}
+        />
+      ),
+    }}
+  >
+    {m.text}
+  </ReactMarkdown>
+</div>
+
             </div>
           ))}
         </div>
