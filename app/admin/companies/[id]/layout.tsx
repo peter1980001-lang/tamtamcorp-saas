@@ -1,10 +1,7 @@
 // app/admin/companies/[id]/layout.tsx
-
-"use client";
-
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { supabaseServer } from "@/lib/supabaseServer";
+import LogoutButton from "./_components/LogoutButton";
 
 const UI = {
   bg: "#F6F7F9",
@@ -13,8 +10,6 @@ const UI = {
   text: "#111827",
   text2: "#6B7280",
   text3: "#9CA3AF",
-  accent: "#3B82F6",
-  accentSoft: "#EEF2FF",
   radius: 12,
   radiusLg: 16,
   shadow: "0 1px 0 rgba(16,24,40,0.03), 0 1px 2px rgba(16,24,40,0.04)",
@@ -38,98 +33,98 @@ function tabLabel(seg: string) {
   }
 }
 
-export default function CompanyLayout({
-  children,
-  params,
-}: {
+export default async function CompanyLayout(props: {
   children: React.ReactNode;
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const router = useRouter();
-  const { id } = params;
+  const { id } = await props.params;
 
-  const [companyName, setCompanyName] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [createdAt, setCreatedAt] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function loadCompany() {
-      const res = await fetch(`/api/admin/companies/${id}`);
-      const json = await res.json().catch(() => null);
-      if (res.ok && json?.company) {
-        setCompanyName(json.company.name);
-        setStatus(json.company.status);
-        setCreatedAt(json.company.created_at);
-      }
-    }
-    loadCompany();
-  }, [id]);
-
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-  }
+  const { data: company } = await supabaseServer
+    .from("companies")
+    .select("id,name,status,created_at")
+    .eq("id", id)
+    .maybeSingle();
 
   const base = `/admin/companies/${id}`;
   const tabs = ["", "keys", "billing", "conversations", "leads"] as const;
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: UI.bg,
-        fontFamily: UI.font,
-        color: UI.text,
-      }}
-    >
+    <div style={{ minHeight: "100vh", background: UI.bg, fontFamily: UI.font, color: UI.text }}>
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 64px" }}>
-        {/* HEADER */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 16,
-          }}
-        >
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12.5, color: UI.text3, fontWeight: 650 }}>
-              Admin / Companies / <span style={{ color: UI.text2 }}>{companyName || id}</span>
+              Admin / Companies / <span style={{ color: UI.text2 }}>{company?.name || id}</span>
             </div>
 
-            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12 }}>
-              <h1 style={{ fontSize: 28, margin: 0 }}>
-                {companyName || "Company"}
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <h1 style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
+                {company?.name || "Company"}
               </h1>
 
-              {status && (
-                <span
-                  style={{
-                    display: "inline-flex",
-                    padding: "5px 10px",
-                    borderRadius: 999,
-                    background: "#F9FAFB",
-                    border: `1px solid ${UI.border}`,
-                    fontSize: 12,
-                    fontWeight: 600,
-                    textTransform: "capitalize",
-                    color: UI.text2,
-                  }}
-                >
-                  {status}
-                </span>
-              )}
+              <span
+                style={{
+                  display: "inline-flex",
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  background: "#F9FAFB",
+                  border: `1px solid ${UI.border}`,
+                  fontSize: 12,
+                  fontWeight: 650,
+                  textTransform: "capitalize",
+                  color: UI.text2,
+                }}
+              >
+                {company?.status || "unknown"}
+              </span>
             </div>
 
-            {createdAt && (
-              <div style={{ marginTop: 8, fontSize: 12.5, color: UI.text2 }}>
-                Created: {new Date(createdAt).toLocaleString()}
-              </div>
-            )}
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span
+                style={{
+                  display: "inline-flex",
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  border: `1px solid ${UI.border}`,
+                  background: "#fff",
+                  color: UI.text2,
+                  fontSize: 12,
+                }}
+              >
+                Company ID:{" "}
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    color: UI.text,
+                  }}
+                >
+                  {id}
+                </span>
+              </span>
+
+              <span
+                style={{
+                  display: "inline-flex",
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  border: `1px solid ${UI.border}`,
+                  background: "#fff",
+                  color: UI.text2,
+                  fontSize: 12,
+                }}
+              >
+                Created:{" "}
+                <span style={{ marginLeft: 6, color: UI.text }}>
+                  {company?.created_at ? new Date(company.created_at).toLocaleString() : "—"}
+                </span>
+              </span>
+            </div>
           </div>
 
-          {/* RIGHT ACTIONS */}
-          <div style={{ display: "flex", gap: 10 }}>
+          {/* Right actions */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Link
               href="/admin/companies"
               style={{
@@ -138,7 +133,7 @@ export default function CompanyLayout({
                 border: `1px solid ${UI.border}`,
                 background: "#fff",
                 fontSize: 13.5,
-                fontWeight: 600,
+                fontWeight: 650,
                 color: UI.text,
                 textDecoration: "none",
               }}
@@ -146,25 +141,11 @@ export default function CompanyLayout({
               Back
             </Link>
 
-            <button
-              onClick={handleLogout}
-              style={{
-                padding: "10px 12px",
-                borderRadius: UI.radius,
-                border: `1px solid ${UI.border}`,
-                background: "#fff",
-                fontSize: 13.5,
-                fontWeight: 600,
-                color: UI.text,
-                cursor: "pointer",
-              }}
-            >
-              Logout
-            </button>
+            <LogoutButton />
           </div>
         </div>
 
-        {/* NAVIGATION TABS */}
+        {/* Tabs */}
         <div
           style={{
             marginTop: 20,
@@ -190,7 +171,7 @@ export default function CompanyLayout({
                   background: "#fff",
                   border: `1px solid ${UI.border}`,
                   fontSize: 13,
-                  fontWeight: 600,
+                  fontWeight: 650,
                   textDecoration: "none",
                   color: UI.text2,
                 }}
@@ -201,8 +182,8 @@ export default function CompanyLayout({
           })}
         </div>
 
-        {/* PAGE CONTENT */}
-        <div style={{ marginTop: 24 }}>{children}</div>
+        {/* Page content */}
+        <div style={{ marginTop: 24 }}>{props.children}</div>
       </div>
     </div>
   );
