@@ -1,6 +1,10 @@
 // app/admin/companies/[id]/layout.tsx
+
+"use client";
+
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const UI = {
   bg: "#F6F7F9",
@@ -34,124 +38,144 @@ function tabLabel(seg: string) {
   }
 }
 
-export default async function CompanyLayout(props: {
+export default function CompanyLayout({
+  children,
+  params,
+}: {
   children: React.ReactNode;
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = await props.params;
+  const router = useRouter();
+  const { id } = params;
 
-  // Company header data (server-side, fast & consistent)
-  const { data: company } = await supabaseServer
-    .from("companies")
-    .select("id,name,status,created_at")
-    .eq("id", id)
-    .maybeSingle();
+  const [companyName, setCompanyName] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [createdAt, setCreatedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadCompany() {
+      const res = await fetch(`/api/admin/companies/${id}`);
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.company) {
+        setCompanyName(json.company.name);
+        setStatus(json.company.status);
+        setCreatedAt(json.company.created_at);
+      }
+    }
+    loadCompany();
+  }, [id]);
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  }
 
   const base = `/admin/companies/${id}`;
-
   const tabs = ["", "keys", "billing", "conversations", "leads"] as const;
 
   return (
-    <div style={{ minHeight: "100vh", background: UI.bg, fontFamily: UI.font, color: UI.text }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: UI.bg,
+        fontFamily: UI.font,
+        color: UI.text,
+      }}
+    >
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 64px" }}>
-        {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+        {/* HEADER */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 16,
+          }}
+        >
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12.5, color: UI.text3, fontWeight: 650 }}>
-              Admin <span style={{ color: UI.text3 }}> / </span> Companies{" "}
-              <span style={{ color: UI.text3 }}> / </span>
-              <span style={{ color: UI.text2 }}>{company?.name || id}</span>
+              Admin / Companies / <span style={{ color: UI.text2 }}>{companyName || id}</span>
             </div>
 
-            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <h1 style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
-                {company?.name || "Company"}
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12 }}>
+              <h1 style={{ fontSize: 28, margin: 0 }}>
+                {companyName || "Company"}
               </h1>
 
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  background: "#F9FAFB",
-                  border: `1px solid ${UI.border}`,
-                  color: UI.text2,
-                  fontSize: 12,
-                  fontWeight: 650,
-                  textTransform: "capitalize",
-                }}
-              >
-                {company?.status || "unknown"}
-              </span>
-            </div>
-
-            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <span
-                style={{
-                  display: "inline-flex",
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  border: `1px solid ${UI.border}`,
-                  background: "#fff",
-                  color: UI.text2,
-                  fontSize: 12,
-                }}
-              >
-                Company ID: <span style={{ marginLeft: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: UI.text }}>{id}</span>
-              </span>
-
-              <span
-                style={{
-                  display: "inline-flex",
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  border: `1px solid ${UI.border}`,
-                  background: "#fff",
-                  color: UI.text2,
-                  fontSize: 12,
-                }}
-              >
-                Created:{" "}
-                <span style={{ marginLeft: 6, color: UI.text }}>
-                  {company?.created_at ? new Date(company.created_at).toLocaleString() : "—"}
+              {status && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    padding: "5px 10px",
+                    borderRadius: 999,
+                    background: "#F9FAFB",
+                    border: `1px solid ${UI.border}`,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    textTransform: "capitalize",
+                    color: UI.text2,
+                  }}
+                >
+                  {status}
                 </span>
-              </span>
+              )}
             </div>
+
+            {createdAt && (
+              <div style={{ marginTop: 8, fontSize: 12.5, color: UI.text2 }}>
+                Created: {new Date(createdAt).toLocaleString()}
+              </div>
+            )}
           </div>
 
-          {/* Right actions (optional; du kannst später hier Buttons ergänzen) */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {/* RIGHT ACTIONS */}
+          <div style={{ display: "flex", gap: 10 }}>
             <Link
-              href={base}
+              href="/admin/companies"
               style={{
                 padding: "10px 12px",
                 borderRadius: UI.radius,
                 border: `1px solid ${UI.border}`,
                 background: "#fff",
                 fontSize: 13.5,
-                fontWeight: 650,
+                fontWeight: 600,
                 color: UI.text,
                 textDecoration: "none",
               }}
             >
-              Overview
+              Back
             </Link>
+
+            <button
+              onClick={handleLogout}
+              style={{
+                padding: "10px 12px",
+                borderRadius: UI.radius,
+                border: `1px solid ${UI.border}`,
+                background: "#fff",
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: UI.text,
+                cursor: "pointer",
+              }}
+            >
+              Logout
+            </button>
           </div>
         </div>
 
-        {/* Tabs (als echte Navigation) */}
+        {/* NAVIGATION TABS */}
         <div
           style={{
-            marginTop: 16,
+            marginTop: 20,
             display: "flex",
-            flexWrap: "wrap",
             gap: 8,
             padding: 6,
             border: `1px solid ${UI.border}`,
             background: UI.surface,
             borderRadius: UI.radiusLg,
             boxShadow: UI.shadow,
+            flexWrap: "wrap",
           }}
         >
           {tabs.map((seg) => {
@@ -161,14 +185,14 @@ export default async function CompanyLayout(props: {
                 key={seg || "overview"}
                 href={href}
                 style={{
-                  padding: "9px 12px",
+                  padding: "9px 14px",
                   borderRadius: 999,
-                  border: "1px solid transparent",
-                  background: "transparent",
-                  color: UI.text2,
+                  background: "#fff",
+                  border: `1px solid ${UI.border}`,
                   fontSize: 13,
-                  fontWeight: 650,
+                  fontWeight: 600,
                   textDecoration: "none",
+                  color: UI.text2,
                 }}
               >
                 {tabLabel(seg)}
@@ -177,8 +201,8 @@ export default async function CompanyLayout(props: {
           })}
         </div>
 
-        {/* Content */}
-        <div style={{ marginTop: 16 }}>{props.children}</div>
+        {/* PAGE CONTENT */}
+        <div style={{ marginTop: 24 }}>{children}</div>
       </div>
     </div>
   );
