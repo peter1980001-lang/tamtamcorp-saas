@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { supabaseServer } from "@/lib/supabaseServer";
 import LogoutButton from "./_components/LogoutButton";
+import CompanyTabs from "./_components/CompanyTabs";
 
 const UI = {
   bg: "#F6F7F9",
@@ -28,6 +29,7 @@ export default async function CompanyLayout(props: {
   return (
     <div style={{ minHeight: "100vh", background: UI.bg, fontFamily: UI.font, color: UI.text }}>
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 64px" }}>
+        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12.5, color: UI.text3, fontWeight: 650 }}>
@@ -35,9 +37,7 @@ export default async function CompanyLayout(props: {
             </div>
 
             <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <h1 style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>
-                {company?.name || "Company"}
-              </h1>
+              <h1 style={{ fontSize: 28, margin: 0, letterSpacing: "-0.02em" }}>{company?.name || "Company"}</h1>
               <span
                 style={{
                   display: "inline-flex",
@@ -92,7 +92,10 @@ export default async function CompanyLayout(props: {
           </div>
         </div>
 
-        <div style={{ marginTop: 24 }}>{props.children}</div>
+        {/* ✅ Tabs that ALWAYS work */}
+        <CompanyTabs />
+
+        <div style={{ marginTop: 16 }}>{props.children}</div>
       </div>
     </div>
   );
