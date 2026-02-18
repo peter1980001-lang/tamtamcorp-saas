@@ -38,7 +38,14 @@ type InviteRow = {
   created_by: string | null;
 };
 
-type DetailResponse = { company: Company; keys: Keys | null; settings: Settings; admins?: AdminRow[] };
+type DetailResponse = {
+  company: Company;
+  keys: Keys | null;
+  settings: Settings;
+  admins?: AdminRow[];
+  // OPTIONAL: if your API adds it later, UI will auto-use it.
+  my_role?: "owner" | "admin" | "viewer";
+};
 
 type LeadRow = {
   id: string;
@@ -62,8 +69,8 @@ type LeadRow = {
   updated_at: string;
 };
 
-const tabs = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
-type Tab = (typeof tabs)[number];
+const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
+type Tab = (typeof ALL_TABS)[number];
 
 const UI = {
   surface: "#FFFFFF",
@@ -81,28 +88,13 @@ const UI = {
   shadow: "0 1px 0 rgba(16,24,40,0.03), 0 1px 2px rgba(16,24,40,0.04)",
 };
 
-function mask(s: string) {
-  if (!s) return "";
-  if (s.length <= 10) return "********";
-  return s.slice(0, 6) + "…" + s.slice(-4);
-}
-
 function normalizeHost(input: string): string {
   return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "");
 }
-
-function uniq(arr: string[]) {
-  return Array.from(new Set(arr));
-}
-
+function uniq(arr: string[]) { return Array.from(new Set(arr)); }
 function safeJsonStringify(v: any) {
-  try {
-    return JSON.stringify(v ?? {}, null, 2);
-  } catch {
-    return "{}";
-  }
+  try { return JSON.stringify(v ?? {}, null, 2); } catch { return "{}"; }
 }
-
 function normalizeUrlInput(raw: string) {
   const t = String(raw || "").trim();
   if (!t) return "";
@@ -210,6 +202,46 @@ function CodeBox({ text }: { text: string }) {
   );
 }
 
+function TabsBar({ tabs, active, basePath }: { tabs: { key: Tab; label: string }[]; active: Tab; basePath: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        padding: 6,
+        border: `1px solid ${UI.border}`,
+        background: UI.surface,
+        borderRadius: UI.radiusLg,
+        boxShadow: UI.shadow,
+      }}
+    >
+      {tabs.map((t) => {
+        const isActive = active === t.key;
+        const href = t.key === "overview" ? basePath : `${basePath}?tab=${encodeURIComponent(t.key)}`;
+        return (
+          <a
+            key={t.key}
+            href={href}
+            style={{
+              padding: "9px 12px",
+              borderRadius: 999,
+              border: `1px solid ${isActive ? "#DBEAFE" : "transparent"}`,
+              background: isActive ? UI.accentSoft : "transparent",
+              color: isActive ? "#1D4ED8" : UI.text2,
+              textDecoration: "none",
+              fontSize: 13,
+              fontWeight: isActive ? 900 : 800,
+            }}
+          >
+            {t.label}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -222,12 +254,9 @@ export default function CompanyDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<string | null>(null);
-  const [rotating, setRotating] = useState(false);
-  const [showSecret, setShowSecret] = useState(false);
 
-  // Billing
-  const [billingInfo, setBillingInfo] = useState<any>(null);
-  const [billingLoading, setBillingLoading] = useState(false);
+  // Keys actions
+  const [rotating, setRotating] = useState(false);
 
   // Domains
   const [domainInput, setDomainInput] = useState("");
@@ -235,7 +264,7 @@ export default function CompanyDetailPage() {
   const [domainSaving, setDomainSaving] = useState(false);
   const [domainDirty, setDomainDirty] = useState(false);
 
-  // Limits
+  // Limits (owner only)
   const [limitsText, setLimitsText] = useState<string>("{}");
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
@@ -250,6 +279,10 @@ export default function CompanyDetailPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteDays, setInviteDays] = useState(7);
   const [inviteCreating, setInviteCreating] = useState(false);
+
+  // Billing
+  const [billingInfo, setBillingInfo] = useState<any>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
 
   // Test Chat
   const [testToken, setTestToken] = useState<string | null>(null);
@@ -269,26 +302,46 @@ export default function CompanyDetailPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
 
-  // Leads
+  // Leads (keep as is)
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
 
+  const basePath = useMemo(() => {
+    if (typeof window === "undefined") return `/admin/companies/${id || ""}`;
+    return window.location.pathname;
+  }, [id]);
+
+  const myRole = data?.my_role; // optional if API supports it
+  const isOwner = myRole ? myRole === "owner" : true; // fallback = owner to avoid locking you out if API doesn't send my_role
+
+  const visibleTabs = useMemo(() => {
+    const t: { key: Tab; label: string }[] = [
+      { key: "overview", label: "Overview" },
+      { key: "keys", label: "Keys" },
+      { key: "domains", label: "Domains" },
+      // limits only owner
+      ...(isOwner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
+      { key: "admins", label: "Admins" },
+      { key: "embed", label: "Embed" },
+      { key: "billing", label: "Billing" },
+      { key: "test-chat", label: "Test-Chat" },
+      { key: "knowledge", label: "Knowledge" },
+      { key: "leads", label: "Leads" },
+    ];
+    return t;
+  }, [isOwner]);
+
   async function load() {
     if (!id) return;
     setLoading(true);
     setLoadError(null);
-
     try {
       const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
       const text = await res.text();
       const json = (() => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return { raw: text };
-        }
+        try { return JSON.parse(text); } catch { return { raw: text }; }
       })();
 
       if (!res.ok) {
@@ -312,17 +365,10 @@ export default function CompanyDetailPage() {
   async function loadBilling() {
     if (!id) return;
     setBillingLoading(true);
-
     const res = await fetch(`/api/admin/companies/${id}/billing`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
-
     setBillingLoading(false);
-
-    if (!res.ok) {
-      setToast(json?.error || "billing_load_failed");
-      return;
-    }
-
+    if (!res.ok) return setToast(json?.error || "billing_load_failed");
     setBillingInfo(json);
   }
 
@@ -332,12 +378,7 @@ export default function CompanyDetailPage() {
     const res = await fetch(`/api/admin/companies/${id}/invites`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
     setAdminsLoading(false);
-
-    if (!res.ok) {
-      setToast(json?.error || "invites_load_failed");
-      return;
-    }
-
+    if (!res.ok) return setToast(json?.error || "invites_load_failed");
     setAdmins(json.admins ?? []);
     setInvites(json.invites ?? []);
   }
@@ -348,7 +389,6 @@ export default function CompanyDetailPage() {
     const res = await fetch(`/api/admin/companies/${id}/leads`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
     setLeadsLoading(false);
-
     if (!res.ok) return setToast(json?.error || "leads_failed");
     setLeads(json.leads ?? []);
   }
@@ -356,39 +396,16 @@ export default function CompanyDetailPage() {
   useEffect(() => {
     if (!id) return;
 
-    const t = String(searchParams?.get("tab") || "overview").toLowerCase();
-    const next = (tabs as readonly string[]).includes(t) ? (t as Tab) : "overview";
+    const t = String(searchParams?.get("tab") || "overview").toLowerCase() as Tab;
+    const allowed = (visibleTabs.map((x) => x.key) as Tab[]);
+    const next = (allowed as readonly string[]).includes(t) ? t : "overview";
     setTab(next);
 
     load();
-
-    const checkout = String(searchParams?.get("checkout") || "").toLowerCase();
-    if (checkout === "success") {
-      setToast("Checkout success — syncing billing…");
-      setTimeout(() => {
-        load();
-        loadBilling();
-        setToast("Billing refreshed");
-      }, 1200);
-    } else if (checkout === "cancel") {
-      setToast("Checkout canceled");
-    }
-
-    const trial = String(searchParams?.get("trial") || "").toLowerCase();
-    if (trial === "started") {
-      setToast("Trial started");
-      setTimeout(() => loadBilling(), 600);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, searchParams]);
+  }, [id, searchParams, visibleTabs.length]);
 
   useEffect(() => {
-    if (tab === "limits") {
-      const current = data?.settings?.limits_json ?? {};
-      setLimitsText(safeJsonStringify(current));
-      setLimitsDirty(false);
-    }
-
     if (tab === "billing") loadBilling();
     if (tab === "admins") loadInvites();
     if (tab === "leads") loadLeads();
@@ -399,24 +416,14 @@ export default function CompanyDetailPage() {
       setDomainInput("");
       setDomainDirty(false);
     }
+
+    if (tab === "limits") {
+      const current = data?.settings?.limits_json ?? {};
+      setLimitsText(safeJsonStringify(current));
+      setLimitsDirty(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
-
-  useEffect(() => {
-    if (tab !== "domains") return;
-    const current = data?.keys?.allowed_domains ?? [];
-    setDomainDraft(current);
-    setDomainDirty(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.keys?.allowed_domains, tab]);
-
-  useEffect(() => {
-    if (tab !== "limits") return;
-    const current = data?.settings?.limits_json ?? {};
-    setLimitsText(safeJsonStringify(current));
-    setLimitsDirty(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.settings?.limits_json, tab]);
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -436,22 +443,15 @@ export default function CompanyDetailPage() {
     const res = await fetch(`/api/admin/companies/${id}/rotate-keys`, { method: "POST" });
     const json = await res.json().catch(() => null);
     setRotating(false);
-
-    if (!res.ok) {
-      setToast(json?.error || "rotate_failed");
-      return;
-    }
-
+    if (!res.ok) return setToast(json?.error || "rotate_failed");
     setToast("Keys rotated");
     await load();
   }
 
   function addDomainFromInput() {
     const normalized = normalizeHost(domainInput || "");
-
     if (!normalized) return setToast("Enter a domain");
     if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) return setToast("Invalid domain");
-
     setDomainDraft((prev) => uniq([...prev, normalized]));
     setDomainInput("");
     setDomainDirty(true);
@@ -465,15 +465,7 @@ export default function CompanyDetailPage() {
   async function saveDomains() {
     if (!id) return;
     setDomainSaving(true);
-
-    const payload = {
-      allowed_domains: uniq(
-        (domainDraft ?? [])
-          .filter((x) => typeof x === "string")
-          .map((x) => normalizeHost(x))
-          .filter((x) => x.length > 0)
-      ),
-    };
+    const payload = { allowed_domains: uniq(domainDraft.map((x) => normalizeHost(x)).filter(Boolean)) };
 
     const res = await fetch(`/api/admin/companies/${id}/domains`, {
       method: "PATCH",
@@ -483,7 +475,6 @@ export default function CompanyDetailPage() {
 
     const json = await res.json().catch(() => null);
     setDomainSaving(false);
-
     if (!res.ok) return setToast(json?.error || "domains_save_failed");
 
     const updatedKeys: Keys | null = json?.keys ?? null;
@@ -495,17 +486,13 @@ export default function CompanyDetailPage() {
 
   async function saveLimits() {
     if (!id) return;
+    if (!isOwner) return setToast("Not allowed");
 
     let parsed: any = null;
-    try {
-      parsed = JSON.parse(limitsText || "{}");
-    } catch {
-      return setToast("Limits JSON invalid");
-    }
+    try { parsed = JSON.parse(limitsText || "{}"); } catch { return setToast("Limits JSON invalid"); }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setToast("Limits must be a JSON object");
 
     setLimitsSaving(true);
-
     const res = await fetch(`/api/admin/companies/${id}/limits`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -514,12 +501,10 @@ export default function CompanyDetailPage() {
 
     const json = await res.json().catch(() => null);
     setLimitsSaving(false);
-
     if (!res.ok) return setToast(json?.error || "limits_save_failed");
 
     const updatedSettings: Settings | null = json?.settings ?? null;
     if (updatedSettings) setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
-
     setLimitsDirty(false);
     setToast("Limits saved");
   }
@@ -545,21 +530,18 @@ export default function CompanyDetailPage() {
 
     const json = await res.json().catch(() => null);
     setInviteCreating(false);
-
     if (!res.ok) return setToast(json?.error || "invite_create_failed");
 
     const inv: InviteRow | null = json?.invite ?? null;
     if (inv) {
       setInvites((prev) => [inv, ...prev]);
-      const link = inviteLink(inv.token);
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(inviteLink(inv.token));
       setToast("Invite created + link copied");
     } else {
       setToast("Invite created");
     }
 
     await loadInvites();
-
     setInviteEmail("");
     setInviteRole("admin");
     setInviteDays(7);
@@ -567,12 +549,9 @@ export default function CompanyDetailPage() {
 
   async function revokeInvite(invite_id: string) {
     if (!id) return;
-    const res = await fetch(`/api/admin/companies/${id}/invites?invite_id=${encodeURIComponent(invite_id)}`, {
-      method: "DELETE",
-    });
+    const res = await fetch(`/api/admin/companies/${id}/invites?invite_id=${encodeURIComponent(invite_id)}`, { method: "DELETE" });
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "invite_revoke_failed");
-
     setInvites((prev) => prev.map((x) => (x.id === invite_id ? { ...x, status: "revoked" } : x)));
     setToast("Invite revoked");
   }
@@ -589,7 +568,6 @@ export default function CompanyDetailPage() {
 
     const json = await res.json().catch(() => null);
     setAdminMutating(null);
-
     if (!res.ok) return setToast(json?.error || "admin_role_update_failed");
 
     setToast("Role updated");
@@ -600,13 +578,9 @@ export default function CompanyDetailPage() {
     if (!id) return;
     setAdminMutating(user_id);
 
-    const res = await fetch(`/api/admin/companies/${id}/admins?user_id=${encodeURIComponent(user_id)}`, {
-      method: "DELETE",
-    });
-
+    const res = await fetch(`/api/admin/companies/${id}/admins?user_id=${encodeURIComponent(user_id)}`, { method: "DELETE" });
     const json = await res.json().catch(() => null);
     setAdminMutating(null);
-
     if (!res.ok) return setToast(json?.error || "admin_remove_failed");
 
     setToast("Admin removed");
@@ -615,32 +589,23 @@ export default function CompanyDetailPage() {
 
   async function testGetToken() {
     const pk = data?.keys?.public_key;
-    if (!pk) return setToast("No public key found. Rotate keys first.");
-
+    if (!pk) return setToast("No public key found.");
     const res = await fetch("/api/widget/auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ public_key: pk }),
     });
-
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "token_failed");
-
     setTestToken(json.token);
     setToast("Token received");
   }
 
   async function testStartConversation() {
     if (!testToken) return setToast("Missing token → click Get Token");
-
-    const res = await fetch("/api/widget/conversation", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${testToken}` },
-    });
-
+    const res = await fetch("/api/widget/conversation", { method: "POST", headers: { Authorization: `Bearer ${testToken}` } });
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "conversation_failed");
-
     setTestConversationId(json.conversation.id);
     setTestLog([]);
     setToast("Conversation started");
@@ -656,19 +621,12 @@ export default function CompanyDetailPage() {
 
     const res = await fetch("/api/widget/message", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${testToken}`,
-      },
-      body: JSON.stringify({
-        conversation_id: testConversationId,
-        message: testInput,
-      }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
+      body: JSON.stringify({ conversation_id: testConversationId, message: testInput }),
     });
 
     const json = await res.json().catch(() => null);
     setTestSending(false);
-
     if (!res.ok) {
       setToast(json?.error || "chat_failed");
       setTestLog((l) => [...l, { role: "error", text: JSON.stringify(json) }]);
@@ -687,16 +645,11 @@ export default function CompanyDetailPage() {
     const res = await fetch("/api/admin/knowledge/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        company_id: id,
-        title: kbTitle || "Manual Admin Entry",
-        content: kbText,
-      }),
+      body: JSON.stringify({ company_id: id, title: kbTitle || "Manual Admin Entry", content: kbText }),
     });
 
     const json = await res.json().catch(() => null);
     setKbIngesting(false);
-
     if (!res.ok) return setToast(json?.error || "ingest_failed");
 
     setToast(`Inserted ${json.chunks ?? json.inserted_chunks ?? "?"} chunks`);
@@ -717,10 +670,7 @@ export default function CompanyDetailPage() {
     const res = await fetch(`/api/admin/companies/${id}/import/url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: u,
-        max_pages,
-      }),
+      body: JSON.stringify({ url: u, max_pages }),
     });
 
     const json = await res.json().catch(() => null);
@@ -741,77 +691,77 @@ export default function CompanyDetailPage() {
     return leads.filter((l) => {
       if (leadBand !== "all" && l.score_band !== leadBand) return false;
       if (!q) return true;
-      const hay = [l.name || "", l.email || "", l.phone || "", l.status || "", l.lead_state || "", l.score_band || "", JSON.stringify(l.qualification_json || {})]
-        .join(" ")
-        .toLowerCase();
+      const hay = [l.name || "", l.email || "", l.phone || "", l.status || "", l.lead_state || "", l.score_band || "", JSON.stringify(l.qualification_json || {})].join(" ").toLowerCase();
       return hay.includes(q);
     });
   }, [leads, leadQuery, leadBand]);
 
+  const billingSummary = useMemo(() => {
+    const status = billingInfo?.billing?.status || billingInfo?.status || "—";
+    const planName = billingInfo?.plan?.name || billingInfo?.billing?.plan_key || billingInfo?.plan_key || "—";
+    const end = billingInfo?.billing?.current_period_end || billingInfo?.current_period_end || null;
+    return {
+      status,
+      planName,
+      periodEnd: end ? new Date(end).toLocaleString() : null,
+    };
+  }, [billingInfo]);
+
+  const embedSnippet = useMemo(() => {
+    const pk = data?.keys?.public_key || "pk_xxx";
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
+  }, [data?.keys?.public_key]);
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {/* Error visibility so you never get "empty forever" */}
+      {/* Tabs (role aware) */}
+      <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} />
+
       {loadError ? (
         <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
           <div style={{ color: "#B91C1C", fontSize: 13.5, lineHeight: 1.5 }}>{loadError}</div>
-          <div style={{ marginTop: 10, color: UI.text2, fontSize: 12.5 }}>
-            DevTools → Network → check <code>/api/admin/companies/{id}</code>
-          </div>
         </Card>
       ) : null}
 
-      {/* Main content */}
       {loading || !data ? (
-        <Card title="Loading" subtitle="Fetching company data…">
-          Please wait…
-        </Card>
+        <Card title="Loading" subtitle="Fetching company data…">Please wait…</Card>
       ) : (
         <>
-          {/* Top actions */}
-          <Card
-            title="Company"
-            subtitle={`${data.company.name} · ${data.company.status} · ${new Date(data.company.created_at).toLocaleString()}`}
-            right={
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Button onClick={load} variant="secondary">Refresh</Button>
-                <Button onClick={rotateKeys} disabled={rotating} variant="primary">
-                  {rotating ? "Rotating…" : "Rotate Keys"}
-                </Button>
-              </div>
-            }
-          >
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ display: "inline-flex", padding: "6px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: "#fff", color: UI.text2, fontSize: 12 }}>
-                ID: <span style={{ marginLeft: 6, color: UI.text, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{data.company.id}</span>
-              </span>
-              <span style={{ display: "inline-flex", padding: "6px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: "#fff", color: UI.text2, fontSize: 12 }}>
-                Public Key: <span style={{ marginLeft: 6, color: UI.text, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{data.keys?.public_key || "—"}</span>
-              </span>
-            </div>
-          </Card>
-
+          {/* OVERVIEW (customer friendly: no internal ids/created) */}
           {tab === "overview" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <Card title="Quick Summary" subtitle="High-level configuration overview.">
-                <div style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.8 }}>
-                  <div><b>Public Key:</b> {data.keys?.public_key ?? "—"}</div>
-                  <div><b>Allowed Domains:</b> {(data.keys?.allowed_domains ?? []).length}</div>
-                  <div><b>Limits:</b> {Object.keys(data.settings?.limits_json ?? {}).length} keys</div>
-                  <div><b>Chat Mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}</div>
+              <Card title="Setup" subtitle="Your widget setup at a glance.">
+                <div style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.9 }}>
+                  <div><b>Widget status:</b> Ready</div>
+                  <div><b>Allowed domains:</b> {(data.keys?.allowed_domains ?? []).length}</div>
+                  <div><b>Chat mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}</div>
                 </div>
               </Card>
 
-              <Card title="Embed Snippet" subtitle="Paste into the customer website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+              <Card
+                title="Embed Snippet"
+                subtitle="Copy & paste this snippet into your website."
+                right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}
+              >
                 <CodeBox text={embedSnippet} />
               </Card>
             </div>
           )}
 
+          {/* KEYS (buttons only here, secret hidden) */}
           {tab === "keys" && (
             <Card
-              title="Keys"
-              subtitle="Public key is used for embed. Secret key is sensitive."
-              right={<Button onClick={() => setShowSecret((s) => !s)} variant="secondary">{showSecret ? "Hide secret" : "Show secret"}</Button>}
+              title="API Keys"
+              subtitle="Public key is used in the embed snippet. Secret key is hidden for now."
+              right={
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Button onClick={load} variant="secondary">Refresh</Button>
+                  <Button onClick={rotateKeys} disabled={rotating} variant="primary">
+                    {rotating ? "Rotating…" : "Rotate Keys"}
+                  </Button>
+                </div>
+              }
             >
               <div style={{ display: "grid", gap: 12 }}>
                 <div>
@@ -824,25 +774,16 @@ export default function CompanyDetailPage() {
                   </div>
                 </div>
 
-                <div>
-                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Secret Key</div>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
-                      {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "—"}
-                    </code>
-                    <Button onClick={() => copy(data.keys?.secret_key ?? "")}>Copy</Button>
-                  </div>
-                </div>
-
                 <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                  Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}
+                  Secret Key is currently hidden for customers.
                 </div>
               </div>
             </Card>
           )}
 
+          {/* DOMAINS (customer) */}
           {tab === "domains" && (
-            <Card title="Allowed Domains" subtitle="Only these websites can load the widget for this company.">
+            <Card title="Allowed Domains" subtitle="Only these websites can load your widget.">
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
                   <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="example.com" />
@@ -879,26 +820,34 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
+          {/* LIMITS (owner only, hidden from clients) */}
           {tab === "limits" && (
-            <Card title="Limits" subtitle="Edit the JSON limits config for this company.">
-              <div style={{ display: "grid", gap: 12 }}>
-                <Textarea
-                  value={limitsText}
-                  onChange={(e) => { setLimitsText(e.target.value); setLimitsDirty(true); }}
-                  style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
-                />
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
-                    {limitsSaving ? "Saving…" : "Save limits"}
-                  </Button>
+            !isOwner ? (
+              <Card title="Not available" subtitle="This section is only available for the owner.">
+                —
+              </Card>
+            ) : (
+              <Card title="Limits" subtitle="Owner-only limits config.">
+                <div style={{ display: "grid", gap: 12 }}>
+                  <Textarea
+                    value={limitsText}
+                    onChange={(e) => { setLimitsText(e.target.value); setLimitsDirty(true); }}
+                    style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                    <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
+                      {limitsSaving ? "Saving…" : "Save limits"}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </Card>
+              </Card>
+            )
           )}
 
+          {/* ADMINS (customers: invite admin/viewer only) */}
           {tab === "admins" && (
             <div style={{ display: "grid", gap: 14 }}>
-              <Card title="Admins" subtitle="Manage admins and invites for this company." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
+              <Card title="Team Members" subtitle="Manage admins and viewers." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
                 {adminsLoading ? (
                   <div style={{ color: UI.text2 }}>Loading…</div>
                 ) : (
@@ -919,7 +868,7 @@ export default function CompanyDetailPage() {
                       >
                         <div>
                           <div style={{ fontWeight: 900 }}>{a.email || a.user_id}</div>
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>Created: {new Date(a.created_at).toLocaleString()}</div>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>Role: {a.role}</div>
                         </div>
 
                         <select
@@ -928,9 +877,11 @@ export default function CompanyDetailPage() {
                           disabled={adminMutating === a.user_id}
                           style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
                         >
-                          <option value="owner">owner</option>
+                          {/* You can decide if role changes are allowed for customers.
+                              Keeping it as-is, but you can also lock it down by only allowing viewer/admin. */}
                           <option value="admin">admin</option>
                           <option value="viewer">viewer</option>
+                          {isOwner ? <option value="owner">owner</option> : null}
                         </select>
 
                         <Button onClick={() => removeAdmin(a.user_id)} disabled={adminMutating === a.user_id} variant="danger">
@@ -938,19 +889,24 @@ export default function CompanyDetailPage() {
                         </Button>
                       </div>
                     ))}
-                    {admins.length === 0 ? <div style={{ color: UI.text2 }}>No admins found.</div> : null}
+                    {admins.length === 0 ? <div style={{ color: UI.text2 }}>No team members found.</div> : null}
                   </div>
                 )}
               </Card>
 
-              <Card title="Invites" subtitle="Create invite links for new admins.">
+              <Card title="Invite" subtitle="Invite a new team member by link (copied automatically).">
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 140px", gap: 10 }}>
                     <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email (optional)" />
-                    <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                    <select
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                    >
                       <option value="admin">admin</option>
                       <option value="viewer">viewer</option>
-                      <option value="owner">owner</option>
+                      {/* owner invite only for owner */}
+                      {isOwner ? <option value="owner">owner</option> : null}
                     </select>
                     <Input type="number" min={1} max={30} value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value || 7))} />
                     <Button onClick={createInvite} disabled={inviteCreating} variant="primary">
@@ -995,26 +951,47 @@ export default function CompanyDetailPage() {
             </div>
           )}
 
+          {/* EMBED */}
           {tab === "embed" && (
-            <Card title="Embed" subtitle="Copy & paste this snippet into the customer website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+            <Card title="Embed" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
               <CodeBox text={embedSnippet} />
             </Card>
           )}
 
+          {/* BILLING (customer-friendly, no raw JSON) */}
           {tab === "billing" && (
-            <Card title="Billing" subtitle="Manage plan and Stripe checkout.">
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                <Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>
-              </div>
+            <Card
+              title="Billing"
+              subtitle="Manage your plan and subscription."
+              right={<Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>}
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Status</div>
+                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.status}</div>
+                  </div>
 
-              <div style={{ marginBottom: 12 }}>
-                <BillingActions companyId={id as any} />
-              </div>
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Plan</div>
+                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.planName}</div>
+                  </div>
 
-              <CodeBox text={safeJsonStringify(billingInfo)} />
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Renews</div>
+                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.periodEnd || "—"}</div>
+                  </div>
+                </div>
+
+                {/* Keep your existing actions but no JSON output */}
+                <div style={{ marginTop: 4 }}>
+                  <BillingActions companyId={id as any} />
+                </div>
+              </div>
             </Card>
           )}
 
+          {/* TEST CHAT (keep) */}
           {tab === "test-chat" && (
             <Card title="Test Chat" subtitle="Test the widget auth + conversation + message flow.">
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
@@ -1048,12 +1025,13 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
+          {/* KNOWLEDGE (keep as-is, you said deeper later) */}
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
               <Card title="Website Import" subtitle="Import website content into knowledge base.">
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
-                    <Input value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="https://tamtamcorp.tech/leadgenerator" />
+                    <Input value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="https://example.com" />
                     <Input type="number" min={1} max={10} value={importMaxPages} onChange={(e) => setImportMaxPages(Number(e.target.value || 5))} />
                   </div>
 
@@ -1092,6 +1070,7 @@ export default function CompanyDetailPage() {
             </div>
           )}
 
+          {/* LEADS (keep as-is) */}
           {tab === "leads" && (
             <Card title="Leads" subtitle="Search and filter leads for this company.">
               <div style={{ display: "grid", gap: 12 }}>
