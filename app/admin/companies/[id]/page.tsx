@@ -65,44 +65,21 @@ type LeadRow = {
 const tabs = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
 type Tab = (typeof tabs)[number];
 
-function Card(props: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        border: "1px solid #eee",
-        borderRadius: 16,
-        padding: 16,
-        background: "#fff",
-        boxShadow: "0 1px 0 rgba(0,0,0,0.03)",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 12 }}>
-        <div style={{ fontWeight: 700 }}>{props.title}</div>
-        {props.right}
-      </div>
-      {props.children}
-    </div>
-  );
-}
-
-function Chip({ text }: { text: string }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "6px 10px",
-        borderRadius: 999,
-        border: "1px solid #eee",
-        background: "#fafafa",
-        fontSize: 12,
-        marginRight: 8,
-        marginBottom: 8,
-      }}
-    >
-      {text}
-    </span>
-  );
-}
+const UI = {
+  surface: "#FFFFFF",
+  surface2: "#FBFBFC",
+  border: "#E5E7EB",
+  borderSoft: "#ECEEF2",
+  text: "#111827",
+  text2: "#6B7280",
+  text3: "#9CA3AF",
+  accent: "#3B82F6",
+  accentSoft: "#EEF2FF",
+  danger: "#DC2626",
+  radius: 12,
+  radiusLg: 16,
+  shadow: "0 1px 0 rgba(16,24,40,0.03), 0 1px 2px rgba(16,24,40,0.04)",
+};
 
 function mask(s: string) {
   if (!s) return "";
@@ -133,37 +110,137 @@ function normalizeUrlInput(raw: string) {
   return "https://" + t.replace(/^\/+/, "");
 }
 
+function Card(props: { title?: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div style={{ background: UI.surface, border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
+      {(props.title || props.right) ? (
+        <div style={{ padding: "18px 18px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            {props.title ? <div style={{ fontWeight: 900, fontSize: 14, color: UI.text }}>{props.title}</div> : null}
+            {props.subtitle ? <div style={{ marginTop: 4, fontSize: 12.5, color: UI.text2, lineHeight: 1.45 }}>{props.subtitle}</div> : null}
+          </div>
+          {props.right ? <div style={{ flex: "0 0 auto" }}>{props.right}</div> : null}
+        </div>
+      ) : null}
+      <div style={{ padding: props.title || props.right ? "14px 18px 18px" : 18 }}>{props.children}</div>
+    </div>
+  );
+}
+
+function Button(props: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; variant?: "primary" | "secondary" | "danger" }) {
+  const v = props.variant || "secondary";
+  const styleMap: Record<string, React.CSSProperties> = {
+    primary: { background: UI.accent, border: `1px solid ${UI.accent}`, color: "#fff" },
+    secondary: { background: "#fff", border: `1px solid ${UI.border}`, color: UI.text },
+    danger: { background: "#fff", border: "1px solid #FECACA", color: UI.danger },
+  };
+  return (
+    <button
+      onClick={props.onClick}
+      disabled={props.disabled}
+      style={{
+        padding: "10px 12px",
+        borderRadius: UI.radius,
+        cursor: props.disabled ? "not-allowed" : "pointer",
+        fontSize: 13.5,
+        fontWeight: 900,
+        opacity: props.disabled ? 0.6 : 1,
+        ...styleMap[v],
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      style={{
+        width: "100%",
+        padding: "11px 12px",
+        borderRadius: UI.radius,
+        border: `1px solid ${UI.border}`,
+        background: "#fff",
+        fontSize: 13.5,
+        outline: "none",
+        ...(props.style || {}),
+      }}
+    />
+  );
+}
+
+function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      style={{
+        width: "100%",
+        padding: "11px 12px",
+        borderRadius: UI.radius,
+        border: `1px solid ${UI.border}`,
+        background: "#fff",
+        fontSize: 13.5,
+        outline: "none",
+        lineHeight: 1.5,
+        ...(props.style || {}),
+      }}
+    />
+  );
+}
+
+function CodeBox({ text }: { text: string }) {
+  return (
+    <pre
+      style={{
+        margin: 0,
+        whiteSpace: "pre-wrap",
+        fontSize: 12.5,
+        background: UI.surface2,
+        border: `1px solid ${UI.borderSoft}`,
+        padding: 12,
+        borderRadius: UI.radius,
+        color: UI.text,
+        lineHeight: 1.5,
+      }}
+    >
+      {text}
+    </pre>
+  );
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
-
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("overview");
+
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const [showSecret, setShowSecret] = useState(false);
-  const [rotating, setRotating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<string | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
 
-  // ===== Billing state =====
+  // Billing
   const [billingInfo, setBillingInfo] = useState<any>(null);
   const [billingLoading, setBillingLoading] = useState(false);
 
-  // ===== Domains edit state =====
+  // Domains
   const [domainInput, setDomainInput] = useState("");
   const [domainDraft, setDomainDraft] = useState<string[]>([]);
   const [domainSaving, setDomainSaving] = useState(false);
   const [domainDirty, setDomainDirty] = useState(false);
 
-  // ===== Limits edit state =====
+  // Limits
   const [limitsText, setLimitsText] = useState<string>("{}");
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
 
-  // ===== Admins/Invites state =====
+  // Admins/Invites
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [adminsLoading, setAdminsLoading] = useState(false);
@@ -174,25 +251,25 @@ export default function CompanyDetailPage() {
   const [inviteDays, setInviteDays] = useState(7);
   const [inviteCreating, setInviteCreating] = useState(false);
 
-  // ===== Test Chat state =====
+  // Test Chat
   const [testToken, setTestToken] = useState<string | null>(null);
   const [testConversationId, setTestConversationId] = useState<string | null>(null);
   const [testInput, setTestInput] = useState("Hello Nova");
   const [testLog, setTestLog] = useState<{ role: string; text: string }[]>([]);
   const [testSending, setTestSending] = useState(false);
 
-  // ===== Knowledge state =====
+  // Knowledge
   const [kbTitle, setKbTitle] = useState("Manual Admin Entry");
   const [kbText, setKbText] = useState("");
   const [kbIngesting, setKbIngesting] = useState(false);
 
-  // ===== Website Import state (NEW) =====
+  // Website Import
   const [importUrl, setImportUrl] = useState("");
   const [importMaxPages, setImportMaxPages] = useState(5);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
 
-  // ===== Leads state =====
+  // Leads
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
@@ -201,20 +278,35 @@ export default function CompanyDetailPage() {
   async function load() {
     if (!id) return;
     setLoading(true);
+    setLoadError(null);
 
-    const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
-    const json = await res.json().catch(() => null);
+    try {
+      const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
+      const text = await res.text();
+      const json = (() => {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { raw: text };
+        }
+      })();
 
-    if (!res.ok) {
-      setToast(json?.error || "company_load_failed");
+      if (!res.ok) {
+        setData(null);
+        setAdmins([]);
+        setLoadError(`HTTP ${res.status}: ${json?.error || json?.raw || "company_load_failed"}`);
+        return;
+      }
+
+      setData(json);
+      setAdmins(json?.admins ?? []);
+    } catch (e: any) {
       setData(null);
+      setAdmins([]);
+      setLoadError(e?.message || "network_error");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setData(json);
-    setAdmins(json?.admins ?? []);
-    setLoading(false);
   }
 
   async function loadBilling() {
@@ -250,11 +342,23 @@ export default function CompanyDetailPage() {
     setInvites(json.invites ?? []);
   }
 
+  async function loadLeads() {
+    if (!id) return;
+    setLeadsLoading(true);
+    const res = await fetch(`/api/admin/companies/${id}/leads`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+    setLeadsLoading(false);
+
+    if (!res.ok) return setToast(json?.error || "leads_failed");
+    setLeads(json.leads ?? []);
+  }
+
   useEffect(() => {
     if (!id) return;
 
-    const t = String(searchParams?.get("tab") || "").toLowerCase();
-    if (t && (tabs as readonly string[]).includes(t)) setTab(t as any);
+    const t = String(searchParams?.get("tab") || "overview").toLowerCase();
+    const next = (tabs as readonly string[]).includes(t) ? (t as Tab) : "overview";
+    setTab(next);
 
     load();
 
@@ -343,8 +447,7 @@ export default function CompanyDetailPage() {
   }
 
   function addDomainFromInput() {
-    const raw = domainInput || "";
-    const normalized = normalizeHost(raw);
+    const normalized = normalizeHost(domainInput || "");
 
     if (!normalized) return setToast("Enter a domain");
     if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) return setToast("Invalid domain");
@@ -490,7 +593,7 @@ export default function CompanyDetailPage() {
     if (!res.ok) return setToast(json?.error || "admin_role_update_failed");
 
     setToast("Role updated");
-    await load();
+    await loadInvites();
   }
 
   async function removeAdmin(user_id: string) {
@@ -507,7 +610,7 @@ export default function CompanyDetailPage() {
     if (!res.ok) return setToast(json?.error || "admin_remove_failed");
 
     setToast("Admin removed");
-    await load();
+    await loadInvites();
   }
 
   async function testGetToken() {
@@ -633,17 +736,6 @@ export default function CompanyDetailPage() {
     setToast(`Imported: ${json?.chunksInserted ?? 0} chunks`);
   }
 
-  async function loadLeads() {
-    if (!id) return;
-    setLeadsLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}/leads`, { cache: "no-store" });
-    const json = await res.json().catch(() => null);
-    setLeadsLoading(false);
-
-    if (!res.ok) return setToast(json?.error || "leads_failed");
-    setLeads(json.leads ?? []);
-  }
-
   const filteredLeads = useMemo(() => {
     const q = leadQuery.trim().toLowerCase();
     return leads.filter((l) => {
@@ -657,312 +749,418 @@ export default function CompanyDetailPage() {
   }, [leads, leadQuery, leadBand]);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, opacity: 0.65 }}>Company</div>
-            <h1 style={{ fontSize: 28, margin: "4px 0 0" }}>{loading ? "Loading…" : data?.company?.name || "—"}</h1>
+    <div style={{ display: "grid", gap: 14 }}>
+      {/* Error visibility so you never get "empty forever" */}
+      {loadError ? (
+        <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
+          <div style={{ color: "#B91C1C", fontSize: 13.5, lineHeight: 1.5 }}>{loadError}</div>
+          <div style={{ marginTop: 10, color: UI.text2, fontSize: 12.5 }}>
+            DevTools → Network → check <code>/api/admin/companies/{id}</code>
+          </div>
+        </Card>
+      ) : null}
 
-            {!loading && data?.company && (
-              <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <Chip text={`ID: ${data.company.id}`} />
-                <Chip text={`Status: ${data.company.status}`} />
-                <Chip text={`Created: ${new Date(data.company.created_at).toLocaleString()}`} />
+      {/* Main content */}
+      {loading || !data ? (
+        <Card title="Loading" subtitle="Fetching company data…">
+          Please wait…
+        </Card>
+      ) : (
+        <>
+          {/* Top actions */}
+          <Card
+            title="Company"
+            subtitle={`${data.company.name} · ${data.company.status} · ${new Date(data.company.created_at).toLocaleString()}`}
+            right={
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Button onClick={load} variant="secondary">Refresh</Button>
+                <Button onClick={rotateKeys} disabled={rotating} variant="primary">
+                  {rotating ? "Rotating…" : "Rotate Keys"}
+                </Button>
               </div>
-            )}
-          </div>
-
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={load}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                border: "1px solid #ddd",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Refresh
-            </button>
-
-            <button
-              onClick={rotateKeys}
-              disabled={rotating}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 12,
-                border: "1px solid #111",
-                background: "#111",
-                color: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              {rotating ? "Rotating…" : "Rotate Keys"}
-            </button>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {tabs.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 999,
-                border: "1px solid " + (tab === t ? "#111" : "#ddd"),
-                background: tab === t ? "#111" : "#fff",
-                color: tab === t ? "#fff" : "#111",
-                cursor: "pointer",
-                textTransform: "capitalize",
-              }}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
-          {loading || !data ? (
-            <Card title="Loading">Fetching data…</Card>
-          ) : (
-            <>
-              {tab === "overview" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  <Card title="Quick Summary">
-                    <div style={{ fontSize: 13, opacity: 0.85, lineHeight: 1.8 }}>
-                      <div>
-                        <b>Public Key:</b> {data.keys?.public_key ?? "—"}
-                      </div>
-                      <div>
-                        <b>Allowed Domains:</b> {(data.keys?.allowed_domains ?? []).length}
-                      </div>
-                      <div>
-                        <b>Limits:</b> {Object.keys(data.settings?.limits_json ?? {}).length} keys
-                      </div>
-                      <div>
-                        <b>Chat Mode:</b>{" "}
-                        {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid (default)"}
-                      </div>
-                    </div>
-                  </Card>
-
-                  <Card
-                    title="Embed Snippet"
-                    right={
-                      <button
-                        onClick={() => copy(embedSnippet)}
-                        style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                      >
-                        Copy
-                      </button>
-                    }
-                  >
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, background: "#fafafa", border: "1px solid #eee", padding: 12, borderRadius: 12 }}>
-                      {embedSnippet}
-                    </pre>
-                  </Card>
-                </div>
-              )}
-
-              {tab === "keys" && (
-                <Card
-                  title="Keys"
-                  right={
-                    <button
-                      onClick={() => setShowSecret((s) => !s)}
-                      style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                    >
-                      {showSecret ? "Hide secret" : "Show secret"}
-                    </button>
-                  }
-                >
-                  <div style={{ display: "grid", gap: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Public Key</div>
-                      <div style={{ display: "flex", gap: 10 }}>
-                        <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>{data.keys?.public_key ?? "—"}</code>
-                        <button onClick={() => copy(data.keys?.public_key ?? "")} style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}>
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Secret Key</div>
-                      <div style={{ display: "flex", gap: 10 }}>
-                        <code style={{ flex: 1, padding: 10, borderRadius: 12, border: "1px solid #eee", background: "#fafafa" }}>
-                          {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "—"}
-                        </code>
-                        <button onClick={() => copy(data.keys?.secret_key ?? "")} style={{ border: "1px solid #ddd", background: "#fff", padding: "10px 12px", borderRadius: 12, cursor: "pointer" }}>
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}</div>
-                  </div>
-                </Card>
-              )}
-
-              {/* Domains/Limits/Admins/Embed/Billing/Test-Chat unchanged in this file (kept as provided) */}
-              {/* To keep this response compact, they are not duplicated here. */}
-
-              {tab === "knowledge" && (
-                <div style={{ display: "grid", gap: 14 }}>
-                  <Card
-                    title="Website Import"
-                    right={
-                      <button
-                        onClick={() => {
-                          setImportUrl("");
-                          setImportMaxPages(5);
-                          setImportResult(null);
-                          setToast("Reset");
-                        }}
-                        disabled={importing}
-                        style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}
-                      >
-                        Reset
-                      </button>
-                    }
-                  >
-                    <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-                      Import a website URL. We will crawl pages, extract sections, chunk, embed, and store structured metadata into <code>knowledge_chunks</code>.
-                    </div>
-
-                    <div style={{ display: "grid", gap: 10 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
-                        <input
-                          value={importUrl}
-                          onChange={(e) => setImportUrl(e.target.value)}
-                          placeholder="https://tamtamcorp.tech/leadgenerator"
-                          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
-                        />
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={importMaxPages}
-                          onChange={(e) => setImportMaxPages(Number(e.target.value || 5))}
-                          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
-                          title="max pages"
-                        />
-                      </div>
-
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <button
-                          onClick={importWebsite}
-                          disabled={importing}
-                          style={{
-                            padding: "10px 14px",
-                            borderRadius: 12,
-                            border: "1px solid #111",
-                            background: "#111",
-                            color: "#fff",
-                            cursor: importing ? "not-allowed" : "pointer",
-                          }}
-                        >
-                          {importing ? "Importing…" : "Import Website"}
-                        </button>
-
-                        <button
-                          onClick={() => setTab("test-chat")}
-                          style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
-                        >
-                          Go to Test-Chat →
-                        </button>
-                      </div>
-
-                      <div style={{ fontSize: 12, opacity: 0.7 }}>
-                        Tip: use a full URL including <code>https://</code>. <code>max_pages</code> is capped at 10.
-                      </div>
-
-                      {importResult ? (
-                        <pre
-                          style={{
-                            margin: 0,
-                            whiteSpace: "pre-wrap",
-                            fontSize: 12,
-                            background: "#fafafa",
-                            border: "1px solid #eee",
-                            padding: 12,
-                            borderRadius: 12,
-                          }}
-                        >
-                          {safeJsonStringify(importResult)}
-                        </pre>
-                      ) : null}
-                    </div>
-                  </Card>
-
-                  <Card
-                    title="Manual Knowledge Ingest"
-                    right={
-                      <button onClick={() => setKbText("")} style={{ border: "1px solid #ddd", background: "#fff", padding: "8px 10px", borderRadius: 10, cursor: "pointer" }}>
-                        Clear
-                      </button>
-                    }
-                  >
-                    <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-                      Paste text from the company website / FAQ / brochure. We will chunk + embed into <code>knowledge_chunks</code>.
-                    </div>
-
-                    <div style={{ display: "grid", gap: 10 }}>
-                      <div>
-                        <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Title (optional)</div>
-                        <input value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} placeholder="e.g. FAQ, About us, Pricing" style={{ width: "100%", padding: 12, borderRadius: 12, border: "1px solid #ddd" }} />
-                      </div>
-
-                      <div>
-                        <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Content</div>
-                        <textarea value={kbText} onChange={(e) => setKbText(e.target.value)} placeholder="Paste website text, FAQ, product descriptions..." style={{ width: "100%", minHeight: 220, padding: 12, borderRadius: 12, border: "1px solid #ddd" }} />
-                      </div>
-
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <button onClick={ingestKnowledge} disabled={kbIngesting} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "#fff", cursor: "pointer" }}>
-                          {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
-                        </button>
-
-                        <button onClick={() => setTab("test-chat")} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
-                          Go to Test-Chat →
-                        </button>
-                      </div>
-
-                      <div style={{ fontSize: 12, opacity: 0.7 }}>
-                        Tip: after ingest, ask questions in Test-Chat. In knowledge-only mode, the bot will refuse answers not in the KB.
-                      </div>
-                    </div>
-                  </Card>
-                </div>
-              )}
-
-              {/* Keep the rest of tabs as in your current file */}
-            </>
-          )}
-        </div>
-
-        {toast && (
-          <div
-            onClick={() => setToast(null)}
-            style={{
-              position: "fixed",
-              right: 18,
-              bottom: 18,
-              background: "#111",
-              color: "#fff",
-              padding: "10px 12px",
-              borderRadius: 12,
-              cursor: "pointer",
-              fontSize: 13,
-            }}
+            }
           >
-            {toast}
-          </div>
-        )}
-      </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ display: "inline-flex", padding: "6px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: "#fff", color: UI.text2, fontSize: 12 }}>
+                ID: <span style={{ marginLeft: 6, color: UI.text, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{data.company.id}</span>
+              </span>
+              <span style={{ display: "inline-flex", padding: "6px 10px", borderRadius: 999, border: `1px solid ${UI.border}`, background: "#fff", color: UI.text2, fontSize: 12 }}>
+                Public Key: <span style={{ marginLeft: 6, color: UI.text, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{data.keys?.public_key || "—"}</span>
+              </span>
+            </div>
+          </Card>
+
+          {tab === "overview" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              <Card title="Quick Summary" subtitle="High-level configuration overview.">
+                <div style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.8 }}>
+                  <div><b>Public Key:</b> {data.keys?.public_key ?? "—"}</div>
+                  <div><b>Allowed Domains:</b> {(data.keys?.allowed_domains ?? []).length}</div>
+                  <div><b>Limits:</b> {Object.keys(data.settings?.limits_json ?? {}).length} keys</div>
+                  <div><b>Chat Mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}</div>
+                </div>
+              </Card>
+
+              <Card title="Embed Snippet" subtitle="Paste into the customer website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+                <CodeBox text={embedSnippet} />
+              </Card>
+            </div>
+          )}
+
+          {tab === "keys" && (
+            <Card
+              title="Keys"
+              subtitle="Public key is used for embed. Secret key is sensitive."
+              right={<Button onClick={() => setShowSecret((s) => !s)} variant="secondary">{showSecret ? "Hide secret" : "Show secret"}</Button>}
+            >
+              <div style={{ display: "grid", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Public Key</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
+                      {data.keys?.public_key ?? "—"}
+                    </code>
+                    <Button onClick={() => copy(data.keys?.public_key ?? "")}>Copy</Button>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Secret Key</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
+                      {data.keys?.secret_key ? (showSecret ? data.keys.secret_key : mask(data.keys.secret_key)) : "—"}
+                    </code>
+                    <Button onClick={() => copy(data.keys?.secret_key ?? "")}>Copy</Button>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                  Created: {data.keys?.created_at ? new Date(data.keys.created_at).toLocaleString() : "—"}
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {tab === "domains" && (
+            <Card title="Allowed Domains" subtitle="Only these websites can load the widget for this company.">
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+                  <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="example.com" />
+                  <Button onClick={addDomainFromInput} variant="secondary">Add</Button>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {domainDraft.map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => removeDomain(d)}
+                      style={{
+                        border: `1px solid ${UI.border}`,
+                        background: UI.surface2,
+                        borderRadius: 999,
+                        padding: "7px 10px",
+                        fontSize: 12.5,
+                        cursor: "pointer",
+                      }}
+                      title="Click to remove"
+                    >
+                      {d} ✕
+                    </button>
+                  ))}
+                  {domainDraft.length === 0 ? <div style={{ color: UI.text2, fontSize: 13 }}>No domains yet.</div> : null}
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <Button onClick={saveDomains} disabled={!domainDirty || domainSaving} variant="primary">
+                    {domainSaving ? "Saving…" : "Save domains"}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {tab === "limits" && (
+            <Card title="Limits" subtitle="Edit the JSON limits config for this company.">
+              <div style={{ display: "grid", gap: 12 }}>
+                <Textarea
+                  value={limitsText}
+                  onChange={(e) => { setLimitsText(e.target.value); setLimitsDirty(true); }}
+                  style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
+                    {limitsSaving ? "Saving…" : "Save limits"}
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {tab === "admins" && (
+            <div style={{ display: "grid", gap: 14 }}>
+              <Card title="Admins" subtitle="Manage admins and invites for this company." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
+                {adminsLoading ? (
+                  <div style={{ color: UI.text2 }}>Loading…</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {admins.map((a) => (
+                      <div
+                        key={a.user_id}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 160px 120px",
+                          gap: 10,
+                          alignItems: "center",
+                          border: `1px solid ${UI.border}`,
+                          borderRadius: UI.radius,
+                          padding: 12,
+                          background: "#fff",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 900 }}>{a.email || a.user_id}</div>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>Created: {new Date(a.created_at).toLocaleString()}</div>
+                        </div>
+
+                        <select
+                          value={a.role}
+                          onChange={(e) => setAdminRole(a.user_id, e.target.value)}
+                          disabled={adminMutating === a.user_id}
+                          style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
+                        >
+                          <option value="owner">owner</option>
+                          <option value="admin">admin</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+
+                        <Button onClick={() => removeAdmin(a.user_id)} disabled={adminMutating === a.user_id} variant="danger">
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                    {admins.length === 0 ? <div style={{ color: UI.text2 }}>No admins found.</div> : null}
+                  </div>
+                )}
+              </Card>
+
+              <Card title="Invites" subtitle="Create invite links for new admins.">
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 140px", gap: 10 }}>
+                    <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email (optional)" />
+                    <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                      <option value="admin">admin</option>
+                      <option value="viewer">viewer</option>
+                      <option value="owner">owner</option>
+                    </select>
+                    <Input type="number" min={1} max={30} value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value || 7))} />
+                    <Button onClick={createInvite} disabled={inviteCreating} variant="primary">
+                      {inviteCreating ? "Creating…" : "Create Invite"}
+                    </Button>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {invites.map((inv) => (
+                      <div
+                        key={inv.id}
+                        style={{
+                          border: `1px solid ${UI.border}`,
+                          borderRadius: UI.radius,
+                          padding: 12,
+                          background: "#fff",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 900 }}>{inv.email || "(no email)"}</div>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                            Role: {inv.role} · Status: {inv.status} · Expires: {new Date(inv.expires_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <Button onClick={() => copy(inviteLink(inv.token))}>Copy link</Button>
+                          <Button onClick={() => revokeInvite(inv.id)} variant="danger" disabled={inv.status === "revoked"}>
+                            Revoke
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    {invites.length === 0 ? <div style={{ color: UI.text2 }}>No invites.</div> : null}
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {tab === "embed" && (
+            <Card title="Embed" subtitle="Copy & paste this snippet into the customer website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+              <CodeBox text={embedSnippet} />
+            </Card>
+          )}
+
+          {tab === "billing" && (
+            <Card title="Billing" subtitle="Manage plan and Stripe checkout.">
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <BillingActions companyId={id as any} />
+              </div>
+
+              <CodeBox text={safeJsonStringify(billingInfo)} />
+            </Card>
+          )}
+
+          {tab === "test-chat" && (
+            <Card title="Test Chat" subtitle="Test the widget auth + conversation + message flow.">
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <Button onClick={testGetToken} variant="secondary">Get Token</Button>
+                <Button onClick={testStartConversation} variant="secondary">Start Conversation</Button>
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
+                  <Input value={testInput} onChange={(e) => setTestInput(e.target.value)} placeholder="Type a message…" />
+                  <Button onClick={testSend} disabled={testSending} variant="primary">
+                    {testSending ? "Sending…" : "Send"}
+                  </Button>
+                </div>
+
+                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: UI.surface2, minHeight: 220 }}>
+                  {testLog.length === 0 ? (
+                    <div style={{ color: UI.text2, fontSize: 13.5 }}>No messages yet.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {testLog.map((m, idx) => (
+                        <div key={idx} style={{ fontSize: 13.5 }}>
+                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>{m.role}:</b>{" "}
+                          <span style={{ color: UI.text }}>{m.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {tab === "knowledge" && (
+            <div style={{ display: "grid", gap: 14 }}>
+              <Card title="Website Import" subtitle="Import website content into knowledge base.">
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
+                    <Input value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="https://tamtamcorp.tech/leadgenerator" />
+                    <Input type="number" min={1} max={10} value={importMaxPages} onChange={(e) => setImportMaxPages(Number(e.target.value || 5))} />
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Button onClick={importWebsite} disabled={importing} variant="primary">
+                      {importing ? "Importing…" : "Import Website"}
+                    </Button>
+                    <Button onClick={() => { setImportResult(null); setImportUrl(""); setImportMaxPages(5); }} variant="secondary">
+                      Reset
+                    </Button>
+                  </div>
+
+                  {importResult ? <CodeBox text={safeJsonStringify(importResult)} /> : null}
+                </div>
+              </Card>
+
+              <Card title="Manual Knowledge Ingest" subtitle="Paste text to ingest into knowledge base.">
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
+                    <Input value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
+                    <Textarea value={kbText} onChange={(e) => setKbText(e.target.value)} style={{ minHeight: 220 }} />
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Button onClick={ingestKnowledge} disabled={kbIngesting} variant="primary">
+                      {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
+                    </Button>
+                    <Button onClick={() => setKbText("")} variant="secondary">Clear</Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {tab === "leads" && (
+            <Card title="Leads" subtitle="Search and filter leads for this company.">
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px", gap: 10 }}>
+                  <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search name, email, phone, tags…" />
+                  <select value={leadBand} onChange={(e) => setLeadBand(e.target.value as any)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                    <option value="all">all</option>
+                    <option value="cold">cold</option>
+                    <option value="warm">warm</option>
+                    <option value="hot">hot</option>
+                  </select>
+                  <Button onClick={loadLeads} disabled={leadsLoading} variant="secondary">
+                    {leadsLoading ? "Loading…" : "Refresh"}
+                  </Button>
+                </div>
+
+                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
+                    <div>Lead</div>
+                    <div>Band</div>
+                    <div>Score</div>
+                    <div>Updated</div>
+                  </div>
+
+                  {filteredLeads.length === 0 ? (
+                    <div style={{ padding: 12, color: UI.text2 }}>No leads.</div>
+                  ) : (
+                    filteredLeads.map((l) => (
+                      <div key={l.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "10px 12px", borderTop: `1px solid ${UI.border}` }}>
+                        <div>
+                          <div style={{ fontWeight: 900 }}>{l.name || "(unknown)"}</div>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>{l.email || l.phone || l.id}</div>
+                        </div>
+                        <div style={{ textTransform: "uppercase", fontSize: 12.5, color: UI.text2 }}>{l.score_band}</div>
+                        <div style={{ fontWeight: 900 }}>{l.score_total}</div>
+                        <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleDateString()}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </Card>
+          )}
+        </>
+      )}
+
+      {toast && (
+        <div
+          onClick={() => setToast(null)}
+          style={{
+            position: "fixed",
+            right: 18,
+            bottom: 18,
+            background: "#fff",
+            color: UI.text,
+            padding: "12px 14px",
+            borderRadius: 16,
+            border: `1px solid ${UI.border}`,
+            boxShadow: UI.shadow,
+            cursor: "pointer",
+            fontSize: 13.5,
+            maxWidth: 360,
+          }}
+        >
+          <div style={{ fontWeight: 900, marginBottom: 2 }}>Notice</div>
+          <div style={{ color: UI.text2 }}>{toast}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: UI.text3 }}>Click to dismiss</div>
+        </div>
+      )}
     </div>
   );
 }
