@@ -8,7 +8,7 @@ type Company = { id: string; name: string; status: string; created_at: string };
 type Keys = {
   company_id: string;
   public_key: string;
-  secret_key: string;
+  secret_key: string | null;
   allowed_domains: string[];
   created_at: string;
 };
@@ -43,7 +43,6 @@ type DetailResponse = {
   keys: Keys | null;
   settings: Settings;
   admins?: AdminRow[];
-  // OPTIONAL: if your API adds it later, UI will auto-use it.
   my_role?: "owner" | "admin" | "viewer";
 };
 
@@ -91,9 +90,15 @@ const UI = {
 function normalizeHost(input: string): string {
   return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "");
 }
-function uniq(arr: string[]) { return Array.from(new Set(arr)); }
+function uniq(arr: string[]) {
+  return Array.from(new Set(arr));
+}
 function safeJsonStringify(v: any) {
-  try { return JSON.stringify(v ?? {}, null, 2); } catch { return "{}"; }
+  try {
+    return JSON.stringify(v ?? {}, null, 2);
+  } catch {
+    return "{}";
+  }
 }
 function normalizeUrlInput(raw: string) {
   const t = String(raw || "").trim();
@@ -248,14 +253,11 @@ export default function CompanyDetailPage() {
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("overview");
-
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-
   const [toast, setToast] = useState<string | null>(null);
 
-  // Keys actions
   const [rotating, setRotating] = useState(false);
 
   // Domains
@@ -302,7 +304,7 @@ export default function CompanyDetailPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
 
-  // Leads (keep as is)
+  // Leads (keep)
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
@@ -313,25 +315,30 @@ export default function CompanyDetailPage() {
     return window.location.pathname;
   }, [id]);
 
-  const myRole = data?.my_role; // optional if API supports it
-  const isOwner = myRole ? myRole === "owner" : true; // fallback = owner to avoid locking you out if API doesn't send my_role
+  const myRole = data?.my_role;
+  const isOwner = myRole ? myRole === "owner" : true; // safe fallback
 
   const visibleTabs = useMemo(() => {
-    const t: { key: Tab; label: string }[] = [
-      { key: "overview", label: "Overview" },
-      { key: "keys", label: "Keys" },
-      { key: "domains", label: "Domains" },
-      // limits only owner
+    return [
+      { key: "overview" as Tab, label: "Overview" },
+      { key: "keys" as Tab, label: "Keys" },
+      { key: "domains" as Tab, label: "Domains" },
       ...(isOwner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
-      { key: "admins", label: "Admins" },
-      { key: "embed", label: "Embed" },
-      { key: "billing", label: "Billing" },
-      { key: "test-chat", label: "Test-Chat" },
-      { key: "knowledge", label: "Knowledge" },
-      { key: "leads", label: "Leads" },
+      { key: "admins" as Tab, label: "Admins" },
+      { key: "embed" as Tab, label: "Embed" },
+      { key: "billing" as Tab, label: "Billing" },
+      { key: "test-chat" as Tab, label: "Test-Chat" },
+      { key: "knowledge" as Tab, label: "Knowledge" },
+      { key: "leads" as Tab, label: "Leads" },
     ];
-    return t;
   }, [isOwner]);
+
+  // ✅ ONLY DEFINED ONCE
+  const embedSnippet = useMemo(() => {
+    const pk = data?.keys?.public_key || "pk_xxx";
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
+  }, [data?.keys?.public_key]);
 
   async function load() {
     if (!id) return;
@@ -341,7 +348,11 @@ export default function CompanyDetailPage() {
       const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
       const text = await res.text();
       const json = (() => {
-        try { return JSON.parse(text); } catch { return { raw: text }; }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { raw: text };
+        }
       })();
 
       if (!res.ok) {
@@ -397,7 +408,7 @@ export default function CompanyDetailPage() {
     if (!id) return;
 
     const t = String(searchParams?.get("tab") || "overview").toLowerCase() as Tab;
-    const allowed = (visibleTabs.map((x) => x.key) as Tab[]);
+    const allowed = visibleTabs.map((x) => x.key);
     const next = (allowed as readonly string[]).includes(t) ? t : "overview";
     setTab(next);
 
@@ -424,12 +435,6 @@ export default function CompanyDetailPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
-
-  const embedSnippet = useMemo(() => {
-    const pk = data?.keys?.public_key || "pk_xxx";
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
-  }, [data?.keys?.public_key]);
 
   async function copy(text: string) {
     if (!text) return;
@@ -489,7 +494,11 @@ export default function CompanyDetailPage() {
     if (!isOwner) return setToast("Not allowed");
 
     let parsed: any = null;
-    try { parsed = JSON.parse(limitsText || "{}"); } catch { return setToast("Limits JSON invalid"); }
+    try {
+      parsed = JSON.parse(limitsText || "{}");
+    } catch {
+      return setToast("Limits JSON invalid");
+    }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setToast("Limits must be a JSON object");
 
     setLimitsSaving(true);
@@ -700,22 +709,11 @@ export default function CompanyDetailPage() {
     const status = billingInfo?.billing?.status || billingInfo?.status || "—";
     const planName = billingInfo?.plan?.name || billingInfo?.billing?.plan_key || billingInfo?.plan_key || "—";
     const end = billingInfo?.billing?.current_period_end || billingInfo?.current_period_end || null;
-    return {
-      status,
-      planName,
-      periodEnd: end ? new Date(end).toLocaleString() : null,
-    };
+    return { status, planName, periodEnd: end ? new Date(end).toLocaleString() : null };
   }, [billingInfo]);
-
-  const embedSnippet = useMemo(() => {
-    const pk = data?.keys?.public_key || "pk_xxx";
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
-  }, [data?.keys?.public_key]);
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {/* Tabs (role aware) */}
       <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} />
 
       {loadError ? (
@@ -728,7 +726,6 @@ export default function CompanyDetailPage() {
         <Card title="Loading" subtitle="Fetching company data…">Please wait…</Card>
       ) : (
         <>
-          {/* OVERVIEW (customer friendly: no internal ids/created) */}
           {tab === "overview" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <Card title="Setup" subtitle="Your widget setup at a glance.">
@@ -739,21 +736,16 @@ export default function CompanyDetailPage() {
                 </div>
               </Card>
 
-              <Card
-                title="Embed Snippet"
-                subtitle="Copy & paste this snippet into your website."
-                right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}
-              >
+              <Card title="Embed Snippet" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
                 <CodeBox text={embedSnippet} />
               </Card>
             </div>
           )}
 
-          {/* KEYS (buttons only here, secret hidden) */}
           {tab === "keys" && (
             <Card
               title="API Keys"
-              subtitle="Public key is used in the embed snippet. Secret key is hidden for now."
+              subtitle="Public key is used in the embed snippet. Secret key is hidden for customers."
               right={
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <Button onClick={load} variant="secondary">Refresh</Button>
@@ -781,7 +773,6 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
-          {/* DOMAINS (customer) */}
           {tab === "domains" && (
             <Card title="Allowed Domains" subtitle="Only these websites can load your widget.">
               <div style={{ display: "grid", gap: 12 }}>
@@ -820,12 +811,9 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
-          {/* LIMITS (owner only, hidden from clients) */}
           {tab === "limits" && (
             !isOwner ? (
-              <Card title="Not available" subtitle="This section is only available for the owner.">
-                —
-              </Card>
+              <Card title="Not available" subtitle="This section is only available for the owner.">—</Card>
             ) : (
               <Card title="Limits" subtitle="Owner-only limits config.">
                 <div style={{ display: "grid", gap: 12 }}>
@@ -844,7 +832,6 @@ export default function CompanyDetailPage() {
             )
           )}
 
-          {/* ADMINS (customers: invite admin/viewer only) */}
           {tab === "admins" && (
             <div style={{ display: "grid", gap: 14 }}>
               <Card title="Team Members" subtitle="Manage admins and viewers." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
@@ -877,8 +864,6 @@ export default function CompanyDetailPage() {
                           disabled={adminMutating === a.user_id}
                           style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
                         >
-                          {/* You can decide if role changes are allowed for customers.
-                              Keeping it as-is, but you can also lock it down by only allowing viewer/admin. */}
                           <option value="admin">admin</option>
                           <option value="viewer">viewer</option>
                           {isOwner ? <option value="owner">owner</option> : null}
@@ -898,14 +883,9 @@ export default function CompanyDetailPage() {
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 140px", gap: 10 }}>
                     <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email (optional)" />
-                    <select
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value)}
-                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                    >
+                    <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
                       <option value="admin">admin</option>
                       <option value="viewer">viewer</option>
-                      {/* owner invite only for owner */}
                       {isOwner ? <option value="owner">owner</option> : null}
                     </select>
                     <Input type="number" min={1} max={30} value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value || 7))} />
@@ -951,20 +931,14 @@ export default function CompanyDetailPage() {
             </div>
           )}
 
-          {/* EMBED */}
           {tab === "embed" && (
             <Card title="Embed" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
               <CodeBox text={embedSnippet} />
             </Card>
           )}
 
-          {/* BILLING (customer-friendly, no raw JSON) */}
           {tab === "billing" && (
-            <Card
-              title="Billing"
-              subtitle="Manage your plan and subscription."
-              right={<Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>}
-            >
+            <Card title="Billing" subtitle="Manage your plan and subscription." right={<Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>}>
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                   <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
@@ -983,7 +957,6 @@ export default function CompanyDetailPage() {
                   </div>
                 </div>
 
-                {/* Keep your existing actions but no JSON output */}
                 <div style={{ marginTop: 4 }}>
                   <BillingActions companyId={id as any} />
                 </div>
@@ -991,7 +964,6 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
-          {/* TEST CHAT (keep) */}
           {tab === "test-chat" && (
             <Card title="Test Chat" subtitle="Test the widget auth + conversation + message flow.">
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
@@ -1025,7 +997,6 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
-          {/* KNOWLEDGE (keep as-is, you said deeper later) */}
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
               <Card title="Website Import" subtitle="Import website content into knowledge base.">
@@ -1070,7 +1041,6 @@ export default function CompanyDetailPage() {
             </div>
           )}
 
-          {/* LEADS (keep as-is) */}
           {tab === "leads" && (
             <Card title="Leads" subtitle="Search and filter leads for this company.">
               <div style={{ display: "grid", gap: 12 }}>
