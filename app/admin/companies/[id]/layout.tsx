@@ -29,7 +29,6 @@ export default async function CompanyLayout(props: {
   return (
     <div style={{ minHeight: "100vh", background: UI.bg, fontFamily: UI.font, color: UI.text }}>
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 22px 64px" }}>
-        {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12.5, color: UI.text3, fontWeight: 650 }}>
@@ -92,7 +91,7 @@ export default async function CompanyLayout(props: {
           </div>
         </div>
 
-        {/* ✅ Tabs that ALWAYS work */}
+        {/* Tabs live here (single source of truth) */}
         <CompanyTabs />
 
         <div style={{ marginTop: 16 }}>{props.children}</div>
