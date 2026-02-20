@@ -178,7 +178,7 @@ async function upsertCompanyLead(params: {
   // If it's not commercial and no contact detected, we only update if a lead already exists.
   const { data: existing } = await supabaseServer
     .from("company_leads")
-    .select("id,name,email,phone,score_total,score_band,status,qualification_json,consents_json,tags")
+    .select("id,name,email,phone,score_total,score_band,status,lead_state,qualification_json,consents_json,tags,intent_score")
     .eq("company_id", params.company_id)
     .eq("conversation_id", params.conversation_id)
     .maybeSingle();
