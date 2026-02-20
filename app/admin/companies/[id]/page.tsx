@@ -68,6 +68,16 @@ type LeadRow = {
   updated_at: string;
 };
 
+type KnowledgeChunkRow = {
+  id: string;
+  company_id: string;
+  title: string;
+  content: string;
+  source_ref: string | null;
+  metadata: any;
+  created_at: string;
+};
+
 const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
@@ -258,6 +268,45 @@ function TabsBar({
 
 /** -------------------- Knowledge: manual pages types -------------------- */
 type KbPage = { url: string; title: string; text: string; captured_at: string };
+type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
+
+function Modal(props: { title: string; children: React.ReactNode; onClose: () => void; right?: React.ReactNode }) {
+  return (
+    <div
+      onClick={props.onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(17,24,39,0.35)",
+        display: "grid",
+        placeItems: "center",
+        padding: 18,
+        zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(980px, 100%)",
+          background: "#fff",
+          border: `1px solid ${UI.border}`,
+          borderRadius: 18,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.15)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: 16, borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div style={{ fontWeight: 900 }}>{props.title}</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {props.right}
+            <Button onClick={props.onClose} variant="secondary">Close</Button>
+          </div>
+        </div>
+        <div style={{ padding: 16 }}>{props.children}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
@@ -323,11 +372,20 @@ export default function CompanyDetailPage() {
   const [kbFetching, setKbFetching] = useState(false);
   const [kbFetchResult, setKbFetchResult] = useState<any>(null);
 
-  // Website Import
-  const [importUrl, setImportUrl] = useState("");
-  const [importMaxPages, setImportMaxPages] = useState(5);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<any>(null);
+  // Brand hints (from fetch-page)
+  const [kbBrandHints, setKbBrandHints] = useState<BrandHints | null>(null);
+
+  // Knowledge manager
+  const [kbChunks, setKbChunks] = useState<KnowledgeChunkRow[]>([]);
+  const [kbChunksLoading, setKbChunksLoading] = useState(false);
+  const [kbChunksQuery, setKbChunksQuery] = useState("");
+  const [kbChunksLimit, setKbChunksLimit] = useState(80);
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRow, setEditRow] = useState<KnowledgeChunkRow | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   // Leads
   const [leads, setLeads] = useState<LeadRow[]>([]);
@@ -355,10 +413,9 @@ export default function CompanyDetailPage() {
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
 
-  // URL -> tab (NO load here)
+  // URL -> tab
   useEffect(() => {
     if (!id) return;
-
     const raw = String(searchParams?.get("tab") || "overview").toLowerCase();
     const candidate = (ALL_TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
     const next = allowedTabsSet.has(candidate) ? candidate : "overview";
@@ -366,7 +423,7 @@ export default function CompanyDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams, allowedTabsSet]);
 
-  // Load company ONLY when id changes
+  // Load company
   useEffect(() => {
     if (!id) return;
     void load();
@@ -454,11 +511,28 @@ export default function CompanyDetailPage() {
     setLeads(json.leads ?? []);
   }
 
-  // Tab-specific loads (NO company reload)
+  async function loadKnowledgeChunks() {
+    if (!id) return;
+    setKbChunksLoading(true);
+    const qs = new URLSearchParams({
+      company_id: String(id),
+      q: kbChunksQuery || "",
+      limit: String(kbChunksLimit || 80),
+    }).toString();
+
+    const res = await fetch(`/api/admin/knowledge/chunks?${qs}`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+    setKbChunksLoading(false);
+    if (!res.ok) return setToast(json?.error || "chunks_load_failed");
+    setKbChunks(json?.chunks ?? []);
+  }
+
+  // Tab-specific loads
   useEffect(() => {
     if (tab === "billing") void loadBilling();
     if (tab === "admins") void loadInvites();
     if (tab === "leads") void loadLeads();
+    if (tab === "knowledge") void loadKnowledgeChunks();
 
     if (tab === "domains") {
       const current = data?.keys?.allowed_domains ?? [];
@@ -702,36 +776,7 @@ export default function CompanyDetailPage() {
 
     setToast(`Inserted ${json.chunks ?? json.inserted_chunks ?? "?"} chunks`);
     setKbText("");
-  }
-
-  async function importWebsite() {
-    if (!id) return setToast("Missing company id");
-    const u = normalizeUrlInput(importUrl);
-    if (!u) return setToast("Enter a website URL");
-
-    const pages = Number(importMaxPages || 5);
-    const max_pages = Math.max(1, Math.min(10, Math.floor(pages)));
-
-    setImporting(true);
-    setImportResult(null);
-
-    const res = await fetch(`/api/admin/companies/${id}/import/url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: u, max_pages }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setImporting(false);
-
-    if (!res.ok) {
-      setToast(json?.error || "website_import_failed");
-      setImportResult(json);
-      return;
-    }
-
-    setImportResult(json);
-    setToast(`Imported: ${json?.chunksInserted ?? 0} chunks`);
+    await loadKnowledgeChunks();
   }
 
   /** -------------------- Knowledge: Fetch Page + Pages list + Generate -------------------- */
@@ -758,6 +803,13 @@ export default function CompanyDetailPage() {
     setKbPageUrl(u);
     setKbPageTitle(String(json?.title || "").trim());
     setKbPageText(String(json?.text || "").trim());
+
+    setKbBrandHints({
+      primary: json?.colors?.primary_color_guess ?? null,
+      accent: json?.colors?.accent_color_guess ?? null,
+      logo_url: json?.colors?.logo_url ?? null,
+    });
+
     setToast("Page fetched. Now click Add Page.");
   }
 
@@ -799,6 +851,13 @@ export default function CompanyDetailPage() {
       company_id: id,
       website_url: kbPages[0]?.url || null,
       persist_profile: kbPersistProfile,
+      brand_hints: kbBrandHints
+        ? {
+            primary_color_guess: kbBrandHints.primary,
+            accent_color_guess: kbBrandHints.accent,
+            logo_url: kbBrandHints.logo_url,
+          }
+        : null,
       pages: kbPages.map((p) => ({ url: p.url, title: p.title, text: p.text, captured_at: p.captured_at })),
     };
 
@@ -814,6 +873,46 @@ export default function CompanyDetailPage() {
 
     if (!res.ok) return setToast(json?.error || "knowledge_pages_ingest_failed");
     setToast(`Inserted ${json.inserted_chunks ?? json.chunks ?? "?"} chunks`);
+    await loadKnowledgeChunks();
+  }
+
+  function openEdit(row: KnowledgeChunkRow) {
+    setEditRow(row);
+    setEditTitle(row.title || "");
+    setEditContent(row.content || "");
+    setEditOpen(true);
+  }
+
+  async function saveEdit() {
+    if (!editRow) return;
+    setEditSaving(true);
+
+    const res = await fetch("/api/admin/knowledge/chunks", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: id, id: editRow.id, title: editTitle, content: editContent }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setEditSaving(false);
+    if (!res.ok) return setToast(json?.error || "chunk_update_failed");
+
+    setToast("Chunk updated");
+    setEditOpen(false);
+    setEditRow(null);
+    await loadKnowledgeChunks();
+  }
+
+  async function deleteChunk(row: KnowledgeChunkRow) {
+    const ok = window.confirm("Delete this knowledge chunk? This cannot be undone.");
+    if (!ok) return;
+
+    const res = await fetch(`/api/admin/knowledge/chunks/delete?id=${encodeURIComponent(row.id)}&company_id=${encodeURIComponent(String(id))}`, { method: "DELETE" });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "chunk_delete_failed");
+
+    setToast("Chunk deleted");
+    await loadKnowledgeChunks();
   }
 
   const filteredLeads = useMemo(() => {
@@ -876,11 +975,7 @@ export default function CompanyDetailPage() {
                 </div>
               </Card>
 
-              <Card
-                title="Embed Snippet"
-                subtitle="Copy & paste this snippet into your website."
-                right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}
-              >
+              <Card title="Embed Snippet" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
                 <CodeBox text={embedSnippet} />
               </Card>
             </div>
@@ -905,16 +1000,7 @@ export default function CompanyDetailPage() {
                 <div>
                   <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Public Key</div>
                   <div style={{ display: "flex", gap: 10 }}>
-                    <code
-                      style={{
-                        flex: 1,
-                        padding: 12,
-                        borderRadius: UI.radius,
-                        border: `1px solid ${UI.border}`,
-                        background: UI.surface2,
-                        fontSize: 12.5,
-                      }}
-                    >
+                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
                       {data.keys?.public_key ?? "—"}
                     </code>
                     <Button onClick={() => copy(data.keys?.public_key ?? "")}>Copy</Button>
@@ -981,11 +1067,7 @@ export default function CompanyDetailPage() {
                       setLimitsText(e.target.value);
                       setLimitsDirty(true);
                     }}
-                    style={{
-                      minHeight: 260,
-                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      fontSize: 12.5,
-                    }}
+                    style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
                   />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                     <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
@@ -998,15 +1080,7 @@ export default function CompanyDetailPage() {
 
           {tab === "admins" && (
             <div style={{ display: "grid", gap: 14 }}>
-              <Card
-                title="Team Members"
-                subtitle="Manage admins and viewers."
-                right={
-                  <Button onClick={loadInvites} disabled={adminsLoading}>
-                    Refresh
-                  </Button>
-                }
-              >
+              <Card title="Team Members" subtitle="Manage admins and viewers." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
                 {adminsLoading ? (
                   <div style={{ color: UI.text2 }}>Loading…</div>
                 ) : (
@@ -1034,13 +1108,7 @@ export default function CompanyDetailPage() {
                           value={a.role}
                           onChange={(e) => setAdminRole(a.user_id, e.target.value)}
                           disabled={adminMutating === a.user_id}
-                          style={{
-                            padding: "10px 12px",
-                            borderRadius: UI.radius,
-                            border: `1px solid ${UI.border}`,
-                            background: "#fff",
-                            fontSize: 13.5,
-                          }}
+                          style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
                         >
                           <option value="admin">admin</option>
                           <option value="viewer">viewer</option>
@@ -1064,12 +1132,7 @@ export default function CompanyDetailPage() {
                     <select
                       value={inviteRole}
                       onChange={(e) => setInviteRole(e.target.value)}
-                      style={{
-                        padding: "11px 12px",
-                        borderRadius: UI.radius,
-                        border: `1px solid ${UI.border}`,
-                        background: "#fff",
-                      }}
+                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
                     >
                       <option value="admin">admin</option>
                       <option value="viewer">viewer</option>
@@ -1192,7 +1255,7 @@ export default function CompanyDetailPage() {
 
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
-              {/* NEW: Fetch Page + Add Page + Generate Knowledge */}
+              {/* Manual Pages -> Generate */}
               <Card
                 title="Manual Pages → Audit → Knowledge"
                 subtitle="URL rein → Fetch Page holt Text + Farb-Hints → Add Page → Generate Knowledge."
@@ -1220,14 +1283,13 @@ export default function CompanyDetailPage() {
                   <Textarea value={kbPageText} onChange={(e) => setKbPageText(e.target.value)} placeholder="Page text will appear here…" style={{ minHeight: 180 }} />
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={addKbPage} variant="secondary">
-                      Add Page
-                    </Button>
+                    <Button onClick={addKbPage} variant="secondary">Add Page</Button>
                     <Button
                       onClick={() => {
                         setKbPages([]);
                         setKbAuditResult(null);
                         setKbFetchResult(null);
+                        setKbBrandHints(null);
                         setKbPageUrl("");
                         setKbPageTitle("");
                         setKbPageText("");
@@ -1237,6 +1299,12 @@ export default function CompanyDetailPage() {
                       Clear
                     </Button>
                   </div>
+
+                  {kbBrandHints ? (
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                      Brand hints: <b>primary</b> {kbBrandHints.primary || "—"} · <b>accent</b> {kbBrandHints.accent || "—"}
+                    </div>
+                  ) : null}
 
                   {kbFetchResult ? <CodeBox text={safeJsonStringify(kbFetchResult)} /> : null}
 
@@ -1264,9 +1332,7 @@ export default function CompanyDetailPage() {
                               {p.url} · {p.text.length.toLocaleString()} chars
                             </div>
                           </div>
-                          <Button onClick={() => removeKbPage(p.url)} variant="danger">
-                            Remove
-                          </Button>
+                          <Button onClick={() => removeKbPage(p.url)} variant="danger">Remove</Button>
                         </div>
                       ))
                     )}
@@ -1276,35 +1342,99 @@ export default function CompanyDetailPage() {
                 </div>
               </Card>
 
-              {/* Existing Website Import */}
-              <Card title="Website Import" subtitle="Import website content into knowledge base.">
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
-                    <Input value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="https://example.com" />
-                    <Input type="number" min={1} max={10} value={importMaxPages} onChange={(e) => setImportMaxPages(Number(e.target.value || 5))} />
-                  </div>
-
+              {/* Knowledge Chunks Manager */}
+              <Card
+                title="Knowledge Chunks Manager"
+                subtitle="View, search, edit, and delete knowledge chunks for this company."
+                right={
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={importWebsite} disabled={importing} variant="primary">
-                      {importing ? "Importing…" : "Import Website"}
+                    <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="secondary">
+                      {kbChunksLoading ? "Loading…" : "Refresh"}
                     </Button>
-                    <Button
-                      onClick={() => {
-                        setImportResult(null);
-                        setImportUrl("");
-                        setImportMaxPages(5);
-                      }}
-                      variant="secondary"
-                    >
-                      Reset
+                  </div>
+                }
+              >
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px", gap: 10 }}>
+                    <Input value={kbChunksQuery} onChange={(e) => setKbChunksQuery(e.target.value)} placeholder="Search title, content, source…" />
+                    <Input
+                      type="number"
+                      min={10}
+                      max={200}
+                      value={kbChunksLimit}
+                      onChange={(e) => setKbChunksLimit(Number(e.target.value || 80))}
+                    />
+                    <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="primary">
+                      Apply
                     </Button>
                   </div>
 
-                  {importResult ? <CodeBox text={safeJsonStringify(importResult)} /> : null}
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 120px", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
+                      <div>Title</div>
+                      <div>Type</div>
+                      <div>Confidence</div>
+                      <div>Actions</div>
+                    </div>
+
+                    {kbChunks.length === 0 ? (
+                      <div style={{ padding: 12, color: UI.text2 }}>No chunks found.</div>
+                    ) : (
+                      kbChunks.map((c) => {
+                        const type = String(c?.metadata?.type || "—");
+                        const conf = String(c?.metadata?.confidence || "—");
+                        return (
+                          <div key={c.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 120px", padding: "10px 12px", borderTop: `1px solid ${UI.border}`, gap: 10, alignItems: "center" }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                              <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {(c.source_ref || "—")} · {new Date(c.created_at).toLocaleString()}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{type}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{conf}</div>
+                            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button
+                                type="button"
+                                onClick={() => openEdit(c)}
+                                style={{
+                                  border: `1px solid ${UI.border}`,
+                                  background: "#fff",
+                                  borderRadius: 999,
+                                  padding: "7px 10px",
+                                  fontSize: 12.5,
+                                  cursor: "pointer",
+                                  fontWeight: 900,
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteChunk(c)}
+                                style={{
+                                  border: "1px solid #FECACA",
+                                  background: "#fff",
+                                  color: UI.danger,
+                                  borderRadius: 999,
+                                  padding: "7px 10px",
+                                  fontSize: 12.5,
+                                  cursor: "pointer",
+                                  fontWeight: 900,
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               </Card>
 
-              {/* Existing Manual Knowledge Ingest */}
+              {/* Manual Knowledge Ingest */}
               <Card title="Manual Knowledge Ingest" subtitle="Paste text to ingest into knowledge base.">
                 <div style={{ display: "grid", gap: 12 }}>
                   <div>
@@ -1320,9 +1450,7 @@ export default function CompanyDetailPage() {
                     <Button onClick={ingestKnowledge} disabled={kbIngesting} variant="primary">
                       {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
                     </Button>
-                    <Button onClick={() => setKbText("")} variant="secondary">
-                      Clear
-                    </Button>
+                    <Button onClick={() => setKbText("")} variant="secondary">Clear</Button>
                   </div>
                 </div>
               </Card>
@@ -1378,6 +1506,35 @@ export default function CompanyDetailPage() {
           )}
         </>
       )}
+
+      {editOpen && editRow ? (
+        <Modal
+          title="Edit Knowledge Chunk"
+          onClose={() => {
+            setEditOpen(false);
+            setEditRow(null);
+          }}
+          right={
+            <Button onClick={saveEdit} disabled={editSaving} variant="primary">
+              {editSaving ? "Saving…" : "Save"}
+            </Button>
+          }
+        >
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
+              <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
+              <Textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} style={{ minHeight: 320 }} />
+            </div>
+            <div style={{ fontSize: 12.5, color: UI.text3 }}>
+              Note: Embeddings are not re-generated on edit yet. If you want perfect retrieval, we can re-embed on save.
+            </div>
+          </div>
+        </Modal>
+      ) : null}
 
       {toast && (
         <div

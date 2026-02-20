@@ -107,6 +107,12 @@ type IngestPage = {
   captured_at?: string | null;
 };
 
+type BrandHints = {
+  primary_color_guess?: string | null;
+  accent_color_guess?: string | null;
+  logo_url?: string | null;
+};
+
 function normalizePages(pages: IngestPage[]) {
   const out: Array<{ url: string; title: string; text: string; captured_at: string | null }> = [];
 
@@ -136,6 +142,98 @@ function normalizePages(pages: IngestPage[]) {
   return Array.from(byUrl.values());
 }
 
+function isHexColor(x: any) {
+  const s = String(x || "").trim();
+  return /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s);
+}
+
+/** deterministic fallback chunking when model outputs too few chunks */
+function extractPricingChunksFromText(page: { url: string; title: string; text: string }) {
+  const t = page.text;
+
+  // Capture blocks around plan names (works for your German page)
+  const planNames = ["Starter", "Wachstum", "Pro", "Custom"];
+  const chunks: Array<{ title: string; content: string }> = [];
+
+  for (const name of planNames) {
+    const idx = t.toLowerCase().indexOf(name.toLowerCase());
+    if (idx === -1) continue;
+
+    // take a window after plan heading
+    const window = t.slice(idx, idx + 1800);
+    // stop early if we hit next plan
+    let end = window.length;
+    for (const other of planNames) {
+      if (other === name) continue;
+      const j = window.toLowerCase().indexOf(other.toLowerCase());
+      if (j > 50) end = Math.min(end, j);
+    }
+    const block = cleanText(window.slice(0, end));
+    if (block.length < 200) continue;
+
+    chunks.push({
+      title: `Pricing Plan: ${name}`,
+      content: `PRICING PLAN\nName: ${name}\nSource: ${page.url}\n\n${block}`,
+    });
+  }
+
+  return chunks;
+}
+
+function extractFeatureChunkFromText(page: { url: string; title: string; text: string }) {
+  const t = page.text;
+
+  // Heuristic: find "Alles, was Sie brauchen" / feature bullet-ish section
+  const anchors = [
+    "Alles, was Sie brauchen",
+    "24/7",
+    "Vollständig gebrandmarkt",
+    "Gesprächsanalysen",
+    "Multi-Tenant",
+  ];
+
+  let start = -1;
+  for (const a of anchors) {
+    const i = t.toLowerCase().indexOf(a.toLowerCase());
+    if (i !== -1) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  const window = cleanText(t.slice(start, start + 1600));
+  if (window.length < 300) return null;
+
+  return {
+    title: "Core Features",
+    content: `CORE FEATURES\nSource: ${page.url}\n\n${window}`,
+  };
+}
+
+function extractIndustriesChunkFromText(page: { url: string; title: string; text: string }) {
+  const t = page.text;
+  const anchor = "Entwickelt für";
+  const i = t.toLowerCase().indexOf(anchor.toLowerCase());
+  if (i === -1) return null;
+  const window = cleanText(t.slice(i, i + 900));
+  if (window.length < 200) return null;
+  return {
+    title: "Industries & Target Customers",
+    content: `TARGET INDUSTRIES\nSource: ${page.url}\n\n${window}`,
+  };
+}
+
+function extractCtasChunkFromText(page: { url: string; title: string; text: string }) {
+  const links = page.text.match(/https?:\/\/[^\s)]+/g) || [];
+  const uniq = Array.from(new Set(links)).slice(0, 25);
+  if (!uniq.length) return null;
+  return {
+    title: "Calls to Action & Links",
+    content: `CTAS & LINKS\nSource: ${page.url}\n\n- ${uniq.join("\n- ")}`,
+  };
+}
+
 /**
  * Build semantic chunks + missing-info report.
  * Facts-only, no guessing.
@@ -144,9 +242,9 @@ async function auditAndStructurePages(input: {
   company_id: string;
   website_url?: string | null;
   pages: Array<{ url: string; title: string; text: string; captured_at: string | null }>;
+  brand_hints?: BrandHints | null;
 }) {
-  // Snippet risk heuristic:
-  // if many pages have very short text, extraction is likely partial/snippet-like
+  // Snippet risk heuristic
   const lens = input.pages.map((p) => p.text.length);
   const shortCount = lens.filter((l) => l < 800).length;
   const snippet_risk =
@@ -170,21 +268,24 @@ You are Nova, an enterprise knowledge-base builder for a multi-tenant AI chat wi
 You will receive JSON with:
 - company_id
 - website_url (may be empty)
+- brand_hints (may be empty): { primary_color_guess, accent_color_guess, logo_url }
 - pages[]: { url, title, text, captured_at }
 
 TASK:
 1) Audit crawl coverage and content quality.
 2) Extract ONLY facts explicitly present in pages. Do NOT guess.
-3) Build a structured company profile and suggested branding tokens ONLY if inferable.
+3) Use brand_hints as branding if provided and valid hex/url.
 4) Create semantically clean knowledge chunks for retrieval (RAG).
+   IMPORTANT: Produce MULTIPLE chunks:
+   - at least: about, services/features, pricing (one chunk per plan if possible), contact/cta if available.
 5) Detect missing critical business information (pricing, services, location, contact, hours, booking/order flow, policies).
 6) Propose next best URLs to crawl to fill gaps.
 
 STRICT RULES:
-- Use ONLY provided pages as sources.
+- Use ONLY provided pages as sources (except brand_hints).
 - If unknown, output "unknown" and list it in missing_info.
 - Do NOT invent prices, addresses, services, or claims.
-- Remove boilerplate (nav/footer/cookies) implicitly; only keep main content.
+- Keep chunks concise and focused.
 
 OUTPUT: Return STRICT JSON with this exact schema:
 
@@ -255,17 +356,97 @@ OUTPUT: Return STRICT JSON with this exact schema:
     throw new Error("audit_structuring_failed:invalid_json");
   }
 
-  // Force our heuristic snippet risk if model returns something else
+  // Force our heuristic snippet risk
   if (!structured?.audit) structured.audit = {};
   structured.audit.pages_count = input.pages.length;
   structured.audit.snippet_risk = structured.audit.snippet_risk || snippet_risk;
+
+  // Apply brand_hints if present (don’t let model return "unknown" if we already know)
+  const bh = input.brand_hints || {};
+  if (!structured.branding) structured.branding = {};
+
+  if (isHexColor(bh.primary_color_guess)) structured.branding.primary_color_guess = bh.primary_color_guess;
+  if (isHexColor(bh.accent_color_guess)) structured.branding.accent_color_guess = bh.accent_color_guess;
+  if (bh.logo_url && String(bh.logo_url).trim() && bh.logo_url !== "unknown") structured.branding.logo_url = bh.logo_url;
+
+  // Deterministic fallback: if model produced too few chunks, supplement from text
+  const chunks = Array.isArray(structured?.knowledge_chunks) ? structured.knowledge_chunks : [];
+  const MIN = 8;
+  if (chunks.length < MIN) {
+    const p0 = input.pages[0];
+
+    const supplements: any[] = [];
+
+    // Overview chunk
+    supplements.push({
+      type: "about",
+      title: "Overview (Fallback)",
+      source_url: p0.url,
+      content: cleanText(p0.text.slice(0, 900)),
+      keywords: ["overview", "company", "about"],
+      confidence: structured?.audit?.snippet_risk === "high" ? "low" : "medium",
+    });
+
+    // Features
+    const feat = extractFeatureChunkFromText(p0);
+    if (feat) {
+      supplements.push({
+        type: "services",
+        title: feat.title,
+        source_url: p0.url,
+        content: feat.content,
+        keywords: ["features", "service", "lead", "automation"],
+        confidence: "medium",
+      });
+    }
+
+    // Industries
+    const ind = extractIndustriesChunkFromText(p0);
+    if (ind) {
+      supplements.push({
+        type: "services",
+        title: ind.title,
+        source_url: p0.url,
+        content: ind.content,
+        keywords: ["industries", "customers", "target"],
+        confidence: "medium",
+      });
+    }
+
+    // Pricing plans
+    const plans = extractPricingChunksFromText(p0);
+    for (const pl of plans) {
+      supplements.push({
+        type: "pricing",
+        title: pl.title,
+        source_url: p0.url,
+        content: pl.content,
+        keywords: ["pricing", "plan", "starter", "wachstum", "pro", "custom"],
+        confidence: "high",
+      });
+    }
+
+    // CTAs/links
+    const cta = extractCtasChunkFromText(p0);
+    if (cta) {
+      supplements.push({
+        type: "contact",
+        title: cta.title,
+        source_url: p0.url,
+        content: cta.content,
+        keywords: ["cta", "stripe", "whatsapp", "contact"],
+        confidence: "medium",
+      });
+    }
+
+    structured.knowledge_chunks = [...chunks, ...supplements].slice(0, 60);
+  }
 
   return structured;
 }
 
 /**
  * Insert semantic chunks into knowledge_chunks with embeddings.
- * Also stores source_url and a stable hash in metadata so you can dedupe later.
  */
 async function embedAndInsertSemanticChunksFromAudit(company_id: string, auditJson: any) {
   const chunks = Array.isArray(auditJson?.knowledge_chunks) ? auditJson.knowledge_chunks : [];
@@ -282,7 +463,6 @@ async function embedAndInsertSemanticChunksFromAudit(company_id: string, auditJs
 
       const hash = sha256(`${company_id}::${source_url || ""}::${title}::${content}`);
 
-      // Confidence adjustment if snippet risk is high
       const snippetRisk = String(auditJson?.audit?.snippet_risk || "").toLowerCase();
       const finalConfidence =
         snippetRisk === "high" && confidence === "high" ? "medium" : confidence;
@@ -304,43 +484,45 @@ async function embedAndInsertSemanticChunksFromAudit(company_id: string, auditJs
     })
     .filter(Boolean) as Array<{ company_id: string; title: string; content: string; source_ref?: string | null; metadata?: any }>;
 
-  // Safety: don't embed unlimited
   const limited = cleaned.slice(0, 120);
-
   return embedAndInsertRows(limited);
 }
 
 /**
- * Optionally persist branding + company info into company_settings.branding_json
- * (best-effort merge; if table schema differs, it won't block ingest).
+ * Persist branding + inferred profile into company_settings.branding_json
  */
 async function persistBrandingAndProfile(company_id: string, auditJson: any) {
   const profile = auditJson?.company_profile || null;
   const branding = auditJson?.branding || null;
   if (!profile && !branding) return;
 
-  // Load existing
   const { data: existing, error: selErr } = await supabaseServer
     .from("company_settings")
     .select("branding_json")
     .eq("company_id", company_id)
     .maybeSingle();
 
-  // If table missing or RLS etc., don't block ingest
   if (selErr) return;
 
   const prev = (existing?.branding_json || {}) as any;
 
+  const inferredPrimary =
+    branding?.primary_color_guess && branding.primary_color_guess !== "unknown" ? branding.primary_color_guess : undefined;
+  const inferredAccent =
+    branding?.accent_color_guess && branding.accent_color_guess !== "unknown" ? branding.accent_color_guess : undefined;
+  const inferredLogo =
+    branding?.logo_url && branding.logo_url !== "unknown" ? branding.logo_url : undefined;
+
   const next = {
     ...prev,
-    // keep existing if already set, otherwise fill from inference
     company_name: prev.company_name || (profile?.company_name && profile.company_name !== "unknown" ? profile.company_name : undefined),
     greeting: prev.greeting || (branding?.greeting_suggestion ? branding.greeting_suggestion : undefined),
-    primary: prev.primary || (branding?.primary_color_guess && branding.primary_color_guess !== "unknown" ? branding.primary_color_guess : undefined),
-    accent: prev.accent || (branding?.accent_color_guess && branding.accent_color_guess !== "unknown" ? branding.accent_color_guess : undefined),
-    logo_url: prev.logo_url || (branding?.logo_url && branding.logo_url !== "unknown" ? branding.logo_url : undefined),
 
-    // store full profile for later usage in admin (optional)
+    // normalize to your earlier admin UI "primary/accent/logo_url"
+    primary: prev.primary || inferredPrimary,
+    accent: prev.accent || inferredAccent,
+    logo_url: prev.logo_url || inferredLogo,
+
     _inferred: {
       updated_at: new Date().toISOString(),
       company_profile: profile,
@@ -349,15 +531,11 @@ async function persistBrandingAndProfile(company_id: string, auditJson: any) {
     },
   };
 
-  // Upsert
   const { error: upErr } = await supabaseServer
     .from("company_settings")
     .upsert({ company_id, branding_json: next }, { onConflict: "company_id" });
 
-  if (upErr) {
-    // don't block ingest
-    return;
-  }
+  if (upErr) return;
 }
 
 /** --------- existing crawler_data structurer (keep) --------- */
@@ -501,6 +679,7 @@ export async function POST(req: Request) {
    *   company_id,
    *   website_url?: "https://example.com",
    *   pages: [{ url, title?, text, captured_at? }],
+   *   brand_hints?: { primary_color_guess?, accent_color_guess?, logo_url? },
    *   persist_profile?: true
    * }
    */
@@ -508,11 +687,18 @@ export async function POST(req: Request) {
     const pages = normalizePages(body.pages as IngestPage[]);
     const website_url = String(body?.website_url || "").trim() || null;
 
+    const brand_hints: BrandHints | null = body?.brand_hints && typeof body.brand_hints === "object"
+      ? {
+          primary_color_guess: body.brand_hints.primary_color_guess ?? null,
+          accent_color_guess: body.brand_hints.accent_color_guess ?? null,
+          logo_url: body.brand_hints.logo_url ?? null,
+        }
+      : null;
+
     if (!pages.length) {
       return NextResponse.json({ error: "pages_required", details: "No valid pages with url+text found." }, { status: 400 });
     }
 
-    // Safety: cap pages per request
     const capped = pages.slice(0, 25);
 
     try {
@@ -520,12 +706,11 @@ export async function POST(req: Request) {
         company_id,
         website_url,
         pages: capped,
+        brand_hints,
       });
 
-      // embed semantic chunks
       const r = await embedAndInsertSemanticChunksFromAudit(company_id, structured);
 
-      // optional: persist inferred profile + branding
       const persist_profile = !!body?.persist_profile;
       if (persist_profile) {
         await persistBrandingAndProfile(company_id, structured);
@@ -551,7 +736,7 @@ export async function POST(req: Request) {
   }
 
   /**
-   * Existing mode: structured crawler JSON (if you still use it sometimes)
+   * Existing mode: structured crawler JSON
    */
   if (body?.crawler_data) {
     try {
@@ -575,7 +760,7 @@ export async function POST(req: Request) {
   }
 
   /**
-   * Existing mode: URL(s) import via importFromWebsite (keep)
+   * Existing mode: URL(s) import via importFromWebsite
    */
   const content = String(body?.content || "").trim();
   const title = String(body?.title || "Manual Entry").trim();
@@ -593,7 +778,7 @@ export async function POST(req: Request) {
     const maxPages = Number.isFinite(Number(body?.max_pages)) ? Number(body.max_pages) : 5;
     const companyNameHint = String(body?.company_name_hint || "").trim() || undefined;
 
-    const limitedUrls = urls.slice(0, 3); // safety
+    const limitedUrls = urls.slice(0, 3);
     const results: any[] = [];
 
     for (const url of limitedUrls) {
