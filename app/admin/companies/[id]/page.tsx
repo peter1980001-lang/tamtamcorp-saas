@@ -408,9 +408,12 @@ const isOwner = myRole === "owner";
 useEffect(() => {
   if (!id) return;
 
-  const t = String(searchParams?.get("tab") || "overview").toLowerCase() as Tab;
-  setTab(t as Tab);
+  // read tab from URL once per navigation
+  const t = String(searchParams?.get("tab") || "overview").toLowerCase();
+  const next = (ALL_TABS as readonly string[]).includes(t) ? (t as Tab) : "overview";
+  setTab(next);
 
+  // load company once when the route param changes
   load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [id]);
