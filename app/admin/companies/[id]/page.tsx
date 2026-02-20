@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import BillingActions from "./_components/BillingActions";
 
 type Company = { id: string; name: string; status: string; created_at: string };
@@ -110,7 +110,7 @@ function normalizeUrlInput(raw: string) {
 function Card(props: { title?: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div style={{ background: UI.surface, border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
-      {(props.title || props.right) ? (
+      {props.title || props.right ? (
         <div style={{ padding: "18px 18px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
             {props.title ? <div style={{ fontWeight: 900, fontSize: 14, color: UI.text }}>{props.title}</div> : null}
@@ -207,7 +207,15 @@ function CodeBox({ text }: { text: string }) {
   );
 }
 
-function TabsBar({ tabs, active, basePath }: { tabs: { key: Tab; label: string }[]; active: Tab; basePath: string }) {
+function TabsBar({
+  tabs,
+  active,
+  onSelect,
+}: {
+  tabs: { key: Tab; label: string }[];
+  active: Tab;
+  onSelect: (t: Tab) => void;
+}) {
   return (
     <div
       style={{
@@ -223,24 +231,23 @@ function TabsBar({ tabs, active, basePath }: { tabs: { key: Tab; label: string }
     >
       {tabs.map((t) => {
         const isActive = active === t.key;
-        const href = t.key === "overview" ? basePath : `${basePath}?tab=${encodeURIComponent(t.key)}`;
         return (
-          <a
+          <button
             key={t.key}
-            href={href}
+            onClick={() => onSelect(t.key)}
             style={{
               padding: "9px 12px",
               borderRadius: 999,
               border: `1px solid ${isActive ? "#DBEAFE" : "transparent"}`,
               background: isActive ? UI.accentSoft : "transparent",
               color: isActive ? "#1D4ED8" : UI.text2,
-              textDecoration: "none",
               fontSize: 13,
               fontWeight: isActive ? 900 : 800,
+              cursor: "pointer",
             }}
           >
             {t.label}
-          </a>
+          </button>
         );
       })}
     </div>
@@ -250,6 +257,7 @@ function TabsBar({ tabs, active, basePath }: { tabs: { key: Tab; label: string }
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
+  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -310,12 +318,15 @@ export default function CompanyDetailPage() {
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
 
-  const basePath = useMemo(() => {
-    if (typeof window === "undefined") return `/admin/companies/${id || ""}`;
-    return window.location.pathname;
-  }, [id]);
+  const basePath = useMemo(() => `/admin/companies/${id || ""}`, [id]);
 
-  const myRole = data?.my_role ?? null;
+  const [cachedRole, setCachedRole] = useState<DetailResponse["my_role"]>(() => {
+    if (typeof window === "undefined") return undefined;
+    const v = window.sessionStorage.getItem(`role:${id || ""}`) as any;
+    return v === "owner" || v === "admin" || v === "viewer" ? v : undefined;
+  });
+
+  const myRole = (data?.my_role ?? cachedRole) as DetailResponse["my_role"];
   const isOwner = myRole === "owner";
 
   const visibleTabs = useMemo(() => {
@@ -365,6 +376,12 @@ export default function CompanyDetailPage() {
 
       setData(json);
       setAdmins(json?.admins ?? []);
+
+      const role = json?.my_role;
+      if (role === "owner" || role === "admin" || role === "viewer") {
+        setCachedRole(role);
+        if (typeof window !== "undefined") window.sessionStorage.setItem(`role:${id}`, role);
+      }
     } catch (e: any) {
       setData(null);
       setAdmins([]);
@@ -410,12 +427,10 @@ export default function CompanyDetailPage() {
 
     const t = String(searchParams?.get("tab") || "overview").toLowerCase();
     const next = (ALL_TABS as readonly string[]).includes(t) ? (t as Tab) : "overview";
-    setTab(next);
 
-    // If limits tab is requested but user isn't owner, push back to overview
-    if (next === "limits" && data?.my_role && data.my_role !== "owner") {
-      setTab("overview");
-    }
+    // if non-owner tries to go to limits, keep overview
+    const guarded = next === "limits" && myRole && myRole !== "owner" ? "overview" : next;
+    setTab(guarded);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams]);
@@ -445,6 +460,13 @@ export default function CompanyDetailPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  function goTab(t: Tab) {
+    const guarded = t === "limits" && myRole && myRole !== "owner" ? "overview" : t;
+    setTab(guarded);
+    const url = guarded === "overview" ? basePath : `${basePath}?tab=${encodeURIComponent(guarded)}`;
+    router.replace(url, { scroll: false });
+  }
 
   async function copy(text: string) {
     if (!text) return;
@@ -729,8 +751,7 @@ export default function CompanyDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {/* ✅ TABS (now visible) */}
-      {!loading && data ? <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} /> : null}
+      {!loading && data ? <TabsBar tabs={visibleTabs} active={tab} onSelect={goTab} /> : null}
 
       {loadError ? (
         <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
@@ -988,7 +1009,7 @@ export default function CompanyDetailPage() {
                 </div>
 
                 <div style={{ marginTop: 4 }}>
-                  <BillingActions companyId={id as any} />
+                  <BillingActions />
                 </div>
               </div>
             </Card>
