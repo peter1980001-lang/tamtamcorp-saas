@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import BillingActions from "./_components/BillingActions";
 
 type Company = { id: string; name: string; status: string; created_at: string };
@@ -133,6 +133,7 @@ function Button(props: { children: React.ReactNode; onClick?: () => void; disabl
   };
   return (
     <button
+      type="button"
       onClick={props.onClick}
       disabled={props.disabled}
       style={{
@@ -210,11 +211,11 @@ function CodeBox({ text }: { text: string }) {
 function TabsBar({
   tabs,
   active,
-  onSelect,
+  onChange,
 }: {
   tabs: { key: Tab; label: string }[];
   active: Tab;
-  onSelect: (t: Tab) => void;
+  onChange: (next: Tab) => void;
 }) {
   return (
     <div
@@ -234,7 +235,8 @@ function TabsBar({
         return (
           <button
             key={t.key}
-            onClick={() => onSelect(t.key)}
+            type="button"
+            onClick={() => onChange(t.key)}
             style={{
               padding: "9px 12px",
               borderRadius: 999,
@@ -257,7 +259,6 @@ function TabsBar({
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -318,24 +319,15 @@ export default function CompanyDetailPage() {
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
 
-  const basePath = useMemo(() => `/admin/companies/${id || ""}`, [id]);
-
-  const [cachedRole, setCachedRole] = useState<DetailResponse["my_role"]>(() => {
-    if (typeof window === "undefined") return undefined;
-    const v = window.sessionStorage.getItem(`role:${id || ""}`) as any;
-    return v === "owner" || v === "admin" || v === "viewer" ? v : undefined;
-  });
-
-  const myRole = (data?.my_role ?? cachedRole) as DetailResponse["my_role"];
+  const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
 
   const visibleTabs = useMemo(() => {
-    const owner = isOwner === true;
     return [
       { key: "overview" as Tab, label: "Overview" },
       { key: "keys" as Tab, label: "Keys" },
       { key: "domains" as Tab, label: "Domains" },
-      ...(owner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
+      ...(isOwner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
       { key: "admins" as Tab, label: "Admins" },
       { key: "embed" as Tab, label: "Embed" },
       { key: "billing" as Tab, label: "Billing" },
@@ -344,6 +336,37 @@ export default function CompanyDetailPage() {
       { key: "leads" as Tab, label: "Leads" },
     ];
   }, [isOwner]);
+
+  const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
+
+  // URL -> tab (NO load here)
+  useEffect(() => {
+    if (!id) return;
+
+    const raw = String(searchParams?.get("tab") || "overview").toLowerCase();
+    const candidate = (ALL_TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
+    const next = allowedTabsSet.has(candidate) ? candidate : "overview";
+    setTab(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, searchParams, allowedTabsSet]);
+
+  // Load company ONLY when id changes
+  useEffect(() => {
+    if (!id) return;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  function setTabAndUrl(next: Tab) {
+    const safeNext = allowedTabsSet.has(next) ? next : "overview";
+    setTab(safeNext);
+
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (safeNext === "overview") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", safeNext);
+    window.history.replaceState({}, "", url.toString());
+  }
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -355,7 +378,6 @@ export default function CompanyDetailPage() {
     if (!id) return;
     setLoading(true);
     setLoadError(null);
-
     try {
       const res = await fetch(`/api/admin/companies/${id}`, { cache: "no-store" });
       const text = await res.text();
@@ -376,12 +398,6 @@ export default function CompanyDetailPage() {
 
       setData(json);
       setAdmins(json?.admins ?? []);
-
-      const role = json?.my_role;
-      if (role === "owner" || role === "admin" || role === "viewer") {
-        setCachedRole(role);
-        if (typeof window !== "undefined") window.sessionStorage.setItem(`role:${id}`, role);
-      }
     } catch (e: any) {
       setData(null);
       setAdmins([]);
@@ -422,51 +438,26 @@ export default function CompanyDetailPage() {
     setLeads(json.leads ?? []);
   }
 
+  // Tab-specific loads (NO company reload)
   useEffect(() => {
-  if (!id) return;
+    if (tab === "billing") void loadBilling();
+    if (tab === "admins") void loadInvites();
+    if (tab === "leads") void loadLeads();
 
-  const allowed = new Set(visibleTabs.map((x) => x.key));
-  const raw = String(searchParams?.get("tab") || "overview").toLowerCase();
-  const candidate = (ALL_TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
+    if (tab === "domains") {
+      const current = data?.keys?.allowed_domains ?? [];
+      setDomainDraft(current);
+      setDomainInput("");
+      setDomainDirty(false);
+    }
 
-  const nextTab = allowed.has(candidate) ? candidate : "overview";
-  setTab(nextTab);
-
-  load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [id, searchParams, visibleTabs]);
-
-  useEffect(() => {
-  if (tab === "billing") loadBilling();
-
-  if (tab === "admins") {
-    if (myRole === "owner" || myRole === "admin") loadInvites();
-    else setToast("forbidden");
-  }
-
-  if (tab === "leads") loadLeads();
-
-  if (tab === "domains") {
-    const current = data?.keys?.allowed_domains ?? [];
-    setDomainDraft(current);
-    setDomainInput("");
-    setDomainDirty(false);
-  }
-
-  if (tab === "limits") {
-    const current = data?.settings?.limits_json ?? {};
-    setLimitsText(safeJsonStringify(current));
-    setLimitsDirty(false);
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [tab]);
-
-  function goTab(t: Tab) {
-    const guarded = t === "limits" && myRole && myRole !== "owner" ? "overview" : t;
-    setTab(guarded);
-    const url = guarded === "overview" ? basePath : `${basePath}?tab=${encodeURIComponent(guarded)}`;
-    router.replace(url, { scroll: false });
-  }
+    if (tab === "limits") {
+      const current = data?.settings?.limits_json ?? {};
+      setLimitsText(safeJsonStringify(current));
+      setLimitsDirty(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   async function copy(text: string) {
     if (!text) return;
@@ -559,13 +550,11 @@ export default function CompanyDetailPage() {
     if (!id) return;
     setInviteCreating(true);
 
-    const allowedInviteRole = isOwner ? inviteRole : inviteRole === "owner" ? "admin" : inviteRole;
-
     const res = await fetch(`/api/admin/companies/${id}/invites`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        role: allowedInviteRole,
+        role: inviteRole,
         email: inviteEmail.trim() || null,
         expires_days: inviteDays,
       }),
@@ -601,7 +590,6 @@ export default function CompanyDetailPage() {
 
   async function setAdminRole(user_id: string, role: string) {
     if (!id) return;
-    if (!isOwner && role === "owner") return setToast("Not allowed");
     setAdminMutating(user_id);
 
     const res = await fetch(`/api/admin/companies/${id}/admins`, {
@@ -735,7 +723,15 @@ export default function CompanyDetailPage() {
     return leads.filter((l) => {
       if (leadBand !== "all" && l.score_band !== leadBand) return false;
       if (!q) return true;
-      const hay = [l.name || "", l.email || "", l.phone || "", l.status || "", l.lead_state || "", l.score_band || "", JSON.stringify(l.qualification_json || {})]
+      const hay = [
+        l.name || "",
+        l.email || "",
+        l.phone || "",
+        l.status || "",
+        l.lead_state || "",
+        l.score_band || "",
+        JSON.stringify(l.qualification_json || {}),
+      ]
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
@@ -751,7 +747,7 @@ export default function CompanyDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {!loading && data ? <TabsBar tabs={visibleTabs} active={tab} onSelect={goTab} /> : null}
+      <TabsBar tabs={visibleTabs} active={tab} onChange={setTabAndUrl} />
 
       {loadError ? (
         <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
@@ -776,12 +772,17 @@ export default function CompanyDetailPage() {
                     <b>Allowed domains:</b> {(data.keys?.allowed_domains ?? []).length}
                   </div>
                   <div>
-                    <b>Chat mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
+                    <b>Chat mode:</b>{" "}
+                    {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
                   </div>
                 </div>
               </Card>
 
-              <Card title="Embed Snippet" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+              <Card
+                title="Embed Snippet"
+                subtitle="Copy & paste this snippet into your website."
+                right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}
+              >
                 <CodeBox text={embedSnippet} />
               </Card>
             </div>
@@ -793,7 +794,7 @@ export default function CompanyDetailPage() {
               subtitle="Public key is used in the embed snippet. Secret key is hidden for customers."
               right={
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <Button onClick={load} variant="secondary">
+                  <Button onClick={() => load()} variant="secondary">
                     Refresh
                   </Button>
                   <Button onClick={rotateKeys} disabled={rotating} variant="primary">
@@ -806,7 +807,16 @@ export default function CompanyDetailPage() {
                 <div>
                   <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Public Key</div>
                   <div style={{ display: "flex", gap: 10 }}>
-                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
+                    <code
+                      style={{
+                        flex: 1,
+                        padding: 12,
+                        borderRadius: UI.radius,
+                        border: `1px solid ${UI.border}`,
+                        background: UI.surface2,
+                        fontSize: 12.5,
+                      }}
+                    >
                       {data.keys?.public_key ?? "—"}
                     </code>
                     <Button onClick={() => copy(data.keys?.public_key ?? "")}>Copy</Button>
@@ -832,6 +842,7 @@ export default function CompanyDetailPage() {
                   {domainDraft.map((d) => (
                     <button
                       key={d}
+                      type="button"
                       onClick={() => removeDomain(d)}
                       style={{
                         border: `1px solid ${UI.border}`,
@@ -872,7 +883,11 @@ export default function CompanyDetailPage() {
                       setLimitsText(e.target.value);
                       setLimitsDirty(true);
                     }}
-                    style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
+                    style={{
+                      minHeight: 260,
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      fontSize: 12.5,
+                    }}
                   />
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
                     <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
@@ -885,7 +900,15 @@ export default function CompanyDetailPage() {
 
           {tab === "admins" && (
             <div style={{ display: "grid", gap: 14 }}>
-              <Card title="Team Members" subtitle="Manage admins and viewers." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
+              <Card
+                title="Team Members"
+                subtitle="Manage admins and viewers."
+                right={
+                  <Button onClick={loadInvites} disabled={adminsLoading}>
+                    Refresh
+                  </Button>
+                }
+              >
                 {adminsLoading ? (
                   <div style={{ color: UI.text2 }}>Loading…</div>
                 ) : (
@@ -913,7 +936,13 @@ export default function CompanyDetailPage() {
                           value={a.role}
                           onChange={(e) => setAdminRole(a.user_id, e.target.value)}
                           disabled={adminMutating === a.user_id}
-                          style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: UI.radius,
+                            border: `1px solid ${UI.border}`,
+                            background: "#fff",
+                            fontSize: 13.5,
+                          }}
                         >
                           <option value="admin">admin</option>
                           <option value="viewer">viewer</option>
@@ -934,7 +963,16 @@ export default function CompanyDetailPage() {
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 140px", gap: 10 }}>
                     <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email (optional)" />
-                    <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                    <select
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      style={{
+                        padding: "11px 12px",
+                        borderRadius: UI.radius,
+                        border: `1px solid ${UI.border}`,
+                        background: "#fff",
+                      }}
+                    >
                       <option value="admin">admin</option>
                       <option value="viewer">viewer</option>
                       {isOwner ? <option value="owner">owner</option> : null}
@@ -1009,7 +1047,7 @@ export default function CompanyDetailPage() {
                 </div>
 
                 <div style={{ marginTop: 4 }}>
-                  <BillingActions companyId={id as string} />
+                  <BillingActions companyId={id as any} />
                 </div>
               </div>
             </Card>
@@ -1041,7 +1079,9 @@ export default function CompanyDetailPage() {
                     <div style={{ display: "grid", gap: 8 }}>
                       {testLog.map((m, idx) => (
                         <div key={idx} style={{ fontSize: 13.5 }}>
-                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>{m.role}:</b>{" "}
+                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>
+                            {m.role}:
+                          </b>{" "}
                           <span style={{ color: UI.text }}>{m.text}</span>
                         </div>
                       ))}
@@ -1110,7 +1150,11 @@ export default function CompanyDetailPage() {
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px", gap: 10 }}>
                   <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search name, email, phone, tags…" />
-                  <select value={leadBand} onChange={(e) => setLeadBand(e.target.value as any)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                  <select
+                    value={leadBand}
+                    onChange={(e) => setLeadBand(e.target.value as any)}
+                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                  >
                     <option value="all">all</option>
                     <option value="cold">cold</option>
                     <option value="warm">warm</option>
