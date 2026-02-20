@@ -85,7 +85,7 @@ type KnowledgeChunkRow = {
   created_at: string;
 };
 
-const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads", sales-ai] as const;
+const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads", "sales-ai"] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 const UI = {
@@ -471,8 +471,7 @@ async function saveFunnelConfig() {
       { key: "test-chat" as Tab, label: "Test-Chat" },
       { key: "knowledge" as Tab, label: "Knowledge" },
       { key: "leads" as Tab, label: "Leads" },
-{ key: "sales-ai", label: "Sales AI" },
-    ];
+{ key: "sales-ai" as Tab, label: "Sales AI" },    ];
   }, [isOwner]);
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
@@ -2268,9 +2267,6 @@ if (tab === "sales-ai") loadFunnelConfig();
           <div style={{ marginTop: 8, fontSize: 12, color: UI.text3 }}>Click to dismiss</div>
         </div>
       )}
-    </div>
-  );
-}
 {tab === "sales-ai" && (
   <div className="space-y-6">
 
@@ -2385,3 +2381,6 @@ if (tab === "sales-ai") loadFunnelConfig();
     </div>
   </div>
 )}
+    </div>
+  );
+}
