@@ -315,7 +315,8 @@ export default function CompanyDetailPage() {
     return window.location.pathname;
   }, [id]);
 
-  const myRole = data?.my_role;
+  const myRole = data?.my_role ?? null;
+const isOwner = myRole === "owner";
   const isOwner = myRole ? myRole === "owner" : true; // safe fallback
 
   const visibleTabs = useMemo(() => {
@@ -404,15 +405,15 @@ export default function CompanyDetailPage() {
     setLeads(json.leads ?? []);
   }
 
-  useEffect(() => {
-    if (!id) return;
+useEffect(() => {
+  if (!id) return;
 
-    const t = String(searchParams?.get("tab") || "overview").toLowerCase() as Tab;
-    const allowed = visibleTabs.map((x) => x.key);
-    const next = (allowed as readonly string[]).includes(t) ? t : "overview";
-    setTab(next);
+  const t = String(searchParams?.get("tab") || "overview").toLowerCase() as Tab;
+  setTab(t as Tab);
 
-    load();
+  load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [id]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams, visibleTabs.length]);
 
@@ -714,7 +715,9 @@ export default function CompanyDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} />
+      {data && (
+  <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} />
+)}
 
       {loadError ? (
         <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
