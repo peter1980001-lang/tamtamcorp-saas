@@ -256,6 +256,23 @@ function TabsBar({
   );
 }
 
+/** -------------------- NEW (knowledge only) helpers/types -------------------- */
+type KbPage = { url: string; title: string; text: string; captured_at: string };
+
+function isProbablyUrl(u: string) {
+  return /^https?:\/\//i.test(u.trim());
+}
+
+function validateKbPage(p: KbPage): string | null {
+  if (!p.url.trim()) return "URL missing";
+  const u = normalizeUrlInput(p.url);
+  if (!isProbablyUrl(u)) return "URL must be http(s)";
+  if (!p.text.trim()) return "Text missing";
+  // quick anti-snippet guard: still allow smaller, but warn by toast
+  if (p.text.trim().length < 200) return "Text too short (snippet?)";
+  return null;
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -318,6 +335,15 @@ export default function CompanyDetailPage() {
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
+
+  /** -------------------- NEW (knowledge only) state -------------------- */
+  const [kbPages, setKbPages] = useState<KbPage[]>([]);
+  const [kbPageUrl, setKbPageUrl] = useState("");
+  const [kbPageTitle, setKbPageTitle] = useState("");
+  const [kbPageText, setKbPageText] = useState("");
+  const [kbAuditRunning, setKbAuditRunning] = useState(false);
+  const [kbAuditResult, setKbAuditResult] = useState<any>(null);
+  const [kbPersistProfile, setKbPersistProfile] = useState(true);
 
   const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
@@ -718,6 +744,71 @@ export default function CompanyDetailPage() {
     setToast(`Imported: ${json?.chunksInserted ?? 0} chunks`);
   }
 
+  /** -------------------- NEW (knowledge only) functions -------------------- */
+  function addKbPage() {
+    const page: KbPage = {
+      url: kbPageUrl,
+      title: kbPageTitle || "Untitled",
+      text: kbPageText,
+      captured_at: new Date().toISOString(),
+    };
+    const err = validateKbPage(page);
+    if (err) return setToast(err);
+
+    const normalizedUrl = normalizeUrlInput(page.url);
+    setKbPages((prev) => {
+      if (prev.some((p) => normalizeUrlInput(p.url) === normalizedUrl)) return prev;
+      return [{ ...page, url: normalizedUrl }, ...prev];
+    });
+
+    setKbPageUrl("");
+    setKbPageTitle("");
+    setKbPageText("");
+    setToast("Page added");
+  }
+
+  function removeKbPage(url: string) {
+    const u = normalizeUrlInput(url);
+    setKbPages((prev) => prev.filter((p) => normalizeUrlInput(p.url) !== u));
+  }
+
+  async function generateKbFromPages() {
+    if (!id) return setToast("Missing company id");
+    if (kbPages.length === 0) return setToast("Add at least one page first");
+
+    setKbAuditRunning(true);
+    setKbAuditResult(null);
+
+    const payload = {
+      company_id: id,
+      website_url: kbPages[0]?.url || null,
+      persist_profile: kbPersistProfile,
+      pages: kbPages.map((p) => ({
+        url: p.url,
+        title: p.title,
+        text: p.text,
+        captured_at: p.captured_at,
+      })),
+    };
+
+    const res = await fetch("/api/admin/knowledge/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json().catch(() => null);
+    setKbAuditRunning(false);
+
+    if (!res.ok) {
+      setKbAuditResult(json);
+      return setToast(json?.error || "knowledge_pages_ingest_failed");
+    }
+
+    setKbAuditResult(json);
+    setToast(`Inserted ${json.inserted_chunks ?? json.chunks ?? "?"} chunks`);
+  }
+
   const filteredLeads = useMemo(() => {
     const q = leadQuery.trim().toLowerCase();
     return leads.filter((l) => {
@@ -1092,8 +1183,145 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
+          {/* -------------------- ONLY CHANGED: Knowledge Tab -------------------- */}
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
+              {/* NEW: Manual pages ingest -> audit -> chunks */}
+              <Card
+                title="Manual Pages → Audit → Knowledge"
+                subtitle="Paste extracted page text. Then generate structured chunks + missing info report."
+                right={
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: UI.text2 }}>
+                      <input type="checkbox" checked={kbPersistProfile} onChange={(e) => setKbPersistProfile(e.target.checked)} />
+                      Save inferred profile/branding
+                    </label>
+                    <Button onClick={generateKbFromPages} disabled={kbAuditRunning || kbPages.length === 0} variant="primary">
+                      {kbAuditRunning ? "Generating…" : "Generate Knowledge"}
+                    </Button>
+                  </div>
+                }
+              >
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Input value={kbPageUrl} onChange={(e) => setKbPageUrl(e.target.value)} placeholder="https://example.com/services" />
+                    <Input value={kbPageTitle} onChange={(e) => setKbPageTitle(e.target.value)} placeholder="Title (optional)" />
+                  </div>
+
+                  <Textarea value={kbPageText} onChange={(e) => setKbPageText(e.target.value)} placeholder="Paste FULL extracted text…" style={{ minHeight: 180 }} />
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Button onClick={addKbPage} variant="secondary">
+                      Add Page
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setKbPages([]);
+                        setKbAuditResult(null);
+                      }}
+                      variant="secondary"
+                    >
+                      Clear Pages
+                    </Button>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {kbPages.length === 0 ? (
+                      <div style={{ color: UI.text2, fontSize: 13.5 }}>No pages added yet.</div>
+                    ) : (
+                      kbPages.map((p) => (
+                        <div
+                          key={p.url}
+                          style={{
+                            border: `1px solid ${UI.border}`,
+                            borderRadius: UI.radius,
+                            padding: 12,
+                            background: "#fff",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 12,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {p.url} · {p.text.length.toLocaleString()} chars
+                            </div>
+                          </div>
+                          <Button onClick={() => removeKbPage(p.url)} variant="danger">
+                            Remove
+                          </Button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {kbAuditResult ? (
+                    <div style={{ display: "grid", gap: 12, marginTop: 6 }}>
+                      {kbAuditResult?.audit ? (
+                        <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: UI.surface2 }}>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                            Pages: <b>{kbAuditResult.audit.pages_count ?? "—"}</b> · Quality: <b>{kbAuditResult.audit.content_quality ?? "—"}</b> · Snippet risk:{" "}
+                            <b>{kbAuditResult.audit.snippet_risk ?? "—"}</b> · Inserted: <b>{kbAuditResult.inserted_chunks ?? kbAuditResult.chunks ?? "—"}</b>
+                          </div>
+                          {Array.isArray(kbAuditResult.audit.coverage_notes) && kbAuditResult.audit.coverage_notes.length ? (
+                            <ul style={{ margin: "10px 0 0 18px", color: UI.text, fontSize: 13.5, lineHeight: 1.6 }}>
+                              {kbAuditResult.audit.coverage_notes.slice(0, 8).map((x: string, i: number) => (
+                                <li key={i}>{x}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {Array.isArray(kbAuditResult?.missing_info) && kbAuditResult.missing_info.length ? (
+                        <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 8 }}>Missing Info</div>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            {kbAuditResult.missing_info.slice(0, 10).map((m: any, i: number) => (
+                              <div key={i} style={{ border: `1px solid ${UI.borderSoft}`, borderRadius: UI.radius, padding: 12, background: UI.surface2 }}>
+                                <div style={{ fontWeight: 900, marginBottom: 4 }}>{String(m.field || "unknown")}</div>
+                                <div style={{ fontSize: 13.5, color: UI.text2, lineHeight: 1.5 }}>{String(m.why_it_matters || "")}</div>
+                                {Array.isArray(m.what_to_crawl_next) && m.what_to_crawl_next.length ? (
+                                  <div style={{ marginTop: 8, fontSize: 12.5, color: UI.text }}>
+                                    Next crawl:
+                                    <ul style={{ margin: "6px 0 0 18px" }}>
+                                      {m.what_to_crawl_next.slice(0, 4).map((u: string, j: number) => (
+                                        <li key={j} style={{ wordBreak: "break-all" }}>
+                                          {u}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {Array.isArray(kbAuditResult?.next_crawl_targets) && kbAuditResult.next_crawl_targets.length ? (
+                        <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                          <div style={{ fontWeight: 900, marginBottom: 8 }}>Suggested Next Pages</div>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            {kbAuditResult.next_crawl_targets.slice(0, 8).map((t: any, i: number) => (
+                              <div key={i} style={{ border: `1px solid ${UI.borderSoft}`, borderRadius: UI.radius, padding: 12, background: UI.surface2 }}>
+                                <div style={{ fontWeight: 900, wordBreak: "break-all" }}>{String(t.url || "")}</div>
+                                <div style={{ fontSize: 13.5, color: UI.text2, lineHeight: 1.5 }}>{String(t.reason || "")}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <CodeBox text={safeJsonStringify(kbAuditResult)} />
+                    </div>
+                  ) : null}
+                </div>
+              </Card>
+
+              {/* Existing Website Import (unchanged) */}
               <Card title="Website Import" subtitle="Import website content into knowledge base.">
                 <div style={{ display: "grid", gap: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 10 }}>
@@ -1121,6 +1349,7 @@ export default function CompanyDetailPage() {
                 </div>
               </Card>
 
+              {/* Existing Manual Ingest (unchanged) */}
               <Card title="Manual Knowledge Ingest" subtitle="Paste text to ingest into knowledge base.">
                 <div style={{ display: "grid", gap: 12 }}>
                   <div>
