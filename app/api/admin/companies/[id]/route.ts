@@ -58,35 +58,41 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
-  const my_role = (auth as any).role || (auth as any).my_role || null;
+  const rawRole = (auth as any).role || null;
 
-  return NextResponse.json({
-    my_role, // ✅ IMPORTANT: the UI needs this
-    company,
-    keys: keysRow
-      ? {
-          company_id: keysRow.company_id,
-          public_key: keysRow.public_key,
-          // NOTE: keep it for owner/admin backend, but UI hides it for customers
-          secret_key: keysRow.secret_key,
-          allowed_domains: keysRow.allowed_domains ?? [],
-          created_at: keysRow.created_at,
-        }
-      : null,
-    settings: settingsRow
-      ? {
-          company_id: settingsRow.company_id,
-          limits_json: settingsRow.limits_json ?? {},
-          branding_json: settingsRow.branding_json ?? {},
-        }
-      : { company_id, limits_json: {}, branding_json: {} },
-    admins: (adminsRows || []).map((a: any) => ({
-      id: a.id,
-      company_id: a.company_id,
-      user_id: a.user_id,
-      email: emailByUserId.get(String(a.user_id)) || null,
-      role: a.role,
-      created_at: a.created_at,
-    })),
-  });
-}
+// Map Guard roles -> UI roles
+const my_role =
+  rawRole === "platform_owner"
+    ? "owner"
+    : rawRole === "viewer"
+      ? "viewer"
+      : "admin"; // admin + agent -> admin
+
+return NextResponse.json({
+  my_role,
+  company,
+  keys: keysRow
+    ? {
+        company_id: keysRow.company_id,
+        public_key: keysRow.public_key,
+        secret_key: keysRow.secret_key,
+        allowed_domains: keysRow.allowed_domains ?? [],
+        created_at: keysRow.created_at,
+      }
+    : null,
+  settings: settingsRow
+    ? {
+        company_id: settingsRow.company_id,
+        limits_json: settingsRow.limits_json ?? {},
+        branding_json: settingsRow.branding_json ?? {},
+      }
+    : { company_id, limits_json: {}, branding_json: {} },
+  admins: (adminsRows || []).map((a: any) => ({
+    id: a.id,
+    company_id: a.company_id,
+    user_id: a.user_id,
+    email: emailByUserId.get(String(a.user_id)) || null,
+    role: a.role,
+    created_at: a.created_at,
+  })),
+});

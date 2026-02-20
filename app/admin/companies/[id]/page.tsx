@@ -423,41 +423,43 @@ export default function CompanyDetailPage() {
   }
 
   useEffect(() => {
-    if (!id) return;
+  if (!id) return;
 
-    const t = String(searchParams?.get("tab") || "overview").toLowerCase();
-    const next = (ALL_TABS as readonly string[]).includes(t) ? (t as Tab) : "overview";
-    const guarded = next === "limits" && myRole && myRole !== "owner" ? "overview" : next;
-    setTab(guarded);
+  const allowed = new Set(visibleTabs.map((x) => x.key));
+  const raw = String(searchParams?.get("tab") || "overview").toLowerCase();
+  const candidate = (ALL_TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, searchParams]);
+  const nextTab = allowed.has(candidate) ? candidate : "overview";
+  setTab(nextTab);
 
-  useEffect(() => {
-    if (!id) return;
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [id, searchParams, visibleTabs]);
 
   useEffect(() => {
-    if (tab === "billing") loadBilling();
-    if (tab === "admins") loadInvites();
-    if (tab === "leads") loadLeads();
+  if (tab === "billing") loadBilling();
 
-    if (tab === "domains") {
-      const current = data?.keys?.allowed_domains ?? [];
-      setDomainDraft(current);
-      setDomainInput("");
-      setDomainDirty(false);
-    }
+  if (tab === "admins") {
+    if (myRole === "owner" || myRole === "admin") loadInvites();
+    else setToast("forbidden");
+  }
 
-    if (tab === "limits") {
-      const current = data?.settings?.limits_json ?? {};
-      setLimitsText(safeJsonStringify(current));
-      setLimitsDirty(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  if (tab === "leads") loadLeads();
+
+  if (tab === "domains") {
+    const current = data?.keys?.allowed_domains ?? [];
+    setDomainDraft(current);
+    setDomainInput("");
+    setDomainDirty(false);
+  }
+
+  if (tab === "limits") {
+    const current = data?.settings?.limits_json ?? {};
+    setLimitsText(safeJsonStringify(current));
+    setLimitsDirty(false);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [tab]);
 
   function goTab(t: Tab) {
     const guarded = t === "limits" && myRole && myRole !== "owner" ? "overview" : t;
