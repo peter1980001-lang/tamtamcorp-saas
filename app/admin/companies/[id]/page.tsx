@@ -207,6 +207,46 @@ function CodeBox({ text }: { text: string }) {
   );
 }
 
+function TabsBar({ tabs, active, basePath }: { tabs: { key: Tab; label: string }[]; active: Tab; basePath: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        padding: 6,
+        border: `1px solid ${UI.border}`,
+        background: UI.surface,
+        borderRadius: UI.radiusLg,
+        boxShadow: UI.shadow,
+      }}
+    >
+      {tabs.map((t) => {
+        const isActive = active === t.key;
+        const href = t.key === "overview" ? basePath : `${basePath}?tab=${encodeURIComponent(t.key)}`;
+        return (
+          <a
+            key={t.key}
+            href={href}
+            style={{
+              padding: "9px 12px",
+              borderRadius: 999,
+              border: `1px solid ${isActive ? "#DBEAFE" : "transparent"}`,
+              background: isActive ? UI.accentSoft : "transparent",
+              color: isActive ? "#1D4ED8" : UI.text2,
+              textDecoration: "none",
+              fontSize: 13,
+              fontWeight: isActive ? 900 : 800,
+            }}
+          >
+            {t.label}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
@@ -270,8 +310,29 @@ export default function CompanyDetailPage() {
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
 
+  const basePath = useMemo(() => {
+    if (typeof window === "undefined") return `/admin/companies/${id || ""}`;
+    return window.location.pathname;
+  }, [id]);
+
   const myRole = data?.my_role ?? null;
   const isOwner = myRole === "owner";
+
+  const visibleTabs = useMemo(() => {
+    const owner = isOwner === true;
+    return [
+      { key: "overview" as Tab, label: "Overview" },
+      { key: "keys" as Tab, label: "Keys" },
+      { key: "domains" as Tab, label: "Domains" },
+      ...(owner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
+      { key: "admins" as Tab, label: "Admins" },
+      { key: "embed" as Tab, label: "Embed" },
+      { key: "billing" as Tab, label: "Billing" },
+      { key: "test-chat" as Tab, label: "Test-Chat" },
+      { key: "knowledge" as Tab, label: "Knowledge" },
+      { key: "leads" as Tab, label: "Leads" },
+    ];
+  }, [isOwner]);
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -351,6 +412,16 @@ export default function CompanyDetailPage() {
     const next = (ALL_TABS as readonly string[]).includes(t) ? (t as Tab) : "overview";
     setTab(next);
 
+    // If limits tab is requested but user isn't owner, push back to overview
+    if (next === "limits" && data?.my_role && data.my_role !== "owner") {
+      setTab("overview");
+    }
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, searchParams]);
+
+  useEffect(() => {
+    if (!id) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -658,6 +729,9 @@ export default function CompanyDetailPage() {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      {/* ✅ TABS (now visible) */}
+      {!loading && data ? <TabsBar tabs={visibleTabs} active={tab} basePath={basePath} /> : null}
+
       {loadError ? (
         <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
           <div style={{ color: "#B91C1C", fontSize: 13.5, lineHeight: 1.5 }}>{loadError}</div>
