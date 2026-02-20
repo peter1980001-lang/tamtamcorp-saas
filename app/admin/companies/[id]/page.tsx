@@ -427,8 +427,6 @@ export default function CompanyDetailPage() {
 
     const t = String(searchParams?.get("tab") || "overview").toLowerCase();
     const next = (ALL_TABS as readonly string[]).includes(t) ? (t as Tab) : "overview";
-
-    // if non-owner tries to go to limits, keep overview
     const guarded = next === "limits" && myRole && myRole !== "owner" ? "overview" : next;
     setTab(guarded);
 
@@ -1009,7 +1007,7 @@ export default function CompanyDetailPage() {
                 </div>
 
                 <div style={{ marginTop: 4 }}>
-                  <BillingActions />
+                  <BillingActions companyId={id as string} />
                 </div>
               </div>
             </Card>
