@@ -10,14 +10,10 @@ function isUrl(s: string) {
 }
 
 function stripHtmlToText(html: string) {
-  // remove scripts/styles
   let s = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ");
   s = s.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
-  // remove noscript
   s = s.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, " ");
-  // remove tags
   s = s.replace(/<\/?[^>]+>/g, " ");
-  // decode a few common entities
   s = s
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -25,7 +21,6 @@ function stripHtmlToText(html: string) {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
-  // normalize whitespace
   s = s.replace(/\s+/g, " ").trim();
   return s;
 }
@@ -33,35 +28,71 @@ function stripHtmlToText(html: string) {
 function extractTitle(html: string) {
   const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   if (m && m[1]) return m[1].replace(/\s+/g, " ").trim();
-  // fallback: og:title
   const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["'][^>]*>/i);
   if (og && og[1]) return og[1].trim();
   return "Untitled";
 }
 
-function pickColorsFromHtml(html: string) {
-  // 1) theme-color is best signal
-  const theme = html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)["'][^>]*>/i);
-  const themeColor = theme?.[1]?.trim() || null;
+function resolveUrl(baseUrl: string, maybeRelative: string) {
+  try {
+    return new URL(maybeRelative, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
 
-  // 2) collect hex colors from inline styles + style tags (simple heuristic)
-  const hexes = html.match(/#[0-9a-fA-F]{3,8}\b/g) || [];
+function extractStylesheetUrls(html: string, baseUrl: string) {
+  const urls: string[] = [];
+  const re = /<link[^>]+rel=["']stylesheet["'][^>]*>/gi;
+  const hrefRe = /href=["']([^"']+)["']/i;
+
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[0];
+    const hm = tag.match(hrefRe);
+    if (!hm?.[1]) continue;
+    const u = resolveUrl(baseUrl, hm[1]);
+    if (u) urls.push(u);
+  }
+
+  // Also capture Next CSS preloads (sometimes rel="preload" as="style")
+  const pre = /<link[^>]+as=["']style["'][^>]*>/gi;
+  while ((m = pre.exec(html))) {
+    const tag = m[0];
+    const hm = tag.match(hrefRe);
+    if (!hm?.[1]) continue;
+    const u = resolveUrl(baseUrl, hm[1]);
+    if (u) urls.push(u);
+  }
+
+  return Array.from(new Set(urls)).slice(0, 6); // limit
+}
+
+function extractManifestUrl(html: string, baseUrl: string) {
+  const m = html.match(/<link[^>]+rel=["']manifest["'][^>]+href=["']([^"']+)["'][^>]*>/i);
+  if (!m?.[1]) return null;
+  return resolveUrl(baseUrl, m[1]);
+}
+
+function pickColorsFromTextBlobs(blobs: string[]) {
+  const hexes: string[] = [];
+  for (const b of blobs) {
+    const found = b.match(/#[0-9a-fA-F]{3,8}\b/g);
+    if (found) hexes.push(...found);
+  }
   const counts = new Map<string, number>();
   for (const h of hexes) {
     const c = h.toLowerCase();
     counts.set(c, (counts.get(c) || 0) + 1);
   }
+  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([k]) => k);
 
-  // helper: filter out near-white/near-black and obvious grays for accent choosing
   function isBoring(hex: string) {
-    // only handle #rgb or #rrggbb
     const h = hex.replace("#", "");
     const full =
-      h.length === 3
-        ? h.split("").map((x) => x + x).join("")
-        : h.length === 6
-        ? h
-        : null;
+      h.length === 3 ? h.split("").map((x) => x + x).join("") :
+      h.length === 6 ? h :
+      null;
     if (!full) return true;
     const r = parseInt(full.slice(0, 2), 16);
     const g = parseInt(full.slice(2, 4), 16);
@@ -74,27 +105,81 @@ function pickColorsFromHtml(html: string) {
     return nearWhite || nearBlack || grayish;
   }
 
-  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const primary = sorted.find((x) => !isBoring(x)) || null;
+  const accent = sorted.find((x) => x !== primary && !isBoring(x)) || null;
 
-  const primaryGuess =
-    (themeColor && themeColor.startsWith("#") ? themeColor : null) ||
-    (sorted.find((x) => !isBoring(x)) || null);
+  return { primary, accent, debug_top_hex: sorted.slice(0, 12) };
+}
 
-  // accent: next non-boring distinct color
-  const accentGuess =
-    sorted.find((x) => x !== primaryGuess && !isBoring(x)) || null;
+async function fetchText(url: string) {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; TamTamCorpBot/1.0)",
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
 
-  // logo: og:image as fallback
-  const ogImg = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["'][^>]*>/i);
-  const logo_url = ogImg?.[1]?.trim() || null;
+  const html = await res.text();
+  return { ok: res.ok, status: res.status, html };
+}
 
-  return {
-    theme_color: themeColor,
-    primary_color_guess: primaryGuess,
-    accent_color_guess: accentGuess,
-    logo_url,
-    debug_top_hex: sorted.slice(0, 10),
-  };
+async function fetchCss(url: string) {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; TamTamCorpBot/1.0)",
+      Accept: "text/css,*/*;q=0.8",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
+  const text = await res.text();
+  // cap to avoid huge files
+  return text.length > 400_000 ? text.slice(0, 400_000) : text;
+}
+
+async function fetchManifest(url: string) {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; TamTamCorpBot/1.0)",
+      Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+async function jinaFallback(url: string) {
+  // Fallback for JS-rendered sites
+  // Example: https://r.jina.ai/https://example.com
+  const jinaUrl = `https://r.jina.ai/${url}`;
+  const res = await fetch(jinaUrl, {
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; TamTamCorpBot/1.0)",
+      Accept: "text/plain",
+    },
+    redirect: "follow",
+    cache: "no-store",
+  });
+  const text = await res.text();
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > 120_000 ? clean.slice(0, 120_000) : clean;
 }
 
 export async function POST(req: Request) {
@@ -109,37 +194,87 @@ export async function POST(req: Request) {
   }
 
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        // Helps some sites return the real HTML
-        "User-Agent": "Mozilla/5.0 (compatible; TamTamCorpBot/1.0)",
-        Accept: "text/html,application/xhtml+xml",
-      },
-      redirect: "follow",
-      cache: "no-store",
-    });
-
-    const html = await res.text();
-
-    if (!res.ok || !html) {
-      return NextResponse.json({ error: "fetch_failed", status: res.status }, { status: 502 });
+    const { ok, status, html } = await fetchText(url);
+    if (!ok || !html) {
+      return NextResponse.json({ error: "fetch_failed", status }, { status: 502 });
     }
 
     const title = extractTitle(html);
-    const text = stripHtmlToText(html);
 
-    const colors = pickColorsFromHtml(html);
+    // --- TEXT extraction ---
+    let text = stripHtmlToText(html);
 
-    // Safety: cap text size
-    const cappedText = text.length > 120_000 ? text.slice(0, 120_000) : text;
+    // If HTML text is too short, try Jina fallback
+    let used_fallback = false;
+    if (!text || text.length < 300) {
+      const fb = await jinaFallback(url);
+      if (fb && fb.length > text.length) {
+        text = fb;
+        used_fallback = true;
+      }
+    }
+
+    // --- COLORS extraction ---
+    // 1) theme-color meta (often absent)
+    const theme = html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)["'][^>]*>/i);
+    const themeColor = theme?.[1]?.trim() || null;
+
+    // 2) manifest theme_color/background_color (often present)
+    const manifestUrl = extractManifestUrl(html, url);
+    let manifestTheme: string | null = null;
+    let manifestBg: string | null = null;
+    if (manifestUrl) {
+      const man = await fetchManifest(manifestUrl);
+      if (man && typeof man === "object") {
+        manifestTheme = typeof man.theme_color === "string" ? man.theme_color : null;
+        manifestBg = typeof man.background_color === "string" ? man.background_color : null;
+      }
+    }
+
+    // 3) CSS files (Next.js usually has them even when HTML is empty)
+    const cssUrls = extractStylesheetUrls(html, url);
+    const cssBlobs: string[] = [];
+    for (const cssUrl of cssUrls) {
+      try {
+        cssBlobs.push(await fetchCss(cssUrl));
+      } catch {
+        // ignore single CSS failures
+      }
+    }
+
+    // 4) Combine sources and pick colors
+    const colorPick = pickColorsFromTextBlobs([html, ...cssBlobs]);
+
+    const primaryGuess =
+      (themeColor && themeColor.startsWith("#") ? themeColor : null) ||
+      (manifestTheme && manifestTheme.startsWith("#") ? manifestTheme : null) ||
+      colorPick.primary;
+
+    const accentGuess =
+      colorPick.accent ||
+      (manifestBg && manifestBg.startsWith("#") ? manifestBg : null) ||
+      null;
+
+    // logo: og:image
+    const ogImg = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["'][^>]*>/i);
+    const logo_url = ogImg?.[1]?.trim() || null;
 
     return NextResponse.json({
       ok: true,
       url,
       title,
-      text: cappedText,
-      colors,
+      text,
+      used_fallback,
+      colors: {
+        theme_color: themeColor,
+        manifest_theme_color: manifestTheme,
+        manifest_background_color: manifestBg,
+        primary_color_guess: primaryGuess,
+        accent_color_guess: accentGuess,
+        logo_url,
+        css_urls: cssUrls,
+        debug_top_hex: colorPick.debug_top_hex,
+      },
     });
   } catch (e: any) {
     return NextResponse.json({ error: "fetch_error", details: e?.message || "unknown" }, { status: 500 });
