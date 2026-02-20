@@ -266,10 +266,6 @@ function TabsBar({
   );
 }
 
-/** -------------------- Knowledge: manual pages types -------------------- */
-type KbPage = { url: string; title: string; text: string; captured_at: string };
-type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
-
 function Modal(props: { title: string; children: React.ReactNode; onClose: () => void; right?: React.ReactNode }) {
   return (
     <div
@@ -299,7 +295,9 @@ function Modal(props: { title: string; children: React.ReactNode; onClose: () =>
           <div style={{ fontWeight: 900 }}>{props.title}</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {props.right}
-            <Button onClick={props.onClose} variant="secondary">Close</Button>
+            <Button onClick={props.onClose} variant="secondary">
+              Close
+            </Button>
           </div>
         </div>
         <div style={{ padding: 16 }}>{props.children}</div>
@@ -307,6 +305,10 @@ function Modal(props: { title: string; children: React.ReactNode; onClose: () =>
     </div>
   );
 }
+
+/** -------------------- Knowledge: manual pages types -------------------- */
+type KbPage = { url: string; title: string; text: string; captured_at: string };
+type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
 
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
@@ -375,12 +377,18 @@ export default function CompanyDetailPage() {
   // Brand hints (from fetch-page)
   const [kbBrandHints, setKbBrandHints] = useState<BrandHints | null>(null);
 
-  // Knowledge manager
+  // Knowledge manager (improved)
   const [kbChunks, setKbChunks] = useState<KnowledgeChunkRow[]>([]);
   const [kbChunksLoading, setKbChunksLoading] = useState(false);
   const [kbChunksQuery, setKbChunksQuery] = useState("");
-  const [kbChunksLimit, setKbChunksLimit] = useState(80);
+  const [kbChunksLimit, setKbChunksLimit] = useState(50);
+  const [kbTypeFilter, setKbTypeFilter] = useState<string>("all");
+  const [kbConfFilter, setKbConfFilter] = useState<string>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRow, setPreviewRow] = useState<KnowledgeChunkRow | null>(null);
 
+  // Edit modal
   const [editOpen, setEditOpen] = useState(false);
   const [editRow, setEditRow] = useState<KnowledgeChunkRow | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -514,17 +522,22 @@ export default function CompanyDetailPage() {
   async function loadKnowledgeChunks() {
     if (!id) return;
     setKbChunksLoading(true);
+
     const qs = new URLSearchParams({
       company_id: String(id),
       q: kbChunksQuery || "",
-      limit: String(kbChunksLimit || 80),
+      limit: String(kbChunksLimit || 50),
     }).toString();
 
     const res = await fetch(`/api/admin/knowledge/chunks?${qs}`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
+
     setKbChunksLoading(false);
     if (!res.ok) return setToast(json?.error || "chunks_load_failed");
-    setKbChunks(json?.chunks ?? []);
+
+    const rows: KnowledgeChunkRow[] = json?.chunks ?? [];
+    setKbChunks(rows);
+    setSelectedIds(new Set());
   }
 
   // Tab-specific loads
@@ -884,7 +897,7 @@ export default function CompanyDetailPage() {
   }
 
   async function saveEdit() {
-    if (!editRow) return;
+    if (!editRow || !id) return;
     setEditSaving(true);
 
     const res = await fetch("/api/admin/knowledge/chunks", {
@@ -904,16 +917,88 @@ export default function CompanyDetailPage() {
   }
 
   async function deleteChunk(row: KnowledgeChunkRow) {
+    if (!id) return;
     const ok = window.confirm("Delete this knowledge chunk? This cannot be undone.");
     if (!ok) return;
 
-    const res = await fetch(`/api/admin/knowledge/chunks/delete?id=${encodeURIComponent(row.id)}&company_id=${encodeURIComponent(String(id))}`, { method: "DELETE" });
+    const res = await fetch(`/api/admin/knowledge/chunks/delete?id=${encodeURIComponent(row.id)}&company_id=${encodeURIComponent(String(id))}`, {
+      method: "DELETE",
+    });
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "chunk_delete_failed");
 
     setToast("Chunk deleted");
     await loadKnowledgeChunks();
   }
+
+  function toggleSelect(chunkId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chunkId)) next.delete(chunkId);
+      else next.add(chunkId);
+      return next;
+    });
+  }
+
+  function selectAllVisible(visible: KnowledgeChunkRow[]) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const r of visible) next.add(r.id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDeleteSelected() {
+    if (!id) return;
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return setToast("No chunks selected");
+
+    const ok = window.confirm(`Delete ${ids.length} selected chunk(s)? This cannot be undone.`);
+    if (!ok) return;
+
+    const res = await fetch("/api/admin/knowledge/chunks/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: id, ids }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "bulk_delete_failed");
+
+    setToast(`Deleted ${json?.deleted ?? ids.length} chunks`);
+    await loadKnowledgeChunks();
+  }
+
+  function openPreview(row: KnowledgeChunkRow) {
+    setPreviewRow(row);
+    setPreviewOpen(true);
+  }
+
+  const visibleChunks = useMemo(() => {
+    return kbChunks.filter((c) => {
+      const type = String(c?.metadata?.type || "other");
+      const conf = String(c?.metadata?.confidence || "medium");
+      if (kbTypeFilter !== "all" && type !== kbTypeFilter) return false;
+      if (kbConfFilter !== "all" && conf !== kbConfFilter) return false;
+      return true;
+    });
+  }, [kbChunks, kbTypeFilter, kbConfFilter]);
+
+  const allTypes = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of kbChunks) s.add(String(c?.metadata?.type || "other"));
+    return ["all", ...Array.from(s).sort()];
+  }, [kbChunks]);
+
+  const allConfs = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of kbChunks) s.add(String(c?.metadata?.confidence || "medium"));
+    return ["all", ...Array.from(s).sort()];
+  }, [kbChunks]);
 
   const filteredLeads = useMemo(() => {
     const q = leadQuery.trim().toLowerCase();
@@ -1283,7 +1368,9 @@ export default function CompanyDetailPage() {
                   <Textarea value={kbPageText} onChange={(e) => setKbPageText(e.target.value)} placeholder="Page text will appear here…" style={{ minHeight: 180 }} />
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={addKbPage} variant="secondary">Add Page</Button>
+                    <Button onClick={addKbPage} variant="secondary">
+                      Add Page
+                    </Button>
                     <Button
                       onClick={() => {
                         setKbPages([]);
@@ -1332,7 +1419,9 @@ export default function CompanyDetailPage() {
                               {p.url} · {p.text.length.toLocaleString()} chars
                             </div>
                           </div>
-                          <Button onClick={() => removeKbPage(p.url)} variant="danger">Remove</Button>
+                          <Button onClick={() => removeKbPage(p.url)} variant="danger">
+                            Remove
+                          </Button>
                         </div>
                       ))
                     )}
@@ -1342,10 +1431,10 @@ export default function CompanyDetailPage() {
                 </div>
               </Card>
 
-              {/* Knowledge Chunks Manager */}
+              {/* Compact Manager */}
               <Card
-                title="Knowledge Chunks Manager"
-                subtitle="View, search, edit, and delete knowledge chunks for this company."
+                title="Knowledge Chunks"
+                subtitle="Compact table view with filters, preview, and bulk actions."
                 right={
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="secondary">
@@ -1355,45 +1444,140 @@ export default function CompanyDetailPage() {
                 }
               >
                 <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px", gap: 10 }}>
-                    <Input value={kbChunksQuery} onChange={(e) => setKbChunksQuery(e.target.value)} placeholder="Search title, content, source…" />
-                    <Input
-                      type="number"
-                      min={10}
-                      max={200}
-                      value={kbChunksLimit}
-                      onChange={(e) => setKbChunksLimit(Number(e.target.value || 80))}
-                    />
+                  {/* Controls */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 120px 120px", gap: 10 }}>
+                    <Input value={kbChunksQuery} onChange={(e) => setKbChunksQuery(e.target.value)} placeholder="Search chunks…" />
+                    <select
+                      value={kbTypeFilter}
+                      onChange={(e) => setKbTypeFilter(e.target.value)}
+                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                    >
+                      {allTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={kbConfFilter}
+                      onChange={(e) => setKbConfFilter(e.target.value)}
+                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                    >
+                      {allConfs.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+
+                    <Input type="number" min={10} max={200} value={kbChunksLimit} onChange={(e) => setKbChunksLimit(Number(e.target.value || 50))} />
                     <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="primary">
                       Apply
                     </Button>
                   </div>
 
+                  {/* Bulk actions */}
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                      Showing <b>{visibleChunks.length}</b> of <b>{kbChunks.length}</b> loaded · Selected <b>{selectedIds.size}</b>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <Button onClick={() => selectAllVisible(visibleChunks)} disabled={visibleChunks.length === 0} variant="secondary">
+                        Select visible
+                      </Button>
+                      <Button onClick={clearSelection} disabled={selectedIds.size === 0} variant="secondary">
+                        Clear selection
+                      </Button>
+                      <Button onClick={bulkDeleteSelected} disabled={selectedIds.size === 0} variant="danger">
+                        Delete selected
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Table */}
                   <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 120px", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
-                      <div>Title</div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px",
+                        background: UI.surface2,
+                        padding: "10px 12px",
+                        fontSize: 12.5,
+                        color: UI.text2,
+                        fontWeight: 900,
+                        gap: 10,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>✓</div>
+                      <div>Title (preview)</div>
                       <div>Type</div>
-                      <div>Confidence</div>
+                      <div>Conf</div>
+                      <div>Source</div>
+                      <div>Date</div>
                       <div>Actions</div>
                     </div>
 
-                    {kbChunks.length === 0 ? (
+                    {visibleChunks.length === 0 ? (
                       <div style={{ padding: 12, color: UI.text2 }}>No chunks found.</div>
                     ) : (
-                      kbChunks.map((c) => {
-                        const type = String(c?.metadata?.type || "—");
-                        const conf = String(c?.metadata?.confidence || "—");
+                      visibleChunks.map((c) => {
+                        const type = String(c?.metadata?.type || "other");
+                        const conf = String(c?.metadata?.confidence || "medium");
+                        const isSel = selectedIds.has(c.id);
+                        const preview = (c.content || "").slice(0, 120).replace(/\s+/g, " ").trim();
+
                         return (
-                          <div key={c.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 120px", padding: "10px 12px", borderTop: `1px solid ${UI.border}`, gap: 10, alignItems: "center" }}>
+                          <div
+                            key={c.id}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px",
+                              padding: "10px 12px",
+                              borderTop: `1px solid ${UI.border}`,
+                              gap: 10,
+                              alignItems: "center",
+                              background: isSel ? "#F8FAFF" : "#fff",
+                            }}
+                          >
+                            <div>
+                              <input type="checkbox" checked={isSel} onChange={() => toggleSelect(c.id)} />
+                            </div>
+
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
                               <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {(c.source_ref || "—")} · {new Date(c.created_at).toLocaleString()}
+                                {preview || "—"}
                               </div>
                             </div>
+
                             <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{type}</div>
                             <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{conf}</div>
+
+                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {c.source_ref || "—"}
+                            </div>
+
+                            <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(c.created_at).toLocaleString()}</div>
+
                             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button
+                                type="button"
+                                onClick={() => openPreview(c)}
+                                style={{
+                                  border: `1px solid ${UI.border}`,
+                                  background: "#fff",
+                                  borderRadius: 999,
+                                  padding: "7px 10px",
+                                  fontSize: 12.5,
+                                  cursor: "pointer",
+                                  fontWeight: 900,
+                                }}
+                              >
+                                Preview
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => openEdit(c)}
@@ -1450,7 +1634,9 @@ export default function CompanyDetailPage() {
                     <Button onClick={ingestKnowledge} disabled={kbIngesting} variant="primary">
                       {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
                     </Button>
-                    <Button onClick={() => setKbText("")} variant="secondary">Clear</Button>
+                    <Button onClick={() => setKbText("")} variant="secondary">
+                      Clear
+                    </Button>
                   </div>
                 </div>
               </Card>
@@ -1507,6 +1693,39 @@ export default function CompanyDetailPage() {
         </>
       )}
 
+      {/* Preview modal */}
+      {previewOpen && previewRow ? (
+        <Modal
+          title="Preview Knowledge Chunk"
+          onClose={() => {
+            setPreviewOpen(false);
+            setPreviewRow(null);
+          }}
+          right={
+            <Button
+              onClick={() => {
+                openEdit(previewRow);
+              }}
+              variant="primary"
+            >
+              Edit
+            </Button>
+          }
+        >
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ fontSize: 12.5, color: UI.text2 }}>
+              <b>Type:</b> {String(previewRow?.metadata?.type || "other")} · <b>Confidence:</b>{" "}
+              {String(previewRow?.metadata?.confidence || "medium")}
+            </div>
+            <div style={{ fontSize: 12.5, color: UI.text2 }}>
+              <b>Source:</b> {previewRow.source_ref || "—"} · <b>Created:</b> {new Date(previewRow.created_at).toLocaleString()}
+            </div>
+            <CodeBox text={previewRow.content} />
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Edit modal */}
       {editOpen && editRow ? (
         <Modal
           title="Edit Knowledge Chunk"
