@@ -26,11 +26,93 @@ function detectIntent(text: string): "pricing" | "faq" | "contact" | null {
     return "faq";
   }
 
-  if (/(contact|call|appointment|termin|kontakt|anruf|reach)/i.test(t)) {
+  if (/(contact|call|appointment|termin|kontakt|anruf|reach|demo|meeting|book)/i.test(t)) {
     return "contact";
   }
 
   return null;
+}
+
+function detectCommercialIntent(text: string): boolean {
+  return /(price|pricing|cost|quote|offer|demo|trial|subscribe|plan|package|preis|kosten|angebot|paket|abo)/i.test(text);
+}
+
+function detectContactSharing(text: string): boolean {
+  const email = /[^\s@]+@[^\s@]+\.[^\s@]+/.test(text);
+  const phone = /(\+?\d[\d\s().-]{7,}\d)/.test(text);
+  return email || phone;
+}
+
+function extractEmail(text: string): string | null {
+  const m = text.match(/[^\s@]+@[^\s@]+\.[^\s@]+/);
+  return m ? m[0].trim().toLowerCase() : null;
+}
+
+function extractPhone(text: string): string | null {
+  const m = text.match(/(\+?\d[\d\s().-]{7,}\d)/);
+  return m ? m[1].replace(/\s+/g, " ").trim() : null;
+}
+
+function intentScore(intent: string | null): number {
+  if (intent === "pricing") return 10;
+  if (intent === "contact") return 8;
+  if (intent === "faq") return 2;
+  return 0;
+}
+
+function computeScore(params: {
+  message: string;
+  commercial: boolean;
+  hasEmail: boolean;
+  hasPhone: boolean;
+  intent: string | null;
+}) {
+  let score = 0;
+
+  // Base: commercial intent creates a lead (warm baseline)
+  if (params.commercial) score += 25;
+
+  // Intent
+  score += intentScore(params.intent);
+
+  // Strong buying signals
+  if (/(demo|call|appointment|termin|book|schedule|meeting|beratung)/i.test(params.message)) score += 20;
+  if (/(budget|€|aed|dirham|euro|usd)/i.test(params.message)) score += 10;
+  if (/(asap|urgent|sofort|heute|this week|tomorrow|morgen)/i.test(params.message)) score += 10;
+
+  // Contact info => HOT
+  if (params.hasEmail) score += 25;
+  if (params.hasPhone) score += 25;
+
+  if (score > 100) score = 100;
+  return score;
+}
+
+function bandFromScore(score: number): "cold" | "warm" | "hot" {
+  if (score >= 60) return "hot";
+  if (score >= 30) return "warm";
+  return "cold";
+}
+
+function buildLeadPreview(input: {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  intent?: string | null;
+  score_band: "cold" | "warm" | "hot";
+  message: string;
+}) {
+  const bits: string[] = [];
+  bits.push(input.score_band.toUpperCase());
+  if (input.intent) bits.push(input.intent.toUpperCase());
+  if (input.name) bits.push(input.name);
+  if (input.email) bits.push(input.email);
+  if (input.phone) bits.push(input.phone);
+
+  const msg = input.message.replace(/\s+/g, " ").trim();
+  const snippet = msg.length > 140 ? msg.slice(0, 140) + "…" : msg;
+
+  return `${bits.join(" · ")} — ${snippet}`;
 }
 
 async function embedQuery(text: string): Promise<number[]> {
@@ -41,12 +123,7 @@ async function embedQuery(text: string): Promise<number[]> {
   return r.data[0].embedding as unknown as number[];
 }
 
-async function matchKnowledgeChunks(
-  company_id: string,
-  embedding: number[],
-  match_count: number,
-  intent: string | null
-) {
+async function matchKnowledgeChunks(company_id: string, embedding: number[], match_count: number, intent: string | null) {
   const { data, error } = await supabaseServer.rpc("match_knowledge_chunks", {
     p_company_id: company_id,
     p_query_embedding: embedding,
@@ -87,14 +164,85 @@ function buildContext(rows: any[]) {
     .join("\n\n---\n\n");
 }
 
-function detectCommercialIntent(text: string): boolean {
-  return /(price|pricing|cost|quote|offer|demo|trial|subscribe|plan|package|preis|kosten|angebot|paket|abo)/i.test(text);
-}
+async function upsertCompanyLead(params: {
+  company_id: string;
+  conversation_id: string;
+  message: string;
+  intent: string | null;
+  commercial: boolean;
+}) {
+  const email = extractEmail(params.message);
+  const phone = extractPhone(params.message);
+  const hasContact = !!email || !!phone;
 
-function detectContactSharing(text: string): boolean {
-  const email = /[^\s@]+@[^\s@]+\.[^\s@]+/.test(text);
-  const phone = /(\+?\d[\d\s().-]{7,}\d)/.test(text);
-  return email || phone;
+  // If it's not commercial and no contact detected, we only update if a lead already exists.
+  const { data: existing } = await supabaseServer
+    .from("company_leads")
+    .select("id,name,email,phone,score_total,score_band,status,qualification_json,consents_json,tags")
+    .eq("company_id", params.company_id)
+    .eq("conversation_id", params.conversation_id)
+    .maybeSingle();
+
+  const shouldCreate = params.commercial || hasContact;
+  if (!existing && !shouldCreate) return; // do nothing
+
+  const prevScore = Number(existing?.score_total ?? 0);
+  const nextScore = Math.max(
+    prevScore,
+    computeScore({
+      message: params.message,
+      commercial: params.commercial,
+      hasEmail: !!email || !!existing?.email,
+      hasPhone: !!phone || !!existing?.phone,
+      intent: params.intent,
+    })
+  );
+
+  const nextBand = bandFromScore(nextScore);
+
+  const mergedEmail = existing?.email || email || null;
+  const mergedPhone = existing?.phone || phone || null;
+
+  const prevQual = existing?.qualification_json && typeof existing.qualification_json === "object" ? existing.qualification_json : {};
+  const nextQual = {
+    ...prevQual,
+    // lightweight trace (optional)
+    last_user_message: params.message,
+    last_intent: params.intent,
+  };
+
+  const lead_preview = buildLeadPreview({
+    name: existing?.name || null,
+    email: mergedEmail,
+    phone: mergedPhone,
+    intent: params.intent,
+    score_band: nextBand,
+    message: params.message,
+  });
+
+  const row: any = {
+    company_id: params.company_id,
+    conversation_id: params.conversation_id,
+    channel: "widget",
+    lead_state: existing ? existing.lead_state || "discovery" : "discovery",
+    status: existing ? existing.status || "new" : "new",
+    name: existing?.name || null,
+    email: mergedEmail,
+    phone: mergedPhone,
+    qualification_json: nextQual,
+    intent_score: Math.max(Number(existing?.intent_score ?? 0), intentScore(params.intent)),
+    score_total: nextScore,
+    score_band: nextBand,
+    tags: existing?.tags ?? [],
+    last_touch_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    lead_preview,
+  };
+
+  // With the unique index (company_id, conversation_id), we can upsert safely.
+  await supabaseServer.from("company_leads").upsert(row, {
+    onConflict: "company_id,conversation_id",
+  });
 }
 
 export async function POST(req: Request) {
@@ -134,6 +282,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: bill.code }, { status: 402 });
   }
 
+  // store user message
   await supabaseServer.from("messages").insert({
     conversation_id,
     role: "user",
@@ -141,7 +290,24 @@ export async function POST(req: Request) {
   });
 
   const intent = detectIntent(message);
+  const commercial = detectCommercialIntent(message);
+  const contactShared = detectContactSharing(message);
+  const needLead = commercial || contactShared;
 
+  // ✅ Lead creation/enrichment (commercial creates lead, contact => hot)
+  try {
+    await upsertCompanyLead({
+      company_id,
+      conversation_id,
+      message,
+      intent,
+      commercial,
+    });
+  } catch {
+    // never block chat
+  }
+
+  // knowledge context
   let context = "";
   let sources: any[] = [];
 
@@ -177,15 +343,12 @@ ${context || "(empty)"}
 
   const reply = String(completion.choices?.[0]?.message?.content || "").trim();
 
+  // store assistant message
   await supabaseServer.from("messages").insert({
     conversation_id,
     role: "assistant",
     content: reply,
   });
-
-  const commercial = detectCommercialIntent(message);
-  const contactShared = detectContactSharing(message);
-  const needLead = commercial || contactShared;
 
   return NextResponse.json({
     reply,

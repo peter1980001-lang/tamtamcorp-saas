@@ -53,7 +53,7 @@ type LeadRow = {
   channel: string | null;
   source: string | null;
   lead_state: string;
-  status: string;
+  status: "new" | "contacted" | "closed" | string;
   name: string | null;
   email: string | null;
   phone: string | null;
@@ -63,6 +63,13 @@ type LeadRow = {
   score_total: number;
   score_band: "cold" | "warm" | "hot";
   tags: string[];
+
+  assigned_to: string | null;
+  assigned_at: string | null;
+  admin_notes: string | null;
+  lead_preview?: string | null;
+  lead_summary?: string | null;
+
   last_touch_at: string | null;
   created_at: string;
   updated_at: string;
@@ -395,11 +402,30 @@ export default function CompanyDetailPage() {
   const [editContent, setEditContent] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
-  // Leads
+  // Leads (Knowledge-style)
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
+
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
+  const [leadStatus, setLeadStatus] = useState<"all" | "new" | "contacted" | "closed">("all");
+  const [leadLimit, setLeadLimit] = useState(50);
+  const [leadSort, setLeadSort] = useState<"last_touch" | "updated" | "score">("last_touch");
+
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+
+  const [leadPreviewOpen, setLeadPreviewOpen] = useState(false);
+  const [leadPreviewRow, setLeadPreviewRow] = useState<LeadRow | null>(null);
+  const [leadPreviewMessages, setLeadPreviewMessages] = useState<{ role: string; content: string; created_at: string }[]>([]);
+  const [leadPreviewLoading, setLeadPreviewLoading] = useState(false);
+
+  const [leadEditOpen, setLeadEditOpen] = useState(false);
+  const [leadEditRow, setLeadEditRow] = useState<LeadRow | null>(null);
+  const [leadEditStatus, setLeadEditStatus] = useState<"new" | "contacted" | "closed">("new");
+  const [leadEditAssignedTo, setLeadEditAssignedTo] = useState<string>("");
+  const [leadEditNotes, setLeadEditNotes] = useState<string>("");
+  const [leadEditTags, setLeadEditTags] = useState<string>(""); // comma separated
+  const [leadEditSaving, setLeadEditSaving] = useState(false);
 
   const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
@@ -512,11 +538,24 @@ export default function CompanyDetailPage() {
   async function loadLeads() {
     if (!id) return;
     setLeadsLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}/leads`, { cache: "no-store" });
+
+    const qs = new URLSearchParams({
+      q: leadQuery || "",
+      band: leadBand,
+      status: leadStatus,
+      limit: String(leadLimit || 50),
+      sort: leadSort,
+    }).toString();
+
+    const res = await fetch(`/api/admin/companies/${id}/leads?${qs}`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
+
     setLeadsLoading(false);
     if (!res.ok) return setToast(json?.error || "leads_failed");
-    setLeads(json.leads ?? []);
+
+    const rows: LeadRow[] = json?.leads ?? [];
+    setLeads(rows);
+    setSelectedLeadIds(new Set());
   }
 
   async function loadKnowledgeChunks() {
@@ -1000,25 +1039,136 @@ export default function CompanyDetailPage() {
     return ["all", ...Array.from(s).sort()];
   }, [kbChunks]);
 
-  const filteredLeads = useMemo(() => {
-    const q = leadQuery.trim().toLowerCase();
-    return leads.filter((l) => {
-      if (leadBand !== "all" && l.score_band !== leadBand) return false;
-      if (!q) return true;
-      const hay = [
-        l.name || "",
-        l.email || "",
-        l.phone || "",
-        l.status || "",
-        l.lead_state || "",
-        l.score_band || "",
-        JSON.stringify(l.qualification_json || {}),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
+  // -------- Leads helpers (Knowledge-style) --------
+  const visibleLeads = useMemo(() => leads, [leads]);
+
+  function toggleSelectLead(leadId: string) {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
     });
-  }, [leads, leadQuery, leadBand]);
+  }
+
+  function selectAllVisibleLeads(visible: LeadRow[]) {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      for (const r of visible) next.add(r.id);
+      return next;
+    });
+  }
+
+  function clearLeadSelection() {
+    setSelectedLeadIds(new Set());
+  }
+
+  async function bulkDeleteSelectedLeads() {
+    if (!id) return;
+    const ids = Array.from(selectedLeadIds);
+    if (!ids.length) return setToast("No leads selected");
+
+    const ok = window.confirm(`Delete ${ids.length} selected lead(s)? This cannot be undone.`);
+    if (!ok) return;
+
+    const res = await fetch(`/api/admin/companies/${id}/leads`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "bulk_delete_failed");
+
+    setToast(`Deleted ${json?.deleted ?? ids.length} leads`);
+    await loadLeads();
+  }
+
+  async function deleteLead(row: LeadRow) {
+    if (!id) return;
+    const ok = window.confirm("Delete this lead? This cannot be undone.");
+    if (!ok) return;
+
+    const res = await fetch(`/api/admin/companies/${id}/leads`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [row.id] }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "lead_delete_failed");
+
+    setToast("Lead deleted");
+    await loadLeads();
+  }
+
+  async function openLeadPreview(row: LeadRow) {
+    if (!id) return;
+    setLeadPreviewRow(row);
+    setLeadPreviewOpen(true);
+    setLeadPreviewMessages([]);
+    setLeadPreviewLoading(true);
+
+    const res = await fetch(`/api/admin/companies/${id}/leads/${encodeURIComponent(row.id)}/conversation`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+
+    setLeadPreviewLoading(false);
+    if (!res.ok) {
+      setToast(json?.error || "lead_preview_failed");
+      return;
+    }
+
+    const msgs = (json?.messages ?? []).map((m: any) => ({
+      role: String(m?.role || ""),
+      content: String(m?.content || ""),
+      created_at: String(m?.created_at || ""),
+    }));
+    setLeadPreviewMessages(msgs);
+    // keep row from API if returned (optional)
+    if (json?.lead) setLeadPreviewRow(json.lead as LeadRow);
+  }
+
+  function openLeadEdit(row: LeadRow) {
+    setLeadEditRow(row);
+    setLeadEditOpen(true);
+    setLeadEditStatus((row.status as any) === "contacted" || (row.status as any) === "closed" ? (row.status as any) : "new");
+    setLeadEditAssignedTo(row.assigned_to || "");
+    setLeadEditNotes(row.admin_notes || "");
+    setLeadEditTags((row.tags || []).join(", "));
+  }
+
+  async function saveLeadEdit() {
+    if (!id || !leadEditRow) return;
+    setLeadEditSaving(true);
+
+    const tags = (leadEditTags || "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 50);
+
+    const res = await fetch(`/api/admin/companies/${id}/leads`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: leadEditRow.id,
+        status: leadEditStatus,
+        assigned_to: leadEditAssignedTo.trim() || null,
+        admin_notes: leadEditNotes.trim() || null,
+        tags,
+      }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setLeadEditSaving(false);
+
+    if (!res.ok) return setToast(json?.error || "lead_update_failed");
+
+    setToast("Lead updated");
+    setLeadEditOpen(false);
+    setLeadEditRow(null);
+    await loadLeads();
+  }
 
   const billingSummary = useMemo(() => {
     const status = billingInfo?.billing?.status || billingInfo?.status || "—";
@@ -1054,8 +1204,7 @@ export default function CompanyDetailPage() {
                     <b>Allowed domains:</b> {(data.keys?.allowed_domains ?? []).length}
                   </div>
                   <div>
-                    <b>Chat mode:</b>{" "}
-                    {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
+                    <b>Chat mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
                   </div>
                 </div>
               </Card>
@@ -1338,6 +1487,7 @@ export default function CompanyDetailPage() {
             </Card>
           )}
 
+          {/* -------------------- KNOWLEDGE TAB (unchanged) -------------------- */}
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
               {/* Manual Pages -> Generate */}
@@ -1643,11 +1793,23 @@ export default function CompanyDetailPage() {
             </div>
           )}
 
+          {/* -------------------- LEADS TAB (Knowledge-style) -------------------- */}
           {tab === "leads" && (
-            <Card title="Leads" subtitle="Search and filter leads for this company.">
+            <Card
+              title="Leads"
+              subtitle="Compact table view with filters, preview, edit, and bulk actions."
+              right={
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Button onClick={loadLeads} disabled={leadsLoading} variant="secondary">
+                    {leadsLoading ? "Loading…" : "Refresh"}
+                  </Button>
+                </div>
+              }
+            >
               <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px", gap: 10 }}>
-                  <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search name, email, phone, tags…" />
+                {/* Controls */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 140px 120px 120px", gap: 10 }}>
+                  <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search name, email, phone, notes, use_case…" />
                   <select
                     value={leadBand}
                     onChange={(e) => setLeadBand(e.target.value as any)}
@@ -1658,33 +1820,184 @@ export default function CompanyDetailPage() {
                     <option value="warm">warm</option>
                     <option value="hot">hot</option>
                   </select>
-                  <Button onClick={loadLeads} disabled={leadsLoading} variant="secondary">
-                    {leadsLoading ? "Loading…" : "Refresh"}
+
+                  <select
+                    value={leadStatus}
+                    onChange={(e) => setLeadStatus(e.target.value as any)}
+                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                  >
+                    <option value="all">all</option>
+                    <option value="new">new</option>
+                    <option value="contacted">contacted</option>
+                    <option value="closed">closed</option>
+                  </select>
+
+                  <select
+                    value={leadSort}
+                    onChange={(e) => setLeadSort(e.target.value as any)}
+                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                  >
+                    <option value="last_touch">last_touch</option>
+                    <option value="updated">updated</option>
+                    <option value="score">score</option>
+                  </select>
+
+                  <Input type="number" min={10} max={500} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value || 50))} />
+                  <Button onClick={loadLeads} disabled={leadsLoading} variant="primary">
+                    Apply
                   </Button>
                 </div>
 
-                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
-                    <div>Lead</div>
-                    <div>Band</div>
-                    <div>Score</div>
-                    <div>Updated</div>
+                {/* Bulk actions */}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                    Showing <b>{visibleLeads.length}</b> loaded · Selected <b>{selectedLeadIds.size}</b>
                   </div>
 
-                  {filteredLeads.length === 0 ? (
-                    <div style={{ padding: 12, color: UI.text2 }}>No leads.</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Button onClick={() => selectAllVisibleLeads(visibleLeads)} disabled={visibleLeads.length === 0} variant="secondary">
+                      Select visible
+                    </Button>
+                    <Button onClick={clearLeadSelection} disabled={selectedLeadIds.size === 0} variant="secondary">
+                      Clear selection
+                    </Button>
+                    <Button onClick={bulkDeleteSelectedLeads} disabled={selectedLeadIds.size === 0} variant="danger">
+                      Delete selected
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px",
+                      background: UI.surface2,
+                      padding: "10px 12px",
+                      fontSize: 12.5,
+                      color: UI.text2,
+                      fontWeight: 900,
+                      gap: 10,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>✓</div>
+                    <div>Lead (preview)</div>
+                    <div>Band</div>
+                    <div>Score</div>
+                    <div>Status</div>
+                    <div>Assigned</div>
+                    <div>Updated</div>
+                    <div>Actions</div>
+                  </div>
+
+                  {visibleLeads.length === 0 ? (
+                    <div style={{ padding: 12, color: UI.text2 }}>No leads found.</div>
                   ) : (
-                    filteredLeads.map((l) => (
-                      <div key={l.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "10px 12px", borderTop: `1px solid ${UI.border}` }}>
-                        <div>
-                          <div style={{ fontWeight: 900 }}>{l.name || "(unknown)"}</div>
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>{l.email || l.phone || l.id}</div>
+                    visibleLeads.map((l) => {
+                      const isSel = selectedLeadIds.has(l.id);
+                      const preview =
+                        (l.lead_preview || "").trim() ||
+                        [
+                          l.email || "",
+                          l.phone || "",
+                          String(l?.qualification_json?.use_case || "").trim(),
+                          String(l?.qualification_json?.note || "").trim(),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                          .slice(0, 180);
+
+                      return (
+                        <div
+                          key={l.id}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px",
+                            padding: "10px 12px",
+                            borderTop: `1px solid ${UI.border}`,
+                            gap: 10,
+                            alignItems: "center",
+                            background: isSel ? "#F8FAFF" : "#fff",
+                          }}
+                        >
+                          <div>
+                            <input type="checkbox" checked={isSel} onChange={() => toggleSelectLead(l.id)} />
+                          </div>
+
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {l.name || l.email || l.phone || "(unknown)"}
+                            </div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {preview || l.conversation_id || l.id}
+                            </div>
+                          </div>
+
+                          <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{l.score_band}</div>
+                          <div style={{ fontWeight: 900 }}>{l.score_total}</div>
+                          <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{String(l.status || "new")}</div>
+
+                          <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {l.assigned_to || "—"}
+                          </div>
+
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                            {new Date(l.updated_at).toLocaleString()}
+                          </div>
+
+                          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              onClick={() => openLeadPreview(l)}
+                              style={{
+                                border: `1px solid ${UI.border}`,
+                                background: "#fff",
+                                borderRadius: 999,
+                                padding: "7px 10px",
+                                fontSize: 12.5,
+                                cursor: "pointer",
+                                fontWeight: 900,
+                              }}
+                            >
+                              Preview
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openLeadEdit(l)}
+                              style={{
+                                border: `1px solid ${UI.border}`,
+                                background: "#fff",
+                                borderRadius: 999,
+                                padding: "7px 10px",
+                                fontSize: 12.5,
+                                cursor: "pointer",
+                                fontWeight: 900,
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteLead(l)}
+                              style={{
+                                border: "1px solid #FECACA",
+                                background: "#fff",
+                                color: UI.danger,
+                                borderRadius: 999,
+                                padding: "7px 10px",
+                                fontSize: 12.5,
+                                cursor: "pointer",
+                                fontWeight: 900,
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ textTransform: "uppercase", fontSize: 12.5, color: UI.text2 }}>{l.score_band}</div>
-                        <div style={{ fontWeight: 900 }}>{l.score_total}</div>
-                        <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleDateString()}</div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -1693,7 +2006,7 @@ export default function CompanyDetailPage() {
         </>
       )}
 
-      {/* Preview modal */}
+      {/* Knowledge Preview modal */}
       {previewOpen && previewRow ? (
         <Modal
           title="Preview Knowledge Chunk"
@@ -1714,8 +2027,7 @@ export default function CompanyDetailPage() {
         >
           <div style={{ display: "grid", gap: 10 }}>
             <div style={{ fontSize: 12.5, color: UI.text2 }}>
-              <b>Type:</b> {String(previewRow?.metadata?.type || "other")} · <b>Confidence:</b>{" "}
-              {String(previewRow?.metadata?.confidence || "medium")}
+              <b>Type:</b> {String(previewRow?.metadata?.type || "other")} · <b>Confidence:</b> {String(previewRow?.metadata?.confidence || "medium")}
             </div>
             <div style={{ fontSize: 12.5, color: UI.text2 }}>
               <b>Source:</b> {previewRow.source_ref || "—"} · <b>Created:</b> {new Date(previewRow.created_at).toLocaleString()}
@@ -1725,7 +2037,7 @@ export default function CompanyDetailPage() {
         </Modal>
       ) : null}
 
-      {/* Edit modal */}
+      {/* Knowledge Edit modal */}
       {editOpen && editRow ? (
         <Modal
           title="Edit Knowledge Chunk"
@@ -1748,8 +2060,155 @@ export default function CompanyDetailPage() {
               <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
               <Textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} style={{ minHeight: 320 }} />
             </div>
+            <div style={{ fontSize: 12.5, color: UI.text3 }}>Note: Embeddings are not re-generated on edit yet. If you want perfect retrieval, we can re-embed on save.</div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Lead Preview modal (Knowledge-like) */}
+      {leadPreviewOpen && leadPreviewRow ? (
+        <Modal
+          title="Preview Lead"
+          onClose={() => {
+            setLeadPreviewOpen(false);
+            setLeadPreviewRow(null);
+            setLeadPreviewMessages([]);
+          }}
+          right={
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Button
+                onClick={() => {
+                  openLeadEdit(leadPreviewRow);
+                }}
+                variant="primary"
+              >
+                Edit
+              </Button>
+            </div>
+          }
+        >
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                <div style={{ fontSize: 12.5, color: UI.text2 }}>Lead</div>
+                <div style={{ fontWeight: 900, marginTop: 4 }}>{leadPreviewRow.name || leadPreviewRow.email || leadPreviewRow.phone || "(unknown)"}</div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Band:</b> {leadPreviewRow.score_band.toUpperCase()} · <b>Score:</b> {leadPreviewRow.score_total} · <b>Status:</b> {String(leadPreviewRow.status || "new")}
+                </div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Email:</b> {leadPreviewRow.email || "—"} · <b>Phone:</b> {leadPreviewRow.phone || "—"}
+                </div>
+              </div>
+
+              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                <div style={{ fontSize: 12.5, color: UI.text2 }}>Meta</div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Assigned:</b> {leadPreviewRow.assigned_to || "—"}
+                </div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Lead state:</b> {leadPreviewRow.lead_state || "—"} · <b>Channel:</b> {leadPreviewRow.channel || "—"}
+                </div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Last touch:</b> {leadPreviewRow.last_touch_at ? new Date(leadPreviewRow.last_touch_at).toLocaleString() : "—"}
+                </div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
+                  <b>Conversation:</b> {leadPreviewRow.conversation_id || "—"}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 8 }}>
+                <b>Tags:</b> {(leadPreviewRow.tags || []).join(", ") || "—"}
+              </div>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 8 }}>
+                <b>Admin notes:</b> {leadPreviewRow.admin_notes || "—"}
+              </div>
+              <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                <b>Qualification JSON</b>
+              </div>
+              <CodeBox text={safeJsonStringify(leadPreviewRow.qualification_json || {})} />
+              <div style={{ height: 10 }} />
+              <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                <b>Consents JSON</b>
+              </div>
+              <CodeBox text={safeJsonStringify(leadPreviewRow.consents_json || {})} />
+            </div>
+
+            <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
+              <div style={{ background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
+                Conversation (latest {leadPreviewMessages.length})
+              </div>
+
+              {leadPreviewLoading ? (
+                <div style={{ padding: 12, color: UI.text2 }}>Loading conversation…</div>
+              ) : leadPreviewMessages.length === 0 ? (
+                <div style={{ padding: 12, color: UI.text2 }}>No messages found.</div>
+              ) : (
+                <div style={{ padding: 12, display: "grid", gap: 10 }}>
+                  {leadPreviewMessages.map((m, idx) => (
+                    <div key={idx} style={{ border: `1px solid ${UI.borderSoft}`, borderRadius: UI.radius, padding: 10, background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                        <div style={{ fontWeight: 900, fontSize: 12.5, color: m.role === "assistant" ? "#1D4ED8" : UI.text }}>{m.role}</div>
+                        <div style={{ fontSize: 12, color: UI.text3 }}>{m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div>
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 13.5, color: UI.text, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Lead Edit modal (Knowledge-like) */}
+      {leadEditOpen && leadEditRow ? (
+        <Modal
+          title="Edit Lead"
+          onClose={() => {
+            setLeadEditOpen(false);
+            setLeadEditRow(null);
+          }}
+          right={
+            <Button onClick={saveLeadEdit} disabled={leadEditSaving} variant="primary">
+              {leadEditSaving ? "Saving…" : "Save"}
+            </Button>
+          }
+        >
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Status</div>
+                <select
+                  value={leadEditStatus}
+                  onChange={(e) => setLeadEditStatus(e.target.value as any)}
+                  style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                >
+                  <option value="new">new</option>
+                  <option value="contacted">contacted</option>
+                  <option value="closed">closed</option>
+                </select>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Assigned to</div>
+                <Input value={leadEditAssignedTo} onChange={(e) => setLeadEditAssignedTo(e.target.value)} placeholder="Employee / agent name or id" />
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Tags (comma separated)</div>
+              <Input value={leadEditTags} onChange={(e) => setLeadEditTags(e.target.value)} placeholder="vip, german, wants-demo, budget-high" />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Admin notes</div>
+              <Textarea value={leadEditNotes} onChange={(e) => setLeadEditNotes(e.target.value)} style={{ minHeight: 220 }} placeholder="Internal notes… (e.g. assign to Selene, follow up tomorrow, etc.)" />
+            </div>
+
             <div style={{ fontSize: 12.5, color: UI.text3 }}>
-              Note: Embeddings are not re-generated on edit yet. If you want perfect retrieval, we can re-embed on save.
+              Lead ID: {leadEditRow.id} · Conversation: {leadEditRow.conversation_id}
             </div>
           </div>
         </Modal>
