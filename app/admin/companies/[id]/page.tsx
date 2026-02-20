@@ -85,7 +85,7 @@ type KnowledgeChunkRow = {
   created_at: string;
 };
 
-const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads"] as const;
+const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads", sales-ai] as const;
 type Tab = (typeof ALL_TABS)[number];
 
 const UI = {
@@ -341,6 +341,35 @@ export default function CompanyDetailPage() {
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
 
+// Sales AI Config
+const [funnelConfig, setFunnelConfig] = useState<any>(null);
+const [funnelLoading, setFunnelLoading] = useState(false);
+const [funnelSaving, setFunnelSaving] = useState(false);
+
+async function loadFunnelConfig() {
+  if (!id) return;
+  setFunnelLoading(true);
+  const res = await fetch(`/api/admin/companies/${id}/funnel-config`, { cache: "no-store" });
+  const json = await res.json().catch(() => null);
+  setFunnelLoading(false);
+  if (!res.ok) return setToast(json?.error || "funnel_config_failed");
+  setFunnelConfig(json?.config ?? null);
+}
+
+async function saveFunnelConfig() {
+  if (!id || !funnelConfig) return;
+  setFunnelSaving(true);
+  const res = await fetch(`/api/admin/companies/${id}/funnel-config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(funnelConfig),
+  });
+  const json = await res.json().catch(() => null);
+  setFunnelSaving(false);
+  if (!res.ok) return setToast(json?.error || "save_failed");
+  setToast("Saved");
+}
+
   // Admins/Invites
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [invites, setInvites] = useState<InviteRow[]>([]);
@@ -442,6 +471,7 @@ export default function CompanyDetailPage() {
       { key: "test-chat" as Tab, label: "Test-Chat" },
       { key: "knowledge" as Tab, label: "Knowledge" },
       { key: "leads" as Tab, label: "Leads" },
+{ key: "sales-ai", label: "Sales AI" },
     ];
   }, [isOwner]);
 
@@ -585,6 +615,7 @@ export default function CompanyDetailPage() {
     if (tab === "admins") void loadInvites();
     if (tab === "leads") void loadLeads();
     if (tab === "knowledge") void loadKnowledgeChunks();
+if (tab === "sales-ai") loadFunnelConfig();
 
     if (tab === "domains") {
       const current = data?.keys?.allowed_domains ?? [];
@@ -2240,3 +2271,117 @@ export default function CompanyDetailPage() {
     </div>
   );
 }
+{tab === "sales-ai" && (
+  <div className="space-y-6">
+
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">Sales AI Configuration</h2>
+        <button
+          onClick={saveFunnelConfig}
+          disabled={funnelSaving}
+          className="btn-primary"
+        >
+          {funnelSaving ? "Saving..." : "Save"}
+        </button>
+      </div>
+
+      {funnelLoading && <div>Loading...</div>}
+
+      {funnelConfig && (
+        <div className="grid gap-4">
+
+          <div className="flex items-center gap-3">
+            <label>Enable Sales Engine</label>
+            <input
+              type="checkbox"
+              checked={!!funnelConfig.enabled}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, enabled: e.target.checked })
+              }
+            />
+          </div>
+
+          <div>
+            <label>Tone</label>
+            <select
+              value={funnelConfig.tone}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, tone: e.target.value })
+              }
+            >
+              <option value="consultative">Consultative</option>
+              <option value="direct">Direct</option>
+              <option value="luxury">Luxury</option>
+              <option value="formal">Formal</option>
+              <option value="playful">Playful</option>
+            </select>
+          </div>
+
+          <div>
+            <label>Response Length</label>
+            <select
+              value={funnelConfig.response_length}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, response_length: e.target.value })
+              }
+            >
+              <option value="concise">Concise</option>
+              <option value="medium">Medium</option>
+              <option value="detailed">Detailed</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <label>Handle Price Objections</label>
+            <input
+              type="checkbox"
+              checked={!!funnelConfig.objection_handling}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, objection_handling: e.target.checked })
+              }
+            />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <label>Show Pricing</label>
+            <input
+              type="checkbox"
+              checked={!!funnelConfig.show_pricing}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, show_pricing: e.target.checked })
+              }
+            />
+          </div>
+
+          <div>
+            <label>Pricing Strategy</label>
+            <select
+              value={funnelConfig.pricing_strategy}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, pricing_strategy: e.target.value })
+              }
+            >
+              <option value="multi-tier">Multi Tier</option>
+              <option value="anchor">Anchor Pricing</option>
+              <option value="request-only">Request Only</option>
+            </select>
+          </div>
+
+          <div>
+            <label>Default CTA (optional)</label>
+            <input
+              type="text"
+              value={funnelConfig.default_cta || ""}
+              onChange={(e) =>
+                setFunnelConfig({ ...funnelConfig, default_cta: e.target.value })
+              }
+              placeholder="Override strategic question..."
+            />
+          </div>
+
+        </div>
+      )}
+    </div>
+  </div>
+)}
