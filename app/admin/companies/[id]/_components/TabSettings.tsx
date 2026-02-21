@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DetailResponse, Keys } from "./types";
 import { Card, Button, Input, Textarea, CodeBox, UI } from "./ui";
 import { copyToClipboard, fetchJson } from "./api";
+import SettingsBotBehavior from "./SettingsBotBehavior";
 
 function normalizeHost(input: string): string {
   return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "");
@@ -120,6 +121,9 @@ export default function TabSettings(props: {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      {/* ✅ New: Bot Behavior (Funnel Config) */}
+      <SettingsBotBehavior companyId={companyId} setToast={setToast} />
+
       <Card title="Advanced Settings" subtitle="Only for technical setup. Most customers never need this.">
         <div style={{ display: "grid", gap: 14 }}>
           <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
