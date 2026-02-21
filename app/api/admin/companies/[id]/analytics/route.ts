@@ -36,7 +36,6 @@ async function requireCompanyAdmin(companyId: string) {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) return { ok: false as const, status: 401, reason: "unauthorized" as const };
 
-  // minimal: company_admins mapping
   const { data: row, error } = await supabase
     .from("company_admins")
     .select("role")
@@ -51,18 +50,17 @@ async function requireCompanyAdmin(companyId: string) {
 }
 
 function isQualified(q: any) {
-  // supports common shapes:
-  // qualification_json.qualified === true
-  // qualification_json.status === "qualified"
-  // qualification_json.stage === "qualified"
   if (!q) return false;
   if (q.qualified === true) return true;
   const s = String(q.status || q.stage || "").toLowerCase();
   return s === "qualified" || s === "hot" || s === "won";
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
-  const companyId = ctx.params.id;
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> } // ✅ params is async in your Next version
+) {
+  const { id: companyId } = await params; // ✅ await params
 
   const gate = await requireCompanyAdmin(companyId);
   if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
@@ -74,7 +72,6 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const since14 = addDaysUTC(today0, -13);
   const since30 = addDaysUTC(today0, -29);
 
-  // conversations (light columns)
   const { data: conv30, error: convErr } = await supabase
     .from("conversations")
     .select("id, created_at")
@@ -86,7 +83,6 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ error: "conversations_fetch_failed", details: convErr.message }, { status: 500 });
   }
 
-  // leads (light columns)
   const { data: leads30, error: leadsErr } = await supabase
     .from("company_leads")
     .select("id, created_at, qualification_json")
@@ -113,7 +109,6 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const leadPerChat30 = conv30Count > 0 ? (leads30Count / conv30Count) * 100 : 0;
   const qualPerLead30 = leads30Count > 0 ? (qualified30 / leads30Count) * 100 : 0;
 
-  // trends: last 7 vs previous 7 (within 30d window)
   const prev7Start = addDaysUTC(since7, -7);
   const prev7End = addDaysUTC(since7, -1);
 
@@ -132,7 +127,6 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     return t >= prev7Start && t <= prev7End && isQualified(l.qualification_json);
   }).length;
 
-  // series last 14d
   const days = daysRangeUTC(14);
   const map = new Map<string, { chats: number; leads: number; qualified: number }>();
   for (const d of days) map.set(d, { chats: 0, leads: 0, qualified: 0 });
