@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import BillingActions from "./_components/BillingActions";
 
@@ -85,23 +85,37 @@ type KnowledgeChunkRow = {
   created_at: string;
 };
 
-const ALL_TABS = ["overview", "keys", "domains", "limits", "admins", "embed", "billing", "test-chat", "knowledge", "leads", "sales-ai"] as const;
+type KbPage = { url: string; title: string; text: string; captured_at: string };
+type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
+
+const ALL_TABS = [
+  "dashboard",
+  "branding",
+  "knowledge",
+  "leads",
+  "team",
+  "billing",
+  "settings",
+] as const;
+
 type Tab = (typeof ALL_TABS)[number];
 
 const UI = {
+  bg: "#F6F7FB",
   surface: "#FFFFFF",
   surface2: "#FBFBFC",
-  border: "#E5E7EB",
-  borderSoft: "#ECEEF2",
-  text: "#111827",
-  text2: "#6B7280",
+  border: "#E6E8EF",
+  borderSoft: "#EEF0F6",
+  text: "#0B1220",
+  text2: "#4B5563",
   text3: "#9CA3AF",
-  accent: "#3B82F6",
+  accent: "#2563EB",
   accentSoft: "#EEF2FF",
   danger: "#DC2626",
+  success: "#16A34A",
   radius: 12,
-  radiusLg: 16,
-  shadow: "0 1px 0 rgba(16,24,40,0.03), 0 1px 2px rgba(16,24,40,0.04)",
+  radiusLg: 18,
+  shadow: "0 1px 0 rgba(16,24,40,0.03), 0 8px 24px rgba(16,24,40,0.06)",
 };
 
 function normalizeHost(input: string): string {
@@ -124,14 +138,29 @@ function normalizeUrlInput(raw: string) {
   return "https://" + t.replace(/^\/+/, "");
 }
 
+function Badge({ text, tone }: { text: string; tone?: "neutral" | "success" | "danger" | "info" }) {
+  const t = tone || "neutral";
+  const map: Record<string, React.CSSProperties> = {
+    neutral: { background: "#F3F4F6", border: "1px solid #E5E7EB", color: "#374151" },
+    success: { background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46" },
+    danger: { background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B" },
+    info: { background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#1D4ED8" },
+  };
+  return (
+    <span style={{ padding: "6px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 900, ...map[t] }}>
+      {text}
+    </span>
+  );
+}
+
 function Card(props: { title?: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div style={{ background: UI.surface, border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
       {props.title || props.right ? (
         <div style={{ padding: "18px 18px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-          <div>
-            {props.title ? <div style={{ fontWeight: 900, fontSize: 14, color: UI.text }}>{props.title}</div> : null}
-            {props.subtitle ? <div style={{ marginTop: 4, fontSize: 12.5, color: UI.text2, lineHeight: 1.45 }}>{props.subtitle}</div> : null}
+          <div style={{ minWidth: 0 }}>
+            {props.title ? <div style={{ fontWeight: 1000, fontSize: 14.5, color: UI.text }}>{props.title}</div> : null}
+            {props.subtitle ? <div style={{ marginTop: 6, fontSize: 12.8, color: UI.text2, lineHeight: 1.45 }}>{props.subtitle}</div> : null}
           </div>
           {props.right ? <div style={{ flex: "0 0 auto" }}>{props.right}</div> : null}
         </div>
@@ -158,7 +187,7 @@ function Button(props: { children: React.ReactNode; onClick?: () => void; disabl
         borderRadius: UI.radius,
         cursor: props.disabled ? "not-allowed" : "pointer",
         fontSize: 13.5,
-        fontWeight: 900,
+        fontWeight: 950,
         opacity: props.disabled ? 0.6 : 1,
         ...styleMap[v],
       }}
@@ -230,45 +259,59 @@ function TabsBar({
   active,
   onChange,
 }: {
-  tabs: { key: Tab; label: string }[];
+  tabs: { key: Tab; label: string; hint?: string }[];
   active: Tab;
   onChange: (next: Tab) => void;
 }) {
   return (
     <div
       style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 8,
-        padding: 6,
-        border: `1px solid ${UI.border}`,
-        background: UI.surface,
-        borderRadius: UI.radiusLg,
-        boxShadow: UI.shadow,
+        position: "sticky",
+        top: 0,
+        zIndex: 20,
+        paddingTop: 10,
+        background: `linear-gradient(to bottom, ${UI.bg} 0%, rgba(246,247,251,0.85) 60%, rgba(246,247,251,0) 100%)`,
       }}
     >
-      {tabs.map((t) => {
-        const isActive = active === t.key;
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => onChange(t.key)}
-            style={{
-              padding: "9px 12px",
-              borderRadius: 999,
-              border: `1px solid ${isActive ? "#DBEAFE" : "transparent"}`,
-              background: isActive ? UI.accentSoft : "transparent",
-              color: isActive ? "#1D4ED8" : UI.text2,
-              fontSize: 13,
-              fontWeight: isActive ? 900 : 800,
-              cursor: "pointer",
-            }}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          padding: 8,
+          border: `1px solid ${UI.border}`,
+          background: UI.surface,
+          borderRadius: UI.radiusLg,
+          boxShadow: UI.shadow,
+        }}
+      >
+        {tabs.map((t) => {
+          const isActive = active === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => onChange(t.key)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 999,
+                border: `1px solid ${isActive ? "#C7D2FE" : "transparent"}`,
+                background: isActive ? UI.accentSoft : "transparent",
+                color: isActive ? "#1D4ED8" : UI.text2,
+                fontSize: 13,
+                fontWeight: isActive ? 1000 : 850,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+              title={t.hint || ""}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -299,7 +342,7 @@ function Modal(props: { title: string; children: React.ReactNode; onClose: () =>
         }}
       >
         <div style={{ padding: 16, borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ fontWeight: 900 }}>{props.title}</div>
+          <div style={{ fontWeight: 1000 }}>{props.title}</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {props.right}
             <Button onClick={props.onClose} variant="secondary">
@@ -313,91 +356,86 @@ function Modal(props: { title: string; children: React.ReactNode; onClose: () =>
   );
 }
 
-/** -------------------- Knowledge: manual pages types -------------------- */
-type KbPage = { url: string; title: string; text: string; captured_at: string };
-type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
+function Divider() {
+  return <div style={{ height: 1, background: UI.borderSoft, margin: "14px 0" }} />;
+}
+
+function KeyValue({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: `1px solid ${UI.borderSoft}` }}>
+      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>{k}</div>
+      <div style={{ fontSize: 13.5, color: UI.text, fontWeight: 900, textAlign: "right" }}>{v}</div>
+    </div>
+  );
+}
+
+function pickBrandValue(branding: any, candidates: string[]) {
+  for (const key of candidates) {
+    const v = branding?.[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function colorSwatch(hex: string) {
+  const h = String(hex || "").trim();
+  if (!h) return null;
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        width: 14,
+        height: 14,
+        borderRadius: 4,
+        background: h,
+        border: "1px solid rgba(0,0,0,0.12)",
+        verticalAlign: "middle",
+        marginRight: 8,
+      }}
+    />
+  );
+}
 
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const searchParams = useSearchParams();
 
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const [rotating, setRotating] = useState(false);
-
-  // Domains
+  // domains + limits (advanced)
   const [domainInput, setDomainInput] = useState("");
   const [domainDraft, setDomainDraft] = useState<string[]>([]);
   const [domainSaving, setDomainSaving] = useState(false);
   const [domainDirty, setDomainDirty] = useState(false);
 
-  // Limits (owner only)
   const [limitsText, setLimitsText] = useState<string>("{}");
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
 
-  // Sales AI Config
-  const [funnelConfig, setFunnelConfig] = useState<any>(null);
-  const [funnelLoading, setFunnelLoading] = useState(false);
-  const [funnelSaving, setFunnelSaving] = useState(false);
-
-  async function loadFunnelConfig() {
-    if (!id) return;
-    setFunnelLoading(true);
-    const res = await fetch(`/api/admin/companies/${id}/funnel-config`, { cache: "no-store" });
-    const json = await res.json().catch(() => null);
-    setFunnelLoading(false);
-    if (!res.ok) return setToast(json?.error || "funnel_config_failed");
-    setFunnelConfig(json?.config ?? null);
-  }
-
-  async function saveFunnelConfig() {
-    if (!id || !funnelConfig) return;
-    setFunnelSaving(true);
-    const res = await fetch(`/api/admin/companies/${id}/funnel-config`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(funnelConfig),
-    });
-    const json = await res.json().catch(() => null);
-    setFunnelSaving(false);
-    if (!res.ok) return setToast(json?.error || "save_failed");
-    setToast("Saved");
-  }
-
-  // Admins/Invites
+  // admins/invites
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [adminsLoading, setAdminsLoading] = useState(false);
   const [adminMutating, setAdminMutating] = useState<string | null>(null);
-
   const [inviteRole, setInviteRole] = useState("admin");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteDays, setInviteDays] = useState(7);
   const [inviteCreating, setInviteCreating] = useState(false);
 
-  // Billing
+  // billing
   const [billingInfo, setBillingInfo] = useState<any>(null);
   const [billingLoading, setBillingLoading] = useState(false);
 
-  // Test Chat
-  const [testToken, setTestToken] = useState<string | null>(null);
-  const [testConversationId, setTestConversationId] = useState<string | null>(null);
-  const [testInput, setTestInput] = useState("Hello Nova");
-  const [testLog, setTestLog] = useState<{ role: string; text: string }[]>([]);
-  const [testSending, setTestSending] = useState(false);
-
-  // Knowledge (manual text)
+  // knowledge
   const [kbTitle, setKbTitle] = useState("Manual Admin Entry");
   const [kbText, setKbText] = useState("");
   const [kbIngesting, setKbIngesting] = useState(false);
 
-  // Knowledge (manual pages -> audit ingest)
   const [kbPages, setKbPages] = useState<KbPage[]>([]);
   const [kbPageUrl, setKbPageUrl] = useState("");
   const [kbPageTitle, setKbPageTitle] = useState("");
@@ -406,14 +444,10 @@ export default function CompanyDetailPage() {
   const [kbAuditResult, setKbAuditResult] = useState<any>(null);
   const [kbPersistProfile, setKbPersistProfile] = useState(true);
 
-  // Fetch Page helper
   const [kbFetching, setKbFetching] = useState(false);
   const [kbFetchResult, setKbFetchResult] = useState<any>(null);
-
-  // Brand hints (from fetch-page)
   const [kbBrandHints, setKbBrandHints] = useState<BrandHints | null>(null);
 
-  // Knowledge manager (improved)
   const [kbChunks, setKbChunks] = useState<KnowledgeChunkRow[]>([]);
   const [kbChunksLoading, setKbChunksLoading] = useState(false);
   const [kbChunksQuery, setKbChunksQuery] = useState("");
@@ -424,23 +458,20 @@ export default function CompanyDetailPage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRow, setPreviewRow] = useState<KnowledgeChunkRow | null>(null);
 
-  // Edit modal
   const [editOpen, setEditOpen] = useState(false);
   const [editRow, setEditRow] = useState<KnowledgeChunkRow | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
-  // Leads (Knowledge-style)
+  // leads
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(false);
-
   const [leadQuery, setLeadQuery] = useState("");
   const [leadBand, setLeadBand] = useState<"all" | "cold" | "warm" | "hot">("all");
   const [leadStatus, setLeadStatus] = useState<"all" | "new" | "contacted" | "closed">("all");
   const [leadLimit, setLeadLimit] = useState(50);
   const [leadSort, setLeadSort] = useState<"last_touch" | "updated" | "score">("last_touch");
-
   const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
 
   const [leadPreviewOpen, setLeadPreviewOpen] = useState(false);
@@ -453,67 +484,55 @@ export default function CompanyDetailPage() {
   const [leadEditStatus, setLeadEditStatus] = useState<"new" | "contacted" | "closed">("new");
   const [leadEditAssignedTo, setLeadEditAssignedTo] = useState<string>("");
   const [leadEditNotes, setLeadEditNotes] = useState<string>("");
-  const [leadEditTags, setLeadEditTags] = useState<string>(""); // comma separated
+  const [leadEditTags, setLeadEditTags] = useState<string>("");
   const [leadEditSaving, setLeadEditSaving] = useState(false);
 
-  // Branding/logo upload (admin convenience)
+  // Branding/logo upload
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoUploadErr, setLogoUploadErr] = useState<string | null>(null);
 
   const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
 
-  const visibleTabs = useMemo(() => {
-    return [
-      { key: "overview" as Tab, label: "Overview" },
-      { key: "keys" as Tab, label: "Keys" },
-      { key: "domains" as Tab, label: "Domains" },
-      ...(isOwner ? [{ key: "limits" as Tab, label: "Limits" }] : []),
-      { key: "admins" as Tab, label: "Admins" },
-      { key: "embed" as Tab, label: "Embed" },
-      { key: "billing" as Tab, label: "Billing" },
-      { key: "test-chat" as Tab, label: "Test-Chat" },
+  const visibleTabs = useMemo(
+    () => [
+      { key: "dashboard" as Tab, label: "Dashboard" },
+      { key: "branding" as Tab, label: "Branding" },
       { key: "knowledge" as Tab, label: "Knowledge" },
       { key: "leads" as Tab, label: "Leads" },
-      { key: "sales-ai" as Tab, label: "Sales AI" },
-    ];
-  }, [isOwner]);
+      { key: "team" as Tab, label: "Team" },
+      { key: "billing" as Tab, label: "Billing" },
+      { key: "settings" as Tab, label: "Settings" },
+    ],
+    []
+  );
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
 
-  // URL -> tab
   useEffect(() => {
     if (!id) return;
-    const raw = String(searchParams?.get("tab") || "overview").toLowerCase();
-    const candidate = (ALL_TABS as readonly string[]).includes(raw) ? (raw as Tab) : "overview";
-    const next = allowedTabsSet.has(candidate) ? candidate : "overview";
+    const raw = String(searchParams?.get("tab") || "dashboard").toLowerCase();
+    const next = allowedTabsSet.has(raw as any) ? (raw as Tab) : "dashboard";
     setTab(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams, allowedTabsSet]);
 
-  // Load company
+  function setTabAndUrl(next: Tab) {
+    const safeNext = allowedTabsSet.has(next) ? next : "dashboard";
+    setTab(safeNext);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (safeNext === "dashboard") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", safeNext);
+    window.history.replaceState({}, "", url.toString());
+  }
+
   useEffect(() => {
     if (!id) return;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  function setTabAndUrl(next: Tab) {
-    const safeNext = allowedTabsSet.has(next) ? next : "overview";
-    setTab(safeNext);
-
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    if (safeNext === "overview") url.searchParams.delete("tab");
-    else url.searchParams.set("tab", safeNext);
-    window.history.replaceState({}, "", url.toString());
-  }
-
-  const embedSnippet = useMemo(() => {
-    const pk = data?.keys?.public_key || "pk_xxx";
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
-  }, [data?.keys?.public_key]);
 
   async function load() {
     if (!id) return;
@@ -548,6 +567,13 @@ export default function CompanyDetailPage() {
     }
   }
 
+  async function copy(text: string) {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setToast("Copied");
+  }
+
+  // --- Billing
   async function loadBilling() {
     if (!id) return;
     setBillingLoading(true);
@@ -558,6 +584,7 @@ export default function CompanyDetailPage() {
     setBillingInfo(json);
   }
 
+  // --- Team
   async function loadInvites() {
     if (!id) return;
     setAdminsLoading(true);
@@ -567,160 +594,6 @@ export default function CompanyDetailPage() {
     if (!res.ok) return setToast(json?.error || "invites_load_failed");
     setAdmins(json.admins ?? []);
     setInvites(json.invites ?? []);
-  }
-
-  async function loadLeads() {
-    if (!id) return;
-    setLeadsLoading(true);
-
-    const qs = new URLSearchParams({
-      q: leadQuery || "",
-      band: leadBand,
-      status: leadStatus,
-      limit: String(leadLimit || 50),
-      sort: leadSort,
-    }).toString();
-
-    const res = await fetch(`/api/admin/companies/${id}/leads?${qs}`, { cache: "no-store" });
-    const json = await res.json().catch(() => null);
-
-    setLeadsLoading(false);
-    if (!res.ok) return setToast(json?.error || "leads_failed");
-
-    const rows: LeadRow[] = json?.leads ?? [];
-    setLeads(rows);
-    setSelectedLeadIds(new Set());
-  }
-
-  async function loadKnowledgeChunks() {
-    if (!id) return;
-    setKbChunksLoading(true);
-
-    const qs = new URLSearchParams({
-      company_id: String(id),
-      q: kbChunksQuery || "",
-      limit: String(kbChunksLimit || 50),
-    }).toString();
-
-    const res = await fetch(`/api/admin/knowledge/chunks?${qs}`, { cache: "no-store" });
-    const json = await res.json().catch(() => null);
-
-    setKbChunksLoading(false);
-    if (!res.ok) return setToast(json?.error || "chunks_load_failed");
-
-    const rows: KnowledgeChunkRow[] = json?.chunks ?? [];
-    setKbChunks(rows);
-    setSelectedIds(new Set());
-  }
-
-  // Tab-specific loads
-  useEffect(() => {
-    if (tab === "billing") void loadBilling();
-    if (tab === "admins") void loadInvites();
-    if (tab === "leads") void loadLeads();
-    if (tab === "knowledge") void loadKnowledgeChunks();
-    if (tab === "sales-ai") void loadFunnelConfig();
-
-    if (tab === "domains") {
-      const current = data?.keys?.allowed_domains ?? [];
-      setDomainDraft(current);
-      setDomainInput("");
-      setDomainDirty(false);
-    }
-
-    if (tab === "limits") {
-      const current = data?.settings?.limits_json ?? {};
-      setLimitsText(safeJsonStringify(current));
-      setLimitsDirty(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
-
-  async function copy(text: string) {
-    if (!text) return;
-    await navigator.clipboard.writeText(text);
-    setToast("Copied");
-  }
-
-  async function rotateKeys() {
-    if (!id) return;
-    setRotating(true);
-    const res = await fetch(`/api/admin/companies/${id}/rotate-keys`, { method: "POST" });
-    const json = await res.json().catch(() => null);
-    setRotating(false);
-    if (!res.ok) return setToast(json?.error || "rotate_failed");
-    setToast("Keys rotated");
-    await load();
-  }
-
-  function addDomainFromInput() {
-    const normalized = normalizeHost(domainInput || "");
-    if (!normalized) return setToast("Enter a domain");
-    if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) return setToast("Invalid domain");
-    setDomainDraft((prev) => uniq([...prev, normalized]));
-    setDomainInput("");
-    setDomainDirty(true);
-  }
-
-  function removeDomain(d: string) {
-    setDomainDraft((prev) => prev.filter((x) => x !== d));
-    setDomainDirty(true);
-  }
-
-  async function saveDomains() {
-    if (!id) return;
-    setDomainSaving(true);
-    const payload = { allowed_domains: uniq(domainDraft.map((x) => normalizeHost(x)).filter(Boolean)) };
-
-    const res = await fetch(`/api/admin/companies/${id}/domains`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await res.json().catch(() => null);
-    setDomainSaving(false);
-    if (!res.ok) return setToast(json?.error || "domains_save_failed");
-
-    const updatedKeys: Keys | null = json?.keys ?? null;
-    if (updatedKeys) setData((prev) => (prev ? { ...prev, keys: updatedKeys } : prev));
-
-    setDomainDirty(false);
-    setToast("Domains saved");
-  }
-
-  async function saveLimits() {
-    if (!id) return;
-    if (!isOwner) return setToast("Not allowed");
-
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(limitsText || "{}");
-    } catch {
-      return setToast("Limits JSON invalid");
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setToast("Limits must be a JSON object");
-
-    setLimitsSaving(true);
-    const res = await fetch(`/api/admin/companies/${id}/limits`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limits_text: limitsText }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setLimitsSaving(false);
-    if (!res.ok) return setToast(json?.error || "limits_save_failed");
-
-    const updatedSettings: Settings | null = json?.settings ?? null;
-    if (updatedSettings) setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
-    setLimitsDirty(false);
-    setToast("Limits saved");
-  }
-
-  function inviteLink(token: string) {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    return `${origin}/invite?token=${encodeURIComponent(token)}`;
   }
 
   async function createInvite() {
@@ -743,9 +616,10 @@ export default function CompanyDetailPage() {
 
     const inv: InviteRow | null = json?.invite ?? null;
     if (inv) {
-      setInvites((prev) => [inv, ...prev]);
-      await navigator.clipboard.writeText(inviteLink(inv.token));
-      setToast("Invite created + link copied");
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const link = `${origin}/invite?token=${encodeURIComponent(inv.token)}`;
+      await navigator.clipboard.writeText(link);
+      setToast("Invite link copied");
     } else {
       setToast("Invite created");
     }
@@ -762,7 +636,7 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "invite_revoke_failed");
     setInvites((prev) => prev.map((x) => (x.id === invite_id ? { ...x, status: "revoked" } : x)));
-    setToast("Invite revoked");
+    setToast("Revoked");
   }
 
   async function setAdminRole(user_id: string, role: string) {
@@ -779,7 +653,7 @@ export default function CompanyDetailPage() {
     setAdminMutating(null);
     if (!res.ok) return setToast(json?.error || "admin_role_update_failed");
 
-    setToast("Role updated");
+    setToast("Saved");
     await loadInvites();
   }
 
@@ -792,294 +666,33 @@ export default function CompanyDetailPage() {
     setAdminMutating(null);
     if (!res.ok) return setToast(json?.error || "admin_remove_failed");
 
-    setToast("Admin removed");
+    setToast("Removed");
     await loadInvites();
   }
 
-  async function testGetToken() {
-    const pk = data?.keys?.public_key;
-    if (!pk) return setToast("No public key found.");
-    const res = await fetch("/api/widget/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ public_key: pk }),
-    });
-    const json = await res.json().catch(() => null);
-    if (!res.ok) return setToast(json?.error || "token_failed");
-    setTestToken(json.token);
-    setToast("Token received");
-  }
-
-  async function testStartConversation() {
-    if (!testToken) return setToast("Missing token → click Get Token");
-    const res = await fetch("/api/widget/conversation", { method: "POST", headers: { Authorization: `Bearer ${testToken}` } });
-    const json = await res.json().catch(() => null);
-    if (!res.ok) return setToast(json?.error || "conversation_failed");
-    setTestConversationId(json.conversation.id);
-    setTestLog([]);
-    setToast("Conversation started");
-  }
-
-  async function testSend() {
-    if (!testToken) return setToast("Missing token → click Get Token");
-    if (!testConversationId) return setToast("Missing conversation → click Start Conversation");
-    if (!testInput.trim()) return;
-
-    setTestSending(true);
-    setTestLog((l) => [...l, { role: "user", text: testInput }]);
-
-    const res = await fetch("/api/widget/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${testToken}` },
-      body: JSON.stringify({ conversation_id: testConversationId, message: testInput }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setTestSending(false);
-    if (!res.ok) {
-      setToast(json?.error || "chat_failed");
-      setTestLog((l) => [...l, { role: "error", text: JSON.stringify(json) }]);
-      return;
-    }
-
-    setTestLog((l) => [...l, { role: "assistant", text: json.reply || "" }]);
-    setTestInput("");
-  }
-
-  async function ingestKnowledge() {
-    if (!id) return setToast("Missing company id");
-    if (!kbText.trim()) return setToast("Paste some text first");
-
-    setKbIngesting(true);
-    const res = await fetch("/api/admin/knowledge/ingest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company_id: id, title: kbTitle || "Manual Admin Entry", content: kbText }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setKbIngesting(false);
-    if (!res.ok) return setToast(json?.error || "ingest_failed");
-
-    setToast(`Inserted ${json.chunks ?? json.inserted_chunks ?? "?"} chunks`);
-    setKbText("");
-    await loadKnowledgeChunks();
-  }
-
-  /** -------------------- Knowledge: Fetch Page + Pages list + Generate -------------------- */
-  async function fetchPageIntoForm() {
-    if (!id) return setToast("Missing company id");
-    const u = normalizeUrlInput(kbPageUrl);
-    if (!u) return setToast("Enter a page URL");
-
-    setKbFetching(true);
-    setKbFetchResult(null);
-
-    const res = await fetch("/api/admin/knowledge/fetch-page", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: u }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setKbFetching(false);
-    setKbFetchResult(json);
-
-    if (!res.ok) return setToast(json?.error || "fetch_page_failed");
-
-    setKbPageUrl(u);
-    setKbPageTitle(String(json?.title || "").trim());
-    setKbPageText(String(json?.text || "").trim());
-
-    setKbBrandHints({
-      primary: json?.colors?.primary_color_guess ?? null,
-      accent: json?.colors?.accent_color_guess ?? null,
-      logo_url: json?.colors?.logo_url ?? null,
-    });
-
-    setToast("Page fetched. Now click Add Page.");
-  }
-
-  function addKbPage() {
-    const u = normalizeUrlInput(kbPageUrl);
-    if (!u) return setToast("URL missing");
-    if (!kbPageText.trim()) return setToast("Text missing (click Fetch Page or paste full text)");
-
-    const page: KbPage = {
-      url: u,
-      title: (kbPageTitle || "Untitled").trim(),
-      text: kbPageText,
-      captured_at: new Date().toISOString(),
-    };
-
-    setKbPages((prev) => {
-      if (prev.some((p) => p.url === u)) return prev;
-      return [page, ...prev];
-    });
-
-    setKbPageUrl("");
-    setKbPageTitle("");
-    setKbPageText("");
-    setToast("Page added");
-  }
-
-  function removeKbPage(url: string) {
-    setKbPages((prev) => prev.filter((p) => p.url !== url));
-  }
-
-  async function generateKbFromPages() {
-    if (!id) return setToast("Missing company id");
-    if (kbPages.length === 0) return setToast("Add at least one page first");
-
-    setKbAuditRunning(true);
-    setKbAuditResult(null);
-
-    const payload = {
-      company_id: id,
-      website_url: kbPages[0]?.url || null,
-      persist_profile: kbPersistProfile,
-      brand_hints: kbBrandHints
-        ? {
-            primary_color_guess: kbBrandHints.primary,
-            accent_color_guess: kbBrandHints.accent,
-            logo_url: kbBrandHints.logo_url,
-          }
-        : null,
-      pages: kbPages.map((p) => ({ url: p.url, title: p.title, text: p.text, captured_at: p.captured_at })),
-    };
-
-    const res = await fetch("/api/admin/knowledge/ingest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await res.json().catch(() => null);
-    setKbAuditRunning(false);
-    setKbAuditResult(json);
-
-    if (!res.ok) return setToast(json?.error || "knowledge_pages_ingest_failed");
-    setToast(`Inserted ${json.inserted_chunks ?? json.chunks ?? "?"} chunks`);
-
-    // Optional: wenn euer ingest endpoint branding_json mitschreibt (persist_profile),
-    // dann holen wir danach frische company data, damit UI/Widget sofort die Farben sieht.
-    await load();
-    await loadKnowledgeChunks();
-  }
-
-  function openEdit(row: KnowledgeChunkRow) {
-    setEditRow(row);
-    setEditTitle(row.title || "");
-    setEditContent(row.content || "");
-    setEditOpen(true);
-  }
-
-  async function saveEdit() {
-    if (!editRow || !id) return;
-    setEditSaving(true);
-
-    const res = await fetch("/api/admin/knowledge/chunks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company_id: id, id: editRow.id, title: editTitle, content: editContent }),
-    });
-
-    const json = await res.json().catch(() => null);
-    setEditSaving(false);
-    if (!res.ok) return setToast(json?.error || "chunk_update_failed");
-
-    setToast("Chunk updated");
-    setEditOpen(false);
-    setEditRow(null);
-    await loadKnowledgeChunks();
-  }
-
-  async function deleteChunk(row: KnowledgeChunkRow) {
+  // --- Leads
+  async function loadLeads() {
     if (!id) return;
-    const ok = window.confirm("Delete this knowledge chunk? This cannot be undone.");
-    if (!ok) return;
+    setLeadsLoading(true);
 
-    const res = await fetch(`/api/admin/knowledge/chunks/delete?id=${encodeURIComponent(row.id)}&company_id=${encodeURIComponent(String(id))}`, {
-      method: "DELETE",
-    });
+    const qs = new URLSearchParams({
+      q: leadQuery || "",
+      band: leadBand,
+      status: leadStatus,
+      limit: String(leadLimit || 50),
+      sort: leadSort,
+    }).toString();
+
+    const res = await fetch(`/api/admin/companies/${id}/leads?${qs}`, { cache: "no-store" });
     const json = await res.json().catch(() => null);
-    if (!res.ok) return setToast(json?.error || "chunk_delete_failed");
 
-    setToast("Chunk deleted");
-    await loadKnowledgeChunks();
+    setLeadsLoading(false);
+    if (!res.ok) return setToast(json?.error || "leads_failed");
+
+    const rows: LeadRow[] = json?.leads ?? [];
+    setLeads(rows);
+    setSelectedLeadIds(new Set());
   }
-
-  function toggleSelect(chunkId: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(chunkId)) next.delete(chunkId);
-      else next.add(chunkId);
-      return next;
-    });
-  }
-
-  function selectAllVisible(visible: KnowledgeChunkRow[]) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      for (const r of visible) next.add(r.id);
-      return next;
-    });
-  }
-
-  function clearSelection() {
-    setSelectedIds(new Set());
-  }
-
-  async function bulkDeleteSelected() {
-    if (!id) return;
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return setToast("No chunks selected");
-
-    const ok = window.confirm(`Delete ${ids.length} selected chunk(s)? This cannot be undone.`);
-    if (!ok) return;
-
-    const res = await fetch("/api/admin/knowledge/chunks/bulk-delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ company_id: id, ids }),
-    });
-
-    const json = await res.json().catch(() => null);
-    if (!res.ok) return setToast(json?.error || "bulk_delete_failed");
-
-    setToast(`Deleted ${json?.deleted ?? ids.length} chunks`);
-    await loadKnowledgeChunks();
-  }
-
-  function openPreview(row: KnowledgeChunkRow) {
-    setPreviewRow(row);
-    setPreviewOpen(true);
-  }
-
-  const visibleChunks = useMemo(() => {
-    return kbChunks.filter((c) => {
-      const type = String(c?.metadata?.type || "other");
-      const conf = String(c?.metadata?.confidence || "medium");
-      if (kbTypeFilter !== "all" && type !== kbTypeFilter) return false;
-      if (kbConfFilter !== "all" && conf !== kbConfFilter) return false;
-      return true;
-    });
-  }, [kbChunks, kbTypeFilter, kbConfFilter]);
-
-  const allTypes = useMemo(() => {
-    const s = new Set<string>();
-    for (const c of kbChunks) s.add(String(c?.metadata?.type || "other"));
-    return ["all", ...Array.from(s).sort()];
-  }, [kbChunks]);
-
-  const allConfs = useMemo(() => {
-    const s = new Set<string>();
-    for (const c of kbChunks) s.add(String(c?.metadata?.confidence || "medium"));
-    return ["all", ...Array.from(s).sort()];
-  }, [kbChunks]);
-
-  // -------- Leads helpers (Knowledge-style) --------
-  const visibleLeads = useMemo(() => leads, [leads]);
 
   function toggleSelectLead(leadId: string) {
     setSelectedLeadIds((prev) => {
@@ -1107,7 +720,7 @@ export default function CompanyDetailPage() {
     const ids = Array.from(selectedLeadIds);
     if (!ids.length) return setToast("No leads selected");
 
-    const ok = window.confirm(`Delete ${ids.length} selected lead(s)? This cannot be undone.`);
+    const ok = window.confirm(`Delete ${ids.length} lead(s)? This cannot be undone.`);
     if (!ok) return;
 
     const res = await fetch(`/api/admin/companies/${id}/leads`, {
@@ -1119,7 +732,7 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "bulk_delete_failed");
 
-    setToast(`Deleted ${json?.deleted ?? ids.length} leads`);
+    setToast(`Deleted ${json?.deleted ?? ids.length}`);
     await loadLeads();
   }
 
@@ -1137,7 +750,7 @@ export default function CompanyDetailPage() {
     const json = await res.json().catch(() => null);
     if (!res.ok) return setToast(json?.error || "lead_delete_failed");
 
-    setToast("Lead deleted");
+    setToast("Deleted");
     await loadLeads();
   }
 
@@ -1202,18 +815,325 @@ export default function CompanyDetailPage() {
 
     if (!res.ok) return setToast(json?.error || "lead_update_failed");
 
-    setToast("Lead updated");
+    setToast("Saved");
     setLeadEditOpen(false);
     setLeadEditRow(null);
     await loadLeads();
   }
 
-  const billingSummary = useMemo(() => {
-    const status = billingInfo?.billing?.status || billingInfo?.status || "—";
-    const planName = billingInfo?.plan?.name || billingInfo?.billing?.plan_key || billingInfo?.plan_key || "—";
-    const end = billingInfo?.billing?.current_period_end || billingInfo?.current_period_end || null;
-    return { status, planName, periodEnd: end ? new Date(end).toLocaleString() : null };
-  }, [billingInfo]);
+  // --- Knowledge chunks
+  async function loadKnowledgeChunks() {
+    if (!id) return;
+    setKbChunksLoading(true);
+
+    const qs = new URLSearchParams({
+      company_id: String(id),
+      q: kbChunksQuery || "",
+      limit: String(kbChunksLimit || 50),
+    }).toString();
+
+    const res = await fetch(`/api/admin/knowledge/chunks?${qs}`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+
+    setKbChunksLoading(false);
+    if (!res.ok) return setToast(json?.error || "chunks_load_failed");
+
+    const rows: KnowledgeChunkRow[] = json?.chunks ?? [];
+    setKbChunks(rows);
+    setSelectedIds(new Set());
+  }
+
+  function openPreview(row: KnowledgeChunkRow) {
+    setPreviewRow(row);
+    setPreviewOpen(true);
+  }
+
+  function openEdit(row: KnowledgeChunkRow) {
+    setEditRow(row);
+    setEditTitle(row.title || "");
+    setEditContent(row.content || "");
+    setEditOpen(true);
+  }
+
+  async function saveEdit() {
+    if (!editRow || !id) return;
+    setEditSaving(true);
+
+    const res = await fetch("/api/admin/knowledge/chunks", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: id, id: editRow.id, title: editTitle, content: editContent }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setEditSaving(false);
+    if (!res.ok) return setToast(json?.error || "chunk_update_failed");
+
+    setToast("Saved");
+    setEditOpen(false);
+    setEditRow(null);
+    await loadKnowledgeChunks();
+  }
+
+  async function deleteChunk(row: KnowledgeChunkRow) {
+    if (!id) return;
+    const ok = window.confirm("Delete this knowledge item? This cannot be undone.");
+    if (!ok) return;
+
+    const res = await fetch(`/api/admin/knowledge/chunks/delete?id=${encodeURIComponent(row.id)}&company_id=${encodeURIComponent(String(id))}`, {
+      method: "DELETE",
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "chunk_delete_failed");
+
+    setToast("Deleted");
+    await loadKnowledgeChunks();
+  }
+
+  function toggleSelect(chunkId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(chunkId)) next.delete(chunkId);
+      else next.add(chunkId);
+      return next;
+    });
+  }
+
+  function selectAllVisible(visible: KnowledgeChunkRow[]) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const r of visible) next.add(r.id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDeleteSelected() {
+    if (!id) return;
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return setToast("No items selected");
+
+    const ok = window.confirm(`Delete ${ids.length} item(s)? This cannot be undone.`);
+    if (!ok) return;
+
+    const res = await fetch("/api/admin/knowledge/chunks/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: id, ids }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return setToast(json?.error || "bulk_delete_failed");
+
+    setToast(`Deleted ${json?.deleted ?? ids.length}`);
+    await loadKnowledgeChunks();
+  }
+
+  async function ingestKnowledge() {
+    if (!id) return setToast("Missing company id");
+    if (!kbText.trim()) return setToast("Paste some text first");
+
+    setKbIngesting(true);
+    const res = await fetch("/api/admin/knowledge/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_id: id, title: kbTitle || "Manual Admin Entry", content: kbText }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setKbIngesting(false);
+    if (!res.ok) return setToast(json?.error || "ingest_failed");
+
+    setToast(`Added ${json.chunks ?? json.inserted_chunks ?? "?"} chunks`);
+    setKbText("");
+    await loadKnowledgeChunks();
+  }
+
+  async function fetchPageIntoForm() {
+    if (!id) return setToast("Missing company id");
+    const u = normalizeUrlInput(kbPageUrl);
+    if (!u) return setToast("Enter a page URL");
+
+    setKbFetching(true);
+    setKbFetchResult(null);
+
+    const res = await fetch("/api/admin/knowledge/fetch-page", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: u }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setKbFetching(false);
+    setKbFetchResult(json);
+
+    if (!res.ok) return setToast(json?.error || "fetch_page_failed");
+
+    setKbPageUrl(u);
+    setKbPageTitle(String(json?.title || "").trim());
+    setKbPageText(String(json?.text || "").trim());
+
+    setKbBrandHints({
+      primary: json?.colors?.primary_color_guess ?? null,
+      accent: json?.colors?.accent_color_guess ?? null,
+      logo_url: json?.colors?.logo_url ?? null,
+    });
+
+    setToast("Page fetched. Click “Add page”.");
+  }
+
+  function addKbPage() {
+    const u = normalizeUrlInput(kbPageUrl);
+    if (!u) return setToast("URL missing");
+    if (!kbPageText.trim()) return setToast("Text missing (click Fetch Page)");
+
+    const page: KbPage = {
+      url: u,
+      title: (kbPageTitle || "Untitled").trim(),
+      text: kbPageText,
+      captured_at: new Date().toISOString(),
+    };
+
+    setKbPages((prev) => {
+      if (prev.some((p) => p.url === u)) return prev;
+      return [page, ...prev];
+    });
+
+    setKbPageUrl("");
+    setKbPageTitle("");
+    setKbPageText("");
+    setToast("Added");
+  }
+
+  function removeKbPage(url: string) {
+    setKbPages((prev) => prev.filter((p) => p.url !== url));
+  }
+
+  async function generateKbFromPages() {
+    if (!id) return setToast("Missing company id");
+    if (kbPages.length === 0) return setToast("Add at least one page first");
+
+    setKbAuditRunning(true);
+    setKbAuditResult(null);
+
+    const payload = {
+      company_id: id,
+      website_url: kbPages[0]?.url || null,
+      persist_profile: kbPersistProfile,
+      brand_hints: kbBrandHints
+        ? {
+            primary_color_guess: kbBrandHints.primary,
+            accent_color_guess: kbBrandHints.accent,
+            logo_url: kbBrandHints.logo_url,
+          }
+        : null,
+      pages: kbPages.map((p) => ({ url: p.url, title: p.title, text: p.text, captured_at: p.captured_at })),
+    };
+
+    const res = await fetch("/api/admin/knowledge/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json().catch(() => null);
+    setKbAuditRunning(false);
+    setKbAuditResult(json);
+
+    if (!res.ok) return setToast(json?.error || "knowledge_pages_ingest_failed");
+
+    setToast(`Added ${json.inserted_chunks ?? json.chunks ?? "?"} chunks`);
+    await load(); // refresh settings (branding_json might be persisted)
+    await loadKnowledgeChunks();
+  }
+
+  // --- advanced: domains + limits
+  function addDomainFromInput() {
+    const normalized = normalizeHost(domainInput || "");
+    if (!normalized) return setToast("Enter a domain");
+    if (/\s/.test(normalized) || normalized.includes("/") || normalized.includes("http")) return setToast("Invalid domain");
+    setDomainDraft((prev) => uniq([...prev, normalized]));
+    setDomainInput("");
+    setDomainDirty(true);
+  }
+
+  function removeDomain(d: string) {
+    setDomainDraft((prev) => prev.filter((x) => x !== d));
+    setDomainDirty(true);
+  }
+
+  async function saveDomains() {
+    if (!id) return;
+    setDomainSaving(true);
+    const payload = { allowed_domains: uniq(domainDraft.map((x) => normalizeHost(x)).filter(Boolean)) };
+
+    const res = await fetch(`/api/admin/companies/${id}/domains`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json().catch(() => null);
+    setDomainSaving(false);
+    if (!res.ok) return setToast(json?.error || "domains_save_failed");
+
+    const updatedKeys: Keys | null = json?.keys ?? null;
+    if (updatedKeys) setData((prev) => (prev ? { ...prev, keys: updatedKeys } : prev));
+
+    setDomainDirty(false);
+    setToast("Saved");
+  }
+
+  async function saveLimits() {
+    if (!id) return;
+    if (!isOwner) return setToast("Not allowed");
+
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(limitsText || "{}");
+    } catch {
+      return setToast("Limits JSON invalid");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setToast("Limits must be a JSON object");
+
+    setLimitsSaving(true);
+    const res = await fetch(`/api/admin/companies/${id}/limits`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limits_text: limitsText }),
+    });
+
+    const json = await res.json().catch(() => null);
+    setLimitsSaving(false);
+    if (!res.ok) return setToast(json?.error || "limits_save_failed");
+
+    const updatedSettings: Settings | null = json?.settings ?? null;
+    if (updatedSettings) setData((prev) => (prev ? { ...prev, settings: updatedSettings } : prev));
+    setLimitsDirty(false);
+    setToast("Saved");
+  }
+
+  // --- Branding
+  const branding = useMemo(() => (data?.settings?.branding_json || {}) as any, [data?.settings?.branding_json]);
+
+  const companyName = useMemo(() => pickBrandValue(branding, ["company_name"]) || String(data?.company?.name || "").trim() || "Company", [branding, data?.company?.name]);
+
+  const greeting = useMemo(() => pickBrandValue(branding, ["greeting"]), [branding]);
+
+  const primaryColor = useMemo(() => pickBrandValue(branding?.brand_colors, ["primary"]) || pickBrandValue(branding, ["primary"]) || "", [branding]);
+  const accentColor = useMemo(() => pickBrandValue(branding?.brand_colors, ["accent"]) || pickBrandValue(branding, ["accent"]) || "", [branding]);
+
+  const logoUrl = useMemo(() => pickBrandValue(branding, ["logo_url", "logoUrl"]), [branding]);
+
+  const statusBadge = useMemo(() => {
+    const s = String(data?.company?.status || "").toLowerCase();
+    if (s === "active") return <Badge text="Active" tone="success" />;
+    if (s) return <Badge text={s} tone="neutral" />;
+    return <Badge text="—" tone="neutral" />;
+  }, [data?.company?.status]);
 
   async function uploadCompanyLogo(file: File) {
     if (!id) return;
@@ -1223,8 +1143,6 @@ export default function CompanyDetailPage() {
       const fd = new FormData();
       fd.append("file", file);
 
-      // ✅ this API route must exist:
-      // POST /api/admin/companies/[id]/logo  -> uploads to storage + updates settings.branding_json.logo_url
       const res = await fetch(`/api/admin/companies/${id}/logo`, { method: "POST", body: fd });
       const json = await res.json().catch(() => null);
 
@@ -1233,15 +1151,14 @@ export default function CompanyDetailPage() {
         return;
       }
 
-      const logoUrl = String(json?.logo_url || "");
+      const nextLogoUrl = String(json?.logo_url || "");
       setData((prev) => {
         if (!prev) return prev;
-        const branding = prev.settings?.branding_json || {};
-        const nextBranding = { ...branding, logo_url: logoUrl };
-        return { ...prev, settings: { ...prev.settings, branding_json: nextBranding } };
+        const b = prev.settings?.branding_json || {};
+        return { ...prev, settings: { ...prev.settings, branding_json: { ...b, logo_url: nextLogoUrl } } };
       });
 
-      setToast("Logo uploaded");
+      setToast("Logo updated");
     } catch (e: any) {
       setLogoUploadErr(e?.message || "upload_error");
     } finally {
@@ -1249,645 +1166,535 @@ export default function CompanyDetailPage() {
     }
   }
 
-  const currentBranding = useMemo(() => (data?.settings?.branding_json || {}) as any, [data?.settings?.branding_json]);
-  const currentLogoUrl = useMemo(() => String(currentBranding?.logo_url || ""), [currentBranding?.logo_url]);
+  const billingSummary = useMemo(() => {
+    const status = billingInfo?.billing?.status || billingInfo?.status || "—";
+    const planName = billingInfo?.plan?.name || billingInfo?.billing?.plan_key || billingInfo?.plan_key || "—";
+    const end = billingInfo?.billing?.current_period_end || billingInfo?.current_period_end || null;
+    return { status, planName, periodEnd: end ? new Date(end).toLocaleString() : null };
+  }, [billingInfo]);
+
+  const embedSnippet = useMemo(() => {
+    const pk = data?.keys?.public_key || "pk_xxx";
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `<script src="${origin}/widget-loader.js" data-public-key="${pk}"></script>`;
+  }, [data?.keys?.public_key]);
+
+  // --- derived lists
+  const visibleChunks = useMemo(() => {
+    return kbChunks.filter((c) => {
+      const type = String(c?.metadata?.type || "other");
+      const conf = String(c?.metadata?.confidence || "medium");
+      if (kbTypeFilter !== "all" && type !== kbTypeFilter) return false;
+      if (kbConfFilter !== "all" && conf !== kbConfFilter) return false;
+      return true;
+    });
+  }, [kbChunks, kbTypeFilter, kbConfFilter]);
+
+  const allTypes = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of kbChunks) s.add(String(c?.metadata?.type || "other"));
+    return ["all", ...Array.from(s).sort()];
+  }, [kbChunks]);
+
+  const allConfs = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of kbChunks) s.add(String(c?.metadata?.confidence || "medium"));
+    return ["all", ...Array.from(s).sort()];
+  }, [kbChunks]);
+
+  const visibleLeads = useMemo(() => leads, [leads]);
+
+  // --- tab-specific loads
+  useEffect(() => {
+    if (!data || !id) return;
+
+    if (tab === "dashboard") {
+      void loadBilling();
+    }
+    if (tab === "billing") {
+      void loadBilling();
+    }
+    if (tab === "team") {
+      void loadInvites();
+    }
+    if (tab === "leads") {
+      void loadLeads();
+    }
+    if (tab === "knowledge") {
+      void loadKnowledgeChunks();
+    }
+    if (tab === "settings") {
+      const current = data?.keys?.allowed_domains ?? [];
+      setDomainDraft(current);
+      setDomainInput("");
+      setDomainDirty(false);
+
+      const lim = data?.settings?.limits_json ?? {};
+      setLimitsText(safeJsonStringify(lim));
+      setLimitsDirty(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, id, data?.keys?.allowed_domains]);
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <TabsBar tabs={visibleTabs} active={tab} onChange={setTabAndUrl} />
-
-      {loadError ? (
-        <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
-          <div style={{ color: "#B91C1C", fontSize: 13.5, lineHeight: 1.5 }}>{loadError}</div>
-        </Card>
-      ) : null}
-
-      {loading || !data ? (
-        <Card title="Loading" subtitle="Fetching company data…">
-          Please wait…
-        </Card>
-      ) : (
-        <>
-          {tab === "overview" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <Card title="Setup" subtitle="Your widget setup at a glance.">
-                <div style={{ fontSize: 13.5, color: UI.text, lineHeight: 1.9 }}>
-                  <div>
-                    <b>Widget status:</b> Ready
-                  </div>
-                  <div>
-                    <b>Allowed domains:</b> {(data.keys?.allowed_domains ?? []).length}
-                  </div>
-                  <div>
-                    <b>Chat mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
-                  </div>
-                </div>
-              </Card>
-
-              <Card title="Embed Snippet" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
-                <CodeBox text={embedSnippet} />
-              </Card>
-            </div>
-          )}
-
-          {tab === "keys" && (
-            <Card
-              title="API Keys"
-              subtitle="Public key is used in the embed snippet. Secret key is hidden for customers."
-              right={
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <Button onClick={() => load()} variant="secondary">
-                    Refresh
-                  </Button>
-                  <Button onClick={rotateKeys} disabled={rotating} variant="primary">
-                    {rotating ? "Rotating…" : "Rotate Keys"}
-                  </Button>
-                </div>
-              }
+    <div style={{ background: UI.bg, minHeight: "100vh", padding: "18px 14px 60px" }}>
+      <div style={{ maxWidth: 1120, margin: "0 auto", display: "grid", gap: 14 }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 14,
+                border: `1px solid ${UI.border}`,
+                background: "#fff",
+                overflow: "hidden",
+                display: "grid",
+                placeItems: "center",
+              }}
             >
-              <div style={{ display: "grid", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Public Key</div>
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <code style={{ flex: 1, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: UI.surface2, fontSize: 12.5 }}>
-                      {data.keys?.public_key ?? "—"}
-                    </code>
-                    <Button onClick={() => copy(data.keys?.public_key ?? "")}>Copy</Button>
-                  </div>
-                </div>
-
-                <div style={{ fontSize: 12.5, color: UI.text2 }}>Secret Key is currently hidden for customers.</div>
-              </div>
-            </Card>
-          )}
-
-          {tab === "domains" && (
-            <Card title="Allowed Domains" subtitle="Only these websites can load your widget.">
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
-                  <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="example.com" />
-                  <Button onClick={addDomainFromInput} variant="secondary">
-                    Add
-                  </Button>
-                </div>
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {domainDraft.map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => removeDomain(d)}
-                      style={{
-                        border: `1px solid ${UI.border}`,
-                        background: UI.surface2,
-                        borderRadius: 999,
-                        padding: "7px 10px",
-                        fontSize: 12.5,
-                        cursor: "pointer",
-                      }}
-                      title="Click to remove"
-                    >
-                      {d} ✕
-                    </button>
-                  ))}
-                  {domainDraft.length === 0 ? <div style={{ color: UI.text2, fontSize: 13 }}>No domains yet.</div> : null}
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <Button onClick={saveDomains} disabled={!domainDirty || domainSaving} variant="primary">
-                    {domainSaving ? "Saving…" : "Save domains"}
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          {tab === "limits" &&
-            (!isOwner ? (
-              <Card title="Not available" subtitle="This section is only available for the owner.">
-                —
-              </Card>
-            ) : (
-              <Card title="Limits" subtitle="Owner-only limits config.">
-                <div style={{ display: "grid", gap: 12 }}>
-                  <Textarea
-                    value={limitsText}
-                    onChange={(e) => {
-                      setLimitsText(e.target.value);
-                      setLimitsDirty(true);
-                    }}
-                    style={{ minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
-                  />
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                    <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
-                      {limitsSaving ? "Saving…" : "Save limits"}
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            ))}
-
-          {tab === "admins" && (
-            <div style={{ display: "grid", gap: 14 }}>
-              <Card title="Team Members" subtitle="Manage admins and viewers." right={<Button onClick={loadInvites} disabled={adminsLoading}>Refresh</Button>}>
-                {adminsLoading ? (
-                  <div style={{ color: UI.text2 }}>Loading…</div>
-                ) : (
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {admins.map((a) => (
-                      <div
-                        key={a.user_id}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "1fr 160px 120px",
-                          gap: 10,
-                          alignItems: "center",
-                          border: `1px solid ${UI.border}`,
-                          borderRadius: UI.radius,
-                          padding: 12,
-                          background: "#fff",
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 900 }}>{a.email || a.user_id}</div>
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>Role: {a.role}</div>
-                        </div>
-
-                        <select
-                          value={a.role}
-                          onChange={(e) => setAdminRole(a.user_id, e.target.value)}
-                          disabled={adminMutating === a.user_id}
-                          style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}
-                        >
-                          <option value="admin">admin</option>
-                          <option value="viewer">viewer</option>
-                          {isOwner ? <option value="owner">owner</option> : null}
-                        </select>
-
-                        <Button onClick={() => removeAdmin(a.user_id)} disabled={adminMutating === a.user_id} variant="danger">
-                          Remove
-                        </Button>
-                      </div>
-                    ))}
-                    {admins.length === 0 ? <div style={{ color: UI.text2 }}>No team members found.</div> : null}
-                  </div>
-                )}
-              </Card>
-
-              <Card title="Invite" subtitle="Invite a new team member by link (copied automatically).">
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 140px", gap: 10 }}>
-                    <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email (optional)" />
-                    <select
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value)}
-                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                    >
-                      <option value="admin">admin</option>
-                      <option value="viewer">viewer</option>
-                      {isOwner ? <option value="owner">owner</option> : null}
-                    </select>
-                    <Input type="number" min={1} max={30} value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value || 7))} />
-                    <Button onClick={createInvite} disabled={inviteCreating} variant="primary">
-                      {inviteCreating ? "Creating…" : "Create Invite"}
-                    </Button>
-                  </div>
-
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {invites.map((inv) => (
-                      <div
-                        key={inv.id}
-                        style={{
-                          border: `1px solid ${UI.border}`,
-                          borderRadius: UI.radius,
-                          padding: 12,
-                          background: "#fff",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          flexWrap: "wrap",
-                          alignItems: "center",
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 900 }}>{inv.email || "(no email)"}</div>
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                            Role: {inv.role} · Status: {inv.status} · Expires: {new Date(inv.expires_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", gap: 10 }}>
-                          <Button onClick={() => copy(inviteLink(inv.token))}>Copy link</Button>
-                          <Button onClick={() => revokeInvite(inv.id)} variant="danger" disabled={inv.status === "revoked"}>
-                            Revoke
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                    {invites.length === 0 ? <div style={{ color: UI.text2 }}>No invites.</div> : null}
-                  </div>
-                </div>
-              </Card>
+              {logoUrl ? <img src={logoUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontWeight: 1000, color: UI.text2 }}>{companyName.slice(0, 1).toUpperCase()}</span>}
             </div>
-          )}
 
-          {tab === "embed" && (
-            <Card title="Embed" subtitle="Copy & paste this snippet into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
-              <CodeBox text={embedSnippet} />
-            </Card>
-          )}
-
-          {tab === "billing" && (
-            <Card title="Billing" subtitle="Manage your plan and subscription." right={<Button onClick={loadBilling} disabled={billingLoading}>Refresh</Button>}>
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Status</div>
-                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.status}</div>
-                  </div>
-
-                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Plan</div>
-                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.planName}</div>
-                  </div>
-
-                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                    <div style={{ fontSize: 12.5, color: UI.text2 }}>Renews</div>
-                    <div style={{ fontWeight: 900, marginTop: 4 }}>{billingSummary.periodEnd || "—"}</div>
-                  </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 1100, fontSize: 18, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 }}>
+                  {companyName}
                 </div>
-
-                <div style={{ marginTop: 4 }}>
-                  <BillingActions companyId={id as any} />
-                </div>
+                {statusBadge}
               </div>
-            </Card>
-          )}
-
-          {tab === "test-chat" && (
-            <Card title="Test Chat" subtitle="Test the widget auth + conversation + message flow.">
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                <Button onClick={testGetToken} variant="secondary">
-                  Get Token
-                </Button>
-                <Button onClick={testStartConversation} variant="secondary">
-                  Start Conversation
-                </Button>
+              <div style={{ marginTop: 4, fontSize: 12.5, color: UI.text2 }}>
+                {myRole === "owner" ? "Owner access" : myRole === "admin" ? "Admin access" : "Viewer access"}
               </div>
+            </div>
+          </div>
 
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
-                  <Input value={testInput} onChange={(e) => setTestInput(e.target.value)} placeholder="Type a message…" />
-                  <Button onClick={testSend} disabled={testSending} variant="primary">
-                    {testSending ? "Sending…" : "Send"}
-                  </Button>
-                </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Button onClick={load} variant="secondary">Refresh</Button>
+          </div>
+        </div>
 
-                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: UI.surface2, minHeight: 220 }}>
-                  {testLog.length === 0 ? (
-                    <div style={{ color: UI.text2, fontSize: 13.5 }}>No messages yet.</div>
-                  ) : (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {testLog.map((m, idx) => (
-                        <div key={idx} style={{ fontSize: 13.5 }}>
-                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>{m.role}:</b>{" "}
-                          <span style={{ color: UI.text }}>{m.text}</span>
-                        </div>
-                      ))}
+        <TabsBar tabs={visibleTabs} active={tab} onChange={setTabAndUrl} />
+
+        {loadError ? (
+          <Card title="Load failed" subtitle="The company detail endpoint returned an error.">
+            <div style={{ color: "#B91C1C", fontSize: 13.5, lineHeight: 1.5 }}>{loadError}</div>
+          </Card>
+        ) : null}
+
+        {loading || !data ? (
+          <Card title="Loading" subtitle="Fetching company data…">Please wait…</Card>
+        ) : (
+          <>
+            {/* Dashboard */}
+            {tab === "dashboard" && (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 14 }}>
+                  <Card title="Plan" subtitle="Your current subscription.">
+                    <KeyValue k="Status" v={billingLoading ? "Loading…" : billingSummary.status} />
+                    <KeyValue k="Plan" v={billingLoading ? "Loading…" : billingSummary.planName} />
+                    <KeyValue k="Renews" v={billingLoading ? "Loading…" : billingSummary.periodEnd || "—"} />
+                  </Card>
+
+                  <Card title="Widget" subtitle="Access & configuration.">
+                    <KeyValue k="Allowed sites" v={(data.keys?.allowed_domains ?? []).length} />
+                    <KeyValue k="Chat mode" v={data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"} />
+                    <KeyValue k="Public key" v={data.keys?.public_key ? <span style={{ fontFamily: "ui-monospace" }}>{String(data.keys.public_key).slice(0, 10)}…</span> : "—"} />
+                  </Card>
+
+                  <Card title="Quick actions" subtitle="Most common tasks.">
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <Button onClick={() => setTabAndUrl("branding")} variant="primary">Open Branding</Button>
+                      <Button onClick={() => setTabAndUrl("knowledge")} variant="secondary">Update Knowledge</Button>
+                      <Button onClick={() => setTabAndUrl("leads")} variant="secondary">View Leads</Button>
                     </div>
-                  )}
+                  </Card>
                 </div>
-              </div>
-            </Card>
-          )}
 
-          {/* -------------------- KNOWLEDGE TAB (with Branding + Logo Upload) -------------------- */}
-          {tab === "knowledge" && (
-            <div style={{ display: "grid", gap: 14 }}>
-              <Card
-                title="Branding (Auto for Widget)"
-                subtitle="Optional: upload a company logo. Colors are auto-inferred when you generate knowledge from pages (persist_profile). If nothing is set, widget uses defaults."
-              >
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, alignItems: "center" }}>
-                    <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Current logo</div>
-                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ width: 48, height: 48, borderRadius: 12, border: `1px solid ${UI.border}`, background: "#fff", overflow: "hidden" }}>
-                        {currentLogoUrl ? <img src={currentLogoUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+                <Card title="Embed snippet" subtitle="Copy & paste this into your website." right={<Button onClick={() => copy(embedSnippet)}>Copy</Button>}>
+                  <CodeBox text={embedSnippet} />
+                </Card>
+              </div>
+            )}
+
+            {/* Branding */}
+            {tab === "branding" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 14 }}>
+                <Card title="Widget Branding" subtitle="Logo + colors used by the widget (no JSON shown to customers).">
+                  <div style={{ display: "grid", gap: 14 }}>
+                    <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ width: 66, height: 66, borderRadius: 18, border: `1px solid ${UI.border}`, background: "#fff", overflow: "hidden", display: "grid", placeItems: "center" }}>
+                        {logoUrl ? <img src={logoUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontWeight: 1100, color: UI.text2, fontSize: 22 }}>{companyName.slice(0, 1).toUpperCase()}</span>}
                       </div>
 
-                      <div style={{ display: "grid", gap: 6, minWidth: 280 }}>
+                      <div style={{ display: "grid", gap: 8, minWidth: 300 }}>
                         <input
+                          ref={fileInputRef}
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                          disabled={logoUploading}
+                          style={{ display: "none" }}
                           onChange={(e) => {
                             const f = e.target.files?.[0];
                             if (f) void uploadCompanyLogo(f);
                             e.currentTarget.value = "";
                           }}
                         />
-                        <div style={{ fontSize: 12.5, color: UI.text3 }}>
-                          PNG/JPG/WEBP/SVG · max 2MB · will be used by widget automatically
-                        </div>
-                        {logoUploading ? <div style={{ fontSize: 12.5, color: UI.text2 }}>Uploading…</div> : null}
-                        {logoUploadErr ? <div style={{ fontSize: 12.5, color: UI.danger }}>{logoUploadErr}</div> : null}
-                      </div>
-                    </div>
-                  </div>
 
-                  <div style={{ borderTop: `1px solid ${UI.border}`, marginTop: 4, paddingTop: 12 }} />
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Current branding_json</div>
-                      <div style={{ marginTop: 8 }}>
-                        <CodeBox text={safeJsonStringify(currentBranding)} />
-                      </div>
-                    </div>
-
-                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Latest inferred hints (from Fetch Page)</div>
-                      <div style={{ marginTop: 8 }}>
-                        <CodeBox text={safeJsonStringify(kbBrandHints || {})} />
-                      </div>
-                      <div style={{ marginTop: 8, fontSize: 12.5, color: UI.text3 }}>
-                        If “Save inferred profile/branding” is enabled, your ingest endpoint should persist these into company_settings.branding_json.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-
-              {/* Manual Pages -> Generate */}
-              <Card
-                title="Manual Pages → Audit → Knowledge"
-                subtitle="URL rein → Fetch Page holt Text + Farb-Hints → Add Page → Generate Knowledge."
-                right={
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: UI.text2 }}>
-                      <input type="checkbox" checked={kbPersistProfile} onChange={(e) => setKbPersistProfile(e.target.checked)} />
-                      Save inferred profile/branding
-                    </label>
-                    <Button onClick={generateKbFromPages} disabled={kbAuditRunning || kbPages.length === 0} variant="primary">
-                      {kbAuditRunning ? "Generating…" : "Generate Knowledge"}
-                    </Button>
-                  </div>
-                }
-              >
-                <div style={{ display: "grid", gap: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 160px", gap: 10 }}>
-                    <Input value={kbPageUrl} onChange={(e) => setKbPageUrl(e.target.value)} placeholder="https://tamtamcorp.tech/leadgenerator" />
-                    <Input value={kbPageTitle} onChange={(e) => setKbPageTitle(e.target.value)} placeholder="Title (optional)" />
-                    <Button onClick={fetchPageIntoForm} disabled={kbFetching} variant="secondary">
-                      {kbFetching ? "Fetching…" : "Fetch Page"}
-                    </Button>
-                  </div>
-
-                  <Textarea value={kbPageText} onChange={(e) => setKbPageText(e.target.value)} placeholder="Page text will appear here…" style={{ minHeight: 180 }} />
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={addKbPage} variant="secondary">
-                      Add Page
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        setKbPages([]);
-                        setKbAuditResult(null);
-                        setKbFetchResult(null);
-                        setKbBrandHints(null);
-                        setKbPageUrl("");
-                        setKbPageTitle("");
-                        setKbPageText("");
-                      }}
-                      variant="secondary"
-                    >
-                      Clear
-                    </Button>
-                  </div>
-
-                  {kbBrandHints ? (
-                    <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                      Brand hints: <b>primary</b> {kbBrandHints.primary || "—"} · <b>accent</b> {kbBrandHints.accent || "—"} · <b>logo</b>{" "}
-                      {kbBrandHints.logo_url ? "found" : "—"}
-                    </div>
-                  ) : null}
-
-                  {kbFetchResult ? <CodeBox text={safeJsonStringify(kbFetchResult)} /> : null}
-
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {kbPages.length === 0 ? (
-                      <div style={{ color: UI.text2, fontSize: 13.5 }}>No pages added yet.</div>
-                    ) : (
-                      kbPages.map((p) => (
-                        <div
-                          key={p.url}
-                          style={{
-                            border: `1px solid ${UI.border}`,
-                            borderRadius: UI.radius,
-                            padding: 12,
-                            background: "#fff",
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            gap: 12,
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {p.url} · {p.text.length.toLocaleString()} chars
-                            </div>
-                          </div>
-                          <Button onClick={() => removeKbPage(p.url)} variant="danger">
-                            Remove
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <Button onClick={() => fileInputRef.current?.click()} disabled={logoUploading} variant="primary">
+                            {logoUploading ? "Uploading…" : "Logo uploaden"}
                           </Button>
+                          <Button onClick={() => setTabAndUrl("knowledge")} variant="secondary">Farben automatisch holen</Button>
                         </div>
-                      ))
-                    )}
+
+                        <div style={{ fontSize: 12.5, color: UI.text3 }}>
+                          PNG/JPG/WEBP/SVG · max 2MB
+                          {logoUploadErr ? <span style={{ color: UI.danger, fontWeight: 900 }}> · {logoUploadErr}</span> : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Divider />
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                        <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Company name</div>
+                        <div style={{ marginTop: 8, fontWeight: 1000 }}>{companyName}</div>
+                        <div style={{ marginTop: 10, fontSize: 12.5, color: UI.text3 }}>Used for widget title.</div>
+                      </div>
+
+                      <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                        <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Greeting</div>
+                        <div style={{ marginTop: 8, fontWeight: 900, color: UI.text }}>
+                          {greeting ? greeting : <span style={{ color: UI.text3 }}>Not set (uses default)</span>}
+                        </div>
+                        <div style={{ marginTop: 10, fontSize: 12.5, color: UI.text3 }}>First message visitors see.</div>
+                      </div>
+                    </div>
+
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Colors</div>
+                      <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <Badge text={primaryColor ? `Primary: ${primaryColor}` : "Primary: default"} tone="neutral" />
+                        <Badge text={accentColor ? `Accent: ${accentColor}` : "Accent: default"} tone="info" />
+                      </div>
+
+                      {kbBrandHints ? (
+                        <div style={{ marginTop: 12, padding: 12, borderRadius: UI.radius, border: `1px solid ${UI.borderSoft}`, background: UI.surface2 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 1000, color: UI.text }}>Latest detected hints</div>
+                          <div style={{ marginTop: 8, display: "grid", gap: 6, fontSize: 12.5, color: UI.text2 }}>
+                            <div>{colorSwatch(kbBrandHints.primary || "")}Primary guess: {kbBrandHints.primary || "—"}</div>
+                            <div>{colorSwatch(kbBrandHints.accent || "")}Accent guess: {kbBrandHints.accent || "—"}</div>
+                            <div>Logo on website: {kbBrandHints.logo_url ? "found" : "—"}</div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </Card>
+
+                <Card title="Live Preview" subtitle="Visual preview of the widget (colors + logo).">
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: 18, overflow: "hidden", background: "#fff" }}>
+                    <div style={{ padding: 14, borderBottom: `1px solid ${UI.borderSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: 10, border: `1px solid ${UI.border}`, overflow: "hidden", background: "#fff" }}>
+                          {logoUrl ? <img src={logoUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+                        </div>
+                        <div style={{ fontWeight: 1100, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {companyName}
+                        </div>
+                      </div>
+                      <Badge text="Online" tone="success" />
+                    </div>
+
+                    <div style={{ padding: 14, background: "#fff" }}>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: "rgba(17,17,17,0.06)", borderRadius: 14, padding: "10px 12px", color: "#111" }}>
+                          {greeting || `Hi! Welcome to ${companyName}. How can I help?`}
+                        </div>
+
+                        <div style={{ alignSelf: "flex-end", maxWidth: "82%", background: primaryColor || "#111111", color: "#fff", borderRadius: 14, padding: "10px 12px" }}>
+                          I’m interested. Can you tell me more?
+                        </div>
+
+                        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: "rgba(17,17,17,0.06)", borderRadius: 14, padding: "10px 12px", color: "#111" }}>
+                          Sure — I’ll guide you. If you want, I can capture your details and arrange a quick call.
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                        <div style={{ flex: 1, border: `1px solid ${UI.border}`, borderRadius: 12, padding: "10px 12px", color: UI.text3 }}>
+                          Type…
+                        </div>
+                        <div style={{ borderRadius: 12, padding: "10px 14px", background: primaryColor || "#111111", color: "#fff", fontWeight: 1000 }}>
+                          Send
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 12, height: 4, borderRadius: 999, background: accentColor || "#F5C400", opacity: 0.95 }} />
+                    </div>
                   </div>
 
-                  {kbAuditResult ? <CodeBox text={safeJsonStringify(kbAuditResult)} /> : null}
-                </div>
-              </Card>
-
-              {/* Compact Manager */}
-              <Card
-                title="Knowledge Chunks"
-                subtitle="Compact table view with filters, preview, and bulk actions."
-                right={
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="secondary">
-                      {kbChunksLoading ? "Loading…" : "Refresh"}
-                    </Button>
+                  <div style={{ marginTop: 12, fontSize: 12.5, color: UI.text3 }}>
+                    This preview is purely visual. The widget uses stored settings automatically.
                   </div>
-                }
-              >
-                <div style={{ display: "grid", gap: 12 }}>
-                  {/* Controls */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 120px 120px", gap: 10 }}>
-                    <Input value={kbChunksQuery} onChange={(e) => setKbChunksQuery(e.target.value)} placeholder="Search chunks…" />
-                    <select
-                      value={kbTypeFilter}
-                      onChange={(e) => setKbTypeFilter(e.target.value)}
-                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                    >
-                      {allTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                </Card>
+              </div>
+            )}
 
-                    <select
-                      value={kbConfFilter}
-                      onChange={(e) => setKbConfFilter(e.target.value)}
-                      style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                    >
-                      {allConfs.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+            {/* Knowledge */}
+            {tab === "knowledge" && (
+              <div style={{ display: "grid", gap: 14 }}>
+                <Card
+                  title="Website → Knowledge"
+                  subtitle="Fetch website text and generate knowledge. This also helps infer branding automatically."
+                  right={
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: UI.text2 }}>
+                        <input type="checkbox" checked={kbPersistProfile} onChange={(e) => setKbPersistProfile(e.target.checked)} />
+                        Save inferred profile/branding
+                      </label>
+                      <Button onClick={generateKbFromPages} disabled={kbAuditRunning || kbPages.length === 0} variant="primary">
+                        {kbAuditRunning ? "Generating…" : "Generate"}
+                      </Button>
+                    </div>
+                  }
+                >
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 160px", gap: 10 }}>
+                      <Input value={kbPageUrl} onChange={(e) => setKbPageUrl(e.target.value)} placeholder="https://yourwebsite.com" />
+                      <Input value={kbPageTitle} onChange={(e) => setKbPageTitle(e.target.value)} placeholder="Title (optional)" />
+                      <Button onClick={fetchPageIntoForm} disabled={kbFetching} variant="secondary">
+                        {kbFetching ? "Fetching…" : "Fetch page"}
+                      </Button>
+                    </div>
 
-                    <Input type="number" min={10} max={200} value={kbChunksLimit} onChange={(e) => setKbChunksLimit(Number(e.target.value || 50))} />
-                    <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="primary">
-                      Apply
-                    </Button>
+                    <Textarea value={kbPageText} onChange={(e) => setKbPageText(e.target.value)} placeholder="Page text will appear here…" style={{ minHeight: 180 }} />
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <Button onClick={addKbPage} variant="secondary">Add page</Button>
+                      <Button
+                        onClick={() => {
+                          setKbPages([]);
+                          setKbAuditResult(null);
+                          setKbFetchResult(null);
+                          setKbBrandHints(null);
+                          setKbPageUrl("");
+                          setKbPageTitle("");
+                          setKbPageText("");
+                        }}
+                        variant="secondary"
+                      >
+                        Clear
+                      </Button>
+                    </div>
+
+                    {kbBrandHints ? (
+                      <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                        Latest hints: {colorSwatch(kbBrandHints.primary || "")} <b>Primary</b> {kbBrandHints.primary || "—"} ·{" "}
+                        {colorSwatch(kbBrandHints.accent || "")} <b>Accent</b> {kbBrandHints.accent || "—"}
+                      </div>
+                    ) : null}
+
+                    {kbFetchResult ? <CodeBox text={safeJsonStringify(kbFetchResult)} /> : null}
+
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {kbPages.length === 0 ? (
+                        <div style={{ color: UI.text2, fontSize: 13.5 }}>No pages added yet.</div>
+                      ) : (
+                        kbPages.map((p) => (
+                          <div
+                            key={p.url}
+                            style={{
+                              border: `1px solid ${UI.border}`,
+                              borderRadius: UI.radiusLg,
+                              padding: 12,
+                              background: "#fff",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: 12,
+                            }}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {p.url} · {p.text.length.toLocaleString()} chars
+                              </div>
+                            </div>
+                            <Button onClick={() => removeKbPage(p.url)} variant="danger">Remove</Button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {kbAuditResult ? <CodeBox text={safeJsonStringify(kbAuditResult)} /> : null}
                   </div>
+                </Card>
 
-                  {/* Bulk actions */}
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                      Showing <b>{visibleChunks.length}</b> of <b>{kbChunks.length}</b> loaded · Selected <b>{selectedIds.size}</b>
+                <Card
+                  title="Knowledge items"
+                  subtitle="Search, preview, edit, delete."
+                  right={<Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="secondary">{kbChunksLoading ? "Loading…" : "Refresh"}</Button>}
+                >
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 120px 120px", gap: 10 }}>
+                      <Input value={kbChunksQuery} onChange={(e) => setKbChunksQuery(e.target.value)} placeholder="Search…" />
+                      <select value={kbTypeFilter} onChange={(e) => setKbTypeFilter(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                        {allTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <select value={kbConfFilter} onChange={(e) => setKbConfFilter(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                        {allConfs.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <Input type="number" min={10} max={200} value={kbChunksLimit} onChange={(e) => setKbChunksLimit(Number(e.target.value || 50))} />
+                      <Button onClick={loadKnowledgeChunks} disabled={kbChunksLoading} variant="primary">Apply</Button>
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                        Showing <b>{visibleChunks.length}</b> · Selected <b>{selectedIds.size}</b>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <Button onClick={() => selectAllVisible(visibleChunks)} disabled={visibleChunks.length === 0} variant="secondary">Select visible</Button>
+                        <Button onClick={clearSelection} disabled={selectedIds.size === 0} variant="secondary">Clear</Button>
+                        <Button onClick={bulkDeleteSelected} disabled={selectedIds.size === 0} variant="danger">Delete selected</Button>
+                      </div>
+                    </div>
+
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, overflow: "hidden" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 1000, gap: 10, alignItems: "center" }}>
+                        <div>✓</div><div>Title</div><div>Type</div><div>Conf</div><div>Source</div><div>Date</div><div>Actions</div>
+                      </div>
+
+                      {visibleChunks.length === 0 ? (
+                        <div style={{ padding: 12, color: UI.text2 }}>No items found.</div>
+                      ) : (
+                        visibleChunks.map((c) => {
+                          const type = String(c?.metadata?.type || "other");
+                          const conf = String(c?.metadata?.confidence || "medium");
+                          const isSel = selectedIds.has(c.id);
+                          const preview = (c.content || "").slice(0, 120).replace(/\s+/g, " ").trim();
+
+                          return (
+                            <div key={c.id} style={{ display: "grid", gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px", padding: "10px 12px", borderTop: `1px solid ${UI.border}`, gap: 10, alignItems: "center", background: isSel ? "#F8FAFF" : "#fff" }}>
+                              <div><input type="checkbox" checked={isSel} onChange={() => toggleSelect(c.id)} /></div>
+
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                                <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview || "—"}</div>
+                              </div>
+
+                              <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{type}</div>
+                              <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{conf}</div>
+                              <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.source_ref || "—"}</div>
+                              <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(c.created_at).toLocaleString()}</div>
+
+                              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                                <button type="button" onClick={() => openPreview(c)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Preview</button>
+                                <button type="button" onClick={() => openEdit(c)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Edit</button>
+                                <button type="button" onClick={() => deleteChunk(c)} style={{ border: "1px solid #FECACA", background: "#fff", color: UI.danger, borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Delete</button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </Card>
+
+                <Card title="Manual knowledge" subtitle="Paste text to teach the AI.">
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
+                      <Input value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
+                      <Textarea value={kbText} onChange={(e) => setKbText(e.target.value)} style={{ minHeight: 220 }} />
                     </div>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <Button onClick={() => selectAllVisible(visibleChunks)} disabled={visibleChunks.length === 0} variant="secondary">
-                        Select visible
-                      </Button>
-                      <Button onClick={clearSelection} disabled={selectedIds.size === 0} variant="secondary">
-                        Clear selection
-                      </Button>
-                      <Button onClick={bulkDeleteSelected} disabled={selectedIds.size === 0} variant="danger">
-                        Delete selected
-                      </Button>
+                      <Button onClick={ingestKnowledge} disabled={kbIngesting} variant="primary">{kbIngesting ? "Adding…" : "Add"}</Button>
+                      <Button onClick={() => setKbText("")} variant="secondary">Clear</Button>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            )}
+
+            {/* Leads */}
+            {tab === "leads" && (
+              <Card title="Leads" subtitle="Qualified leads captured by your widget." right={<Button onClick={loadLeads} disabled={leadsLoading} variant="secondary">{leadsLoading ? "Loading…" : "Refresh"}</Button>}>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 140px 120px 120px", gap: 10 }}>
+                    <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search…" />
+                    <select value={leadBand} onChange={(e) => setLeadBand(e.target.value as any)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                      <option value="all">all</option><option value="cold">cold</option><option value="warm">warm</option><option value="hot">hot</option>
+                    </select>
+                    <select value={leadStatus} onChange={(e) => setLeadStatus(e.target.value as any)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                      <option value="all">all</option><option value="new">new</option><option value="contacted">contacted</option><option value="closed">closed</option>
+                    </select>
+                    <select value={leadSort} onChange={(e) => setLeadSort(e.target.value as any)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                      <option value="last_touch">last_touch</option><option value="updated">updated</option><option value="score">score</option>
+                    </select>
+                    <Input type="number" min={10} max={500} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value || 50))} />
+                    <Button onClick={loadLeads} disabled={leadsLoading} variant="primary">Apply</Button>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                      Showing <b>{visibleLeads.length}</b> · Selected <b>{selectedLeadIds.size}</b>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <Button onClick={() => selectAllVisibleLeads(visibleLeads)} disabled={visibleLeads.length === 0} variant="secondary">Select visible</Button>
+                      <Button onClick={clearLeadSelection} disabled={selectedLeadIds.size === 0} variant="secondary">Clear</Button>
+                      <Button onClick={bulkDeleteSelectedLeads} disabled={selectedLeadIds.size === 0} variant="danger">Delete selected</Button>
                     </div>
                   </div>
 
-                  {/* Table */}
-                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px",
-                        background: UI.surface2,
-                        padding: "10px 12px",
-                        fontSize: 12.5,
-                        color: UI.text2,
-                        fontWeight: 900,
-                        gap: 10,
-                        alignItems: "center",
-                      }}
-                    >
-                      <div>✓</div>
-                      <div>Title (preview)</div>
-                      <div>Type</div>
-                      <div>Conf</div>
-                      <div>Source</div>
-                      <div>Date</div>
-                      <div>Actions</div>
+                  <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px", background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 1000, gap: 10, alignItems: "center" }}>
+                      <div>✓</div><div>Lead</div><div>Band</div><div>Score</div><div>Status</div><div>Assigned</div><div>Updated</div><div>Actions</div>
                     </div>
 
-                    {visibleChunks.length === 0 ? (
-                      <div style={{ padding: 12, color: UI.text2 }}>No chunks found.</div>
+                    {visibleLeads.length === 0 ? (
+                      <div style={{ padding: 12, color: UI.text2 }}>No leads found.</div>
                     ) : (
-                      visibleChunks.map((c) => {
-                        const type = String(c?.metadata?.type || "other");
-                        const conf = String(c?.metadata?.confidence || "medium");
-                        const isSel = selectedIds.has(c.id);
-                        const preview = (c.content || "").slice(0, 120).replace(/\s+/g, " ").trim();
+                      visibleLeads.map((l) => {
+                        const isSel = selectedLeadIds.has(l.id);
+                        const preview =
+                          (l.lead_preview || "").trim() ||
+                          [l.email || "", l.phone || "", String(l?.qualification_json?.use_case || "").trim(), String(l?.qualification_json?.note || "").trim()]
+                            .filter(Boolean)
+                            .join(" · ")
+                            .slice(0, 180);
 
                         return (
-                          <div
-                            key={c.id}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "42px 2.2fr 120px 120px 1.4fr 160px 170px",
-                              padding: "10px 12px",
-                              borderTop: `1px solid ${UI.border}`,
-                              gap: 10,
-                              alignItems: "center",
-                              background: isSel ? "#F8FAFF" : "#fff",
-                            }}
-                          >
-                            <div>
-                              <input type="checkbox" checked={isSel} onChange={() => toggleSelect(c.id)} />
-                            </div>
+                          <div key={l.id} style={{ display: "grid", gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px", padding: "10px 12px", borderTop: `1px solid ${UI.border}`, gap: 10, alignItems: "center", background: isSel ? "#F8FAFF" : "#fff" }}>
+                            <div><input type="checkbox" checked={isSel} onChange={() => toggleSelectLead(l.id)} /></div>
 
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                              <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {l.name || l.email || l.phone || "(unknown)"}
+                              </div>
                               <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {preview || "—"}
+                                {preview || l.conversation_id || l.id}
                               </div>
                             </div>
 
-                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{type}</div>
-                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{conf}</div>
-
-                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {c.source_ref || "—"}
-                            </div>
-
-                            <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(c.created_at).toLocaleString()}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{l.score_band}</div>
+                            <div style={{ fontWeight: 1000 }}>{l.score_total}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{String(l.status || "new")}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.assigned_to || "—"}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleString()}</div>
 
                             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                              <button
-                                type="button"
-                                onClick={() => openPreview(c)}
-                                style={{
-                                  border: `1px solid ${UI.border}`,
-                                  background: "#fff",
-                                  borderRadius: 999,
-                                  padding: "7px 10px",
-                                  fontSize: 12.5,
-                                  cursor: "pointer",
-                                  fontWeight: 900,
-                                }}
-                              >
-                                Preview
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openEdit(c)}
-                                style={{
-                                  border: `1px solid ${UI.border}`,
-                                  background: "#fff",
-                                  borderRadius: 999,
-                                  padding: "7px 10px",
-                                  fontSize: 12.5,
-                                  cursor: "pointer",
-                                  fontWeight: 900,
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteChunk(c)}
-                                style={{
-                                  border: "1px solid #FECACA",
-                                  background: "#fff",
-                                  color: UI.danger,
-                                  borderRadius: 999,
-                                  padding: "7px 10px",
-                                  fontSize: 12.5,
-                                  cursor: "pointer",
-                                  fontWeight: 900,
-                                }}
-                              >
-                                Delete
-                              </button>
+                              <button type="button" onClick={() => openLeadPreview(l)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Preview</button>
+                              <button type="button" onClick={() => openLeadEdit(l)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Edit</button>
+                              <button type="button" onClick={() => deleteLead(l)} style={{ border: "1px solid #FECACA", background: "#fff", color: UI.danger, borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Delete</button>
                             </div>
                           </div>
                         );
@@ -1896,414 +1703,271 @@ export default function CompanyDetailPage() {
                   </div>
                 </div>
               </Card>
+            )}
 
-              {/* Manual Knowledge Ingest */}
-              <Card title="Manual Knowledge Ingest" subtitle="Paste text to ingest into knowledge base.">
+            {/* Team */}
+            {tab === "team" && (
+              <div style={{ display: "grid", gap: 14 }}>
+                <Card title="Team" subtitle="Invite colleagues and manage roles." right={<Button onClick={loadInvites} disabled={adminsLoading} variant="secondary">{adminsLoading ? "Loading…" : "Refresh"}</Button>}>
+                  {adminsLoading ? (
+                    <div style={{ color: UI.text2 }}>Loading…</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {admins.map((a) => (
+                        <div key={a.user_id} style={{ display: "grid", gridTemplateColumns: "1fr 170px 120px", gap: 10, alignItems: "center", border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.email || a.user_id}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2 }}>Role: {a.role}</div>
+                          </div>
+
+                          <select value={a.role} onChange={(e) => setAdminRole(a.user_id, e.target.value)} disabled={adminMutating === a.user_id} style={{ padding: "10px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff", fontSize: 13.5 }}>
+                            <option value="admin">admin</option>
+                            <option value="viewer">viewer</option>
+                            {isOwner ? <option value="owner">owner</option> : null}
+                          </select>
+
+                          <Button onClick={() => removeAdmin(a.user_id)} disabled={adminMutating === a.user_id} variant="danger">Remove</Button>
+                        </div>
+                      ))}
+                      {admins.length === 0 ? <div style={{ color: UI.text2 }}>No team members found.</div> : null}
+                    </div>
+                  )}
+                </Card>
+
+                <Card title="Invite" subtitle="Create a secure invite link (copied automatically).">
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 170px 140px 140px", gap: 10 }}>
+                      <Input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Email (optional)" />
+                      <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}>
+                        <option value="admin">admin</option>
+                        <option value="viewer">viewer</option>
+                        {isOwner ? <option value="owner">owner</option> : null}
+                      </select>
+                      <Input type="number" min={1} max={30} value={inviteDays} onChange={(e) => setInviteDays(Number(e.target.value || 7))} />
+                      <Button onClick={createInvite} disabled={inviteCreating} variant="primary">{inviteCreating ? "Creating…" : "Create invite"}</Button>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {invites.map((inv) => (
+                        <div key={inv.id} style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff", display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                          <div>
+                            <div style={{ fontWeight: 1000 }}>{inv.email || "(no email)"}</div>
+                            <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                              Role: {inv.role} · Status: {inv.status} · Expires: {new Date(inv.expires_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 10 }}>
+                            <Button onClick={() => {
+                              const origin = typeof window !== "undefined" ? window.location.origin : "";
+                              const link = `${origin}/invite?token=${encodeURIComponent(inv.token)}`;
+                              void copy(link);
+                            }}>
+                              Copy link
+                            </Button>
+                            <Button onClick={() => revokeInvite(inv.id)} variant="danger" disabled={inv.status === "revoked"}>Revoke</Button>
+                          </div>
+                        </div>
+                      ))}
+                      {invites.length === 0 ? <div style={{ color: UI.text2 }}>No invites.</div> : null}
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            )}
+
+            {/* Billing */}
+            {tab === "billing" && (
+              <Card title="Billing" subtitle="Manage your subscription." right={<Button onClick={loadBilling} disabled={billingLoading} variant="secondary">{billingLoading ? "Loading…" : "Refresh"}</Button>}>
                 <div style={{ display: "grid", gap: 12 }}>
-                  <div>
-                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
-                    <Input value={kbTitle} onChange={(e) => setKbTitle(e.target.value)} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
-                    <Textarea value={kbText} onChange={(e) => setKbText(e.target.value)} style={{ minHeight: 220 }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2 }}>Status</div>
+                      <div style={{ fontWeight: 1000, marginTop: 6 }}>{billingSummary.status}</div>
+                    </div>
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2 }}>Plan</div>
+                      <div style={{ fontWeight: 1000, marginTop: 6 }}>{billingSummary.planName}</div>
+                    </div>
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2 }}>Renews</div>
+                      <div style={{ fontWeight: 1000, marginTop: 6 }}>{billingSummary.periodEnd || "—"}</div>
+                    </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={ingestKnowledge} disabled={kbIngesting} variant="primary">
-                      {kbIngesting ? "Embedding…" : "Add to Knowledge Base"}
-                    </Button>
-                    <Button onClick={() => setKbText("")} variant="secondary">
-                      Clear
-                    </Button>
+                  <div style={{ marginTop: 4 }}>
+                    <BillingActions companyId={id as any} />
                   </div>
                 </div>
               </Card>
-            </div>
-          )}
+            )}
 
-          {/* -------------------- LEADS TAB (Knowledge-style) -------------------- */}
-          {tab === "leads" && (
-            <Card
-              title="Leads"
-              subtitle="Compact table view with filters, preview, edit, and bulk actions."
-              right={
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <Button onClick={loadLeads} disabled={leadsLoading} variant="secondary">
-                    {leadsLoading ? "Loading…" : "Refresh"}
-                  </Button>
-                </div>
-              }
-            >
-              <div style={{ display: "grid", gap: 12 }}>
-                {/* Controls */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 140px 120px 120px", gap: 10 }}>
-                  <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search name, email, phone, notes, use_case…" />
-                  <select
-                    value={leadBand}
-                    onChange={(e) => setLeadBand(e.target.value as any)}
-                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                  >
-                    <option value="all">all</option>
-                    <option value="cold">cold</option>
-                    <option value="warm">warm</option>
-                    <option value="hot">hot</option>
-                  </select>
+            {/* Settings (advanced) */}
+            {tab === "settings" && (
+              <div style={{ display: "grid", gap: 14 }}>
+                <Card title="Advanced Settings" subtitle="Only for technical setup. Most customers never need this.">
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {/* Allowed domains */}
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                      <div style={{ fontWeight: 1000, color: UI.text }}>Allowed websites</div>
+                      <div style={{ marginTop: 6, fontSize: 12.5, color: UI.text2 }}>
+                        Only these domains can load your widget.
+                      </div>
 
-                  <select
-                    value={leadStatus}
-                    onChange={(e) => setLeadStatus(e.target.value as any)}
-                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                  >
-                    <option value="all">all</option>
-                    <option value="new">new</option>
-                    <option value="contacted">contacted</option>
-                    <option value="closed">closed</option>
-                  </select>
+                      <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+                          <Input value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder="example.com" />
+                          <Button onClick={addDomainFromInput} variant="secondary">Add</Button>
+                        </div>
 
-                  <select
-                    value={leadSort}
-                    onChange={(e) => setLeadSort(e.target.value as any)}
-                    style={{ padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                  >
-                    <option value="last_touch">last_touch</option>
-                    <option value="updated">updated</option>
-                    <option value="score">score</option>
-                  </select>
-
-                  <Input type="number" min={10} max={500} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value || 50))} />
-                  <Button onClick={loadLeads} disabled={leadsLoading} variant="primary">
-                    Apply
-                  </Button>
-                </div>
-
-                {/* Bulk actions */}
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                    Showing <b>{visibleLeads.length}</b> loaded · Selected <b>{selectedLeadIds.size}</b>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <Button onClick={() => selectAllVisibleLeads(visibleLeads)} disabled={visibleLeads.length === 0} variant="secondary">
-                      Select visible
-                    </Button>
-                    <Button onClick={clearLeadSelection} disabled={selectedLeadIds.size === 0} variant="secondary">
-                      Clear selection
-                    </Button>
-                    <Button onClick={bulkDeleteSelectedLeads} disabled={selectedLeadIds.size === 0} variant="danger">
-                      Delete selected
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Table */}
-                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px",
-                      background: UI.surface2,
-                      padding: "10px 12px",
-                      fontSize: 12.5,
-                      color: UI.text2,
-                      fontWeight: 900,
-                      gap: 10,
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>✓</div>
-                    <div>Lead (preview)</div>
-                    <div>Band</div>
-                    <div>Score</div>
-                    <div>Status</div>
-                    <div>Assigned</div>
-                    <div>Updated</div>
-                    <div>Actions</div>
-                  </div>
-
-                  {visibleLeads.length === 0 ? (
-                    <div style={{ padding: 12, color: UI.text2 }}>No leads found.</div>
-                  ) : (
-                    visibleLeads.map((l) => {
-                      const isSel = selectedLeadIds.has(l.id);
-                      const preview =
-                        (l.lead_preview || "").trim() ||
-                        [
-                          l.email || "",
-                          l.phone || "",
-                          String(l?.qualification_json?.use_case || "").trim(),
-                          String(l?.qualification_json?.note || "").trim(),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")
-                          .slice(0, 180);
-
-                      return (
-                        <div
-                          key={l.id}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px",
-                            padding: "10px 12px",
-                            borderTop: `1px solid ${UI.border}`,
-                            gap: 10,
-                            alignItems: "center",
-                            background: isSel ? "#F8FAFF" : "#fff",
-                          }}
-                        >
-                          <div>
-                            <input type="checkbox" checked={isSel} onChange={() => toggleSelectLead(l.id)} />
-                          </div>
-
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {l.name || l.email || l.phone || "(unknown)"}
-                            </div>
-                            <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {preview || l.conversation_id || l.id}
-                            </div>
-                          </div>
-
-                          <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{l.score_band}</div>
-                          <div style={{ fontWeight: 900 }}>{l.score_total}</div>
-                          <div style={{ fontSize: 12.5, color: UI.text2, textTransform: "uppercase" }}>{String(l.status || "new")}</div>
-
-                          <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {l.assigned_to || "—"}
-                          </div>
-
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleString()}</div>
-
-                          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {domainDraft.map((d) => (
                             <button
+                              key={d}
                               type="button"
-                              onClick={() => openLeadPreview(l)}
+                              onClick={() => removeDomain(d)}
                               style={{
                                 border: `1px solid ${UI.border}`,
-                                background: "#fff",
+                                background: UI.surface2,
                                 borderRadius: 999,
                                 padding: "7px 10px",
                                 fontSize: 12.5,
                                 cursor: "pointer",
                                 fontWeight: 900,
                               }}
+                              title="Click to remove"
                             >
-                              Preview
+                              {d} ✕
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => openLeadEdit(l)}
-                              style={{
-                                border: `1px solid ${UI.border}`,
-                                background: "#fff",
-                                borderRadius: 999,
-                                padding: "7px 10px",
-                                fontSize: 12.5,
-                                cursor: "pointer",
-                                fontWeight: 900,
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteLead(l)}
-                              style={{
-                                border: "1px solid #FECACA",
-                                background: "#fff",
-                                color: UI.danger,
-                                borderRadius: 999,
-                                padding: "7px 10px",
-                                fontSize: 12.5,
-                                cursor: "pointer",
-                                fontWeight: 900,
-                              }}
-                            >
-                              Delete
-                            </button>
+                          ))}
+                          {domainDraft.length === 0 ? <div style={{ color: UI.text2, fontSize: 13 }}>No domains yet.</div> : null}
+                        </div>
+
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                          <Button onClick={saveDomains} disabled={!domainDirty || domainSaving} variant="primary">
+                            {domainSaving ? "Saving…" : "Save"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Limits (owner only) */}
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                      <div style={{ fontWeight: 1000, color: UI.text }}>Usage limits (owner)</div>
+                      <div style={{ marginTop: 6, fontSize: 12.5, color: UI.text2 }}>
+                        Only the platform owner should edit this.
+                      </div>
+
+                      {!isOwner ? (
+                        <div style={{ marginTop: 12, color: UI.text2 }}>Not available for your role.</div>
+                      ) : (
+                        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+                          <Textarea
+                            value={limitsText}
+                            onChange={(e) => {
+                              setLimitsText(e.target.value);
+                              setLimitsDirty(true);
+                            }}
+                            style={{ minHeight: 220, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}
+                          />
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <Button onClick={saveLimits} disabled={!limitsDirty || limitsSaving} variant="primary">
+                              {limitsSaving ? "Saving…" : "Save"}
+                            </Button>
                           </div>
                         </div>
-                      );
-                    })
-                  )}
-                </div>
+                      )}
+                    </div>
+
+                    {/* Embed snippet */}
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 14, background: "#fff" }}>
+                      <div style={{ fontWeight: 1000, color: UI.text }}>Embed snippet</div>
+                      <div style={{ marginTop: 6, fontSize: 12.5, color: UI.text2 }}>Use on your website.</div>
+
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                          <Button onClick={() => copy(embedSnippet)} variant="secondary">Copy</Button>
+                        </div>
+                        <CodeBox text={embedSnippet} />
+                      </div>
+                    </div>
+                  </div>
+                </Card>
               </div>
-            </Card>
-          )}
+            )}
+          </>
+        )}
 
-          {/* -------------------- SALES-AI TAB (kept minimal + inline styles) -------------------- */}
-          {tab === "sales-ai" && (
-            <Card
-              title="Sales AI Configuration"
-              subtitle="Tune the sales engine behavior for this company."
-              right={
-                <Button onClick={saveFunnelConfig} disabled={funnelSaving || !funnelConfig} variant="primary">
-                  {funnelSaving ? "Saving..." : "Save"}
-                </Button>
-              }
-            >
-              {funnelLoading ? (
-                <div style={{ color: UI.text2 }}>Loading…</div>
-              ) : !funnelConfig ? (
-                <div style={{ color: UI.text2 }}>No config found.</div>
-              ) : (
-                <div style={{ display: "grid", gap: 12 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!funnelConfig.enabled}
-                      onChange={(e) => setFunnelConfig({ ...funnelConfig, enabled: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: 900 }}>Enable Sales Engine</span>
-                  </label>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Tone</div>
-                      <select
-                        value={funnelConfig.tone}
-                        onChange={(e) => setFunnelConfig({ ...funnelConfig, tone: e.target.value })}
-                        style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                      >
-                        <option value="consultative">Consultative</option>
-                        <option value="direct">Direct</option>
-                        <option value="luxury">Luxury</option>
-                        <option value="formal">Formal</option>
-                        <option value="playful">Playful</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Response Length</div>
-                      <select
-                        value={funnelConfig.response_length}
-                        onChange={(e) => setFunnelConfig({ ...funnelConfig, response_length: e.target.value })}
-                        style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                      >
-                        <option value="concise">Concise</option>
-                        <option value="medium">Medium</option>
-                        <option value="detailed">Detailed</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!funnelConfig.objection_handling}
-                      onChange={(e) => setFunnelConfig({ ...funnelConfig, objection_handling: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: 900 }}>Handle Price Objections</span>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!funnelConfig.show_pricing}
-                      onChange={(e) => setFunnelConfig({ ...funnelConfig, show_pricing: e.target.checked })}
-                    />
-                    <span style={{ fontWeight: 900 }}>Show Pricing</span>
-                  </label>
-
-                  <div>
-                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Pricing Strategy</div>
-                    <select
-                      value={funnelConfig.pricing_strategy}
-                      onChange={(e) => setFunnelConfig({ ...funnelConfig, pricing_strategy: e.target.value })}
-                      style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                    >
-                      <option value="multi-tier">Multi Tier</option>
-                      <option value="anchor">Anchor Pricing</option>
-                      <option value="request-only">Request Only</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Default CTA (optional)</div>
-                    <Input
-                      type="text"
-                      value={funnelConfig.default_cta || ""}
-                      onChange={(e) => setFunnelConfig({ ...funnelConfig, default_cta: e.target.value })}
-                      placeholder="Override strategic question..."
-                    />
-                  </div>
-                </div>
-              )}
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* Knowledge Preview modal */}
-      {previewOpen && previewRow ? (
-        <Modal
-          title="Preview Knowledge Chunk"
-          onClose={() => {
-            setPreviewOpen(false);
-            setPreviewRow(null);
-          }}
-          right={
-            <Button
-              onClick={() => {
-                openEdit(previewRow);
-              }}
-              variant="primary"
-            >
-              Edit
-            </Button>
-          }
-        >
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={{ fontSize: 12.5, color: UI.text2 }}>
-              <b>Type:</b> {String(previewRow?.metadata?.type || "other")} · <b>Confidence:</b> {String(previewRow?.metadata?.confidence || "medium")}
+        {/* Knowledge Preview modal */}
+        {previewOpen && previewRow ? (
+          <Modal
+            title="Preview Knowledge Item"
+            onClose={() => {
+              setPreviewOpen(false);
+              setPreviewRow(null);
+            }}
+            right={
+              <Button
+                onClick={() => {
+                  openEdit(previewRow);
+                }}
+                variant="primary"
+              >
+                Edit
+              </Button>
+            }
+          >
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                <b>Type:</b> {String(previewRow?.metadata?.type || "other")} · <b>Confidence:</b> {String(previewRow?.metadata?.confidence || "medium")}
+              </div>
+              <div style={{ fontSize: 12.5, color: UI.text2 }}>
+                <b>Source:</b> {previewRow.source_ref || "—"} · <b>Created:</b> {new Date(previewRow.created_at).toLocaleString()}
+              </div>
+              <CodeBox text={previewRow.content} />
             </div>
-            <div style={{ fontSize: 12.5, color: UI.text2 }}>
-              <b>Source:</b> {previewRow.source_ref || "—"} · <b>Created:</b> {new Date(previewRow.created_at).toLocaleString()}
-            </div>
-            <CodeBox text={previewRow.content} />
-          </div>
-        </Modal>
-      ) : null}
+          </Modal>
+        ) : null}
 
-      {/* Knowledge Edit modal */}
-      {editOpen && editRow ? (
-        <Modal
-          title="Edit Knowledge Chunk"
-          onClose={() => {
-            setEditOpen(false);
-            setEditRow(null);
-          }}
-          right={
-            <Button onClick={saveEdit} disabled={editSaving} variant="primary">
-              {editSaving ? "Saving…" : "Save"}
-            </Button>
-          }
-        >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
-              <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+        {/* Knowledge Edit modal */}
+        {editOpen && editRow ? (
+          <Modal
+            title="Edit Knowledge Item"
+            onClose={() => {
+              setEditOpen(false);
+              setEditRow(null);
+            }}
+            right={
+              <Button onClick={saveEdit} disabled={editSaving} variant="primary">
+                {editSaving ? "Saving…" : "Save"}
+              </Button>
+            }
+          >
+            <div style={{ display: "grid", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Title</div>
+                <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
+                <Textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} style={{ minHeight: 320 }} />
+              </div>
+              <div style={{ fontSize: 12.5, color: UI.text3 }}>
+                Note: Embeddings are not re-generated on edit yet.
+              </div>
             </div>
-            <div>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Content</div>
-              <Textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} style={{ minHeight: 320 }} />
-            </div>
-            <div style={{ fontSize: 12.5, color: UI.text3 }}>Note: Embeddings are not re-generated on edit yet. If you want perfect retrieval, we can re-embed on save.</div>
-          </div>
-        </Modal>
-      ) : null}
+          </Modal>
+        ) : null}
 
-      {/* Lead Preview modal (Knowledge-like) */}
-      {leadPreviewOpen && leadPreviewRow ? (
-        <Modal
-          title="Preview Lead"
-          onClose={() => {
-            setLeadPreviewOpen(false);
-            setLeadPreviewRow(null);
-            setLeadPreviewMessages([]);
-          }}
-          right={
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {/* Lead Preview modal */}
+        {leadPreviewOpen && leadPreviewRow ? (
+          <Modal
+            title="Preview Lead"
+            onClose={() => {
+              setLeadPreviewOpen(false);
+              setLeadPreviewRow(null);
+              setLeadPreviewMessages([]);
+            }}
+            right={
               <Button
                 onClick={() => {
                   openLeadEdit(leadPreviewRow);
@@ -2312,159 +1976,156 @@ export default function CompanyDetailPage() {
               >
                 Edit
               </Button>
-            </div>
-          }
-        >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                <div style={{ fontSize: 12.5, color: UI.text2 }}>Lead</div>
-                <div style={{ fontWeight: 900, marginTop: 4 }}>{leadPreviewRow.name || leadPreviewRow.email || leadPreviewRow.phone || "(unknown)"}</div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Band:</b> {leadPreviewRow.score_band.toUpperCase()} · <b>Score:</b> {leadPreviewRow.score_total} · <b>Status:</b> {String(leadPreviewRow.status || "new")}
+            }
+          >
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                  <div style={{ fontSize: 12.5, color: UI.text2 }}>Lead</div>
+                  <div style={{ fontWeight: 1000, marginTop: 6 }}>{leadPreviewRow.name || leadPreviewRow.email || leadPreviewRow.phone || "(unknown)"}</div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 8 }}>
+                    <b>Band:</b> {leadPreviewRow.score_band.toUpperCase()} · <b>Score:</b> {leadPreviewRow.score_total} · <b>Status:</b> {String(leadPreviewRow.status || "new")}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 8 }}>
+                    <b>Email:</b> {leadPreviewRow.email || "—"} · <b>Phone:</b> {leadPreviewRow.phone || "—"}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Email:</b> {leadPreviewRow.email || "—"} · <b>Phone:</b> {leadPreviewRow.phone || "—"}
+
+                <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                  <div style={{ fontSize: 12.5, color: UI.text2 }}>Meta</div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 8 }}>
+                    <b>Assigned:</b> {leadPreviewRow.assigned_to || "—"}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 8 }}>
+                    <b>Last touch:</b> {leadPreviewRow.last_touch_at ? new Date(leadPreviewRow.last_touch_at).toLocaleString() : "—"}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 8 }}>
+                    <b>Conversation:</b> {leadPreviewRow.conversation_id || "—"}
+                  </div>
                 </div>
               </div>
 
-              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-                <div style={{ fontSize: 12.5, color: UI.text2 }}>Meta</div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Assigned:</b> {leadPreviewRow.assigned_to || "—"}
+              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, padding: 12, background: "#fff" }}>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 10 }}>
+                  <b>Tags:</b> {(leadPreviewRow.tags || []).join(", ") || "—"}
                 </div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Lead state:</b> {leadPreviewRow.lead_state || "—"} · <b>Channel:</b> {leadPreviewRow.channel || "—"}
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 10 }}>
+                  <b>Admin notes:</b> {leadPreviewRow.admin_notes || "—"}
                 </div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Last touch:</b> {leadPreviewRow.last_touch_at ? new Date(leadPreviewRow.last_touch_at).toLocaleString() : "—"}
-                </div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginTop: 6 }}>
-                  <b>Conversation:</b> {leadPreviewRow.conversation_id || "—"}
-                </div>
-              </div>
-            </div>
 
-            <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 8 }}>
-                <b>Tags:</b> {(leadPreviewRow.tags || []).join(", ") || "—"}
-              </div>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 8 }}>
-                <b>Admin notes:</b> {leadPreviewRow.admin_notes || "—"}
-              </div>
-              <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                <b>Qualification JSON</b>
-              </div>
-              <CodeBox text={safeJsonStringify(leadPreviewRow.qualification_json || {})} />
-              <div style={{ height: 10 }} />
-              <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                <b>Consents JSON</b>
-              </div>
-              <CodeBox text={safeJsonStringify(leadPreviewRow.consents_json || {})} />
-            </div>
+                <div style={{ fontSize: 12.5, color: UI.text2 }}><b>Qualification</b></div>
+                <CodeBox text={safeJsonStringify(leadPreviewRow.qualification_json || {})} />
 
-            <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, overflow: "hidden" }}>
-              <div style={{ background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>
-                Conversation (latest {leadPreviewMessages.length})
+                <div style={{ height: 10 }} />
+
+                <div style={{ fontSize: 12.5, color: UI.text2 }}><b>Consents</b></div>
+                <CodeBox text={safeJsonStringify(leadPreviewRow.consents_json || {})} />
               </div>
 
-              {leadPreviewLoading ? (
-                <div style={{ padding: 12, color: UI.text2 }}>Loading conversation…</div>
-              ) : leadPreviewMessages.length === 0 ? (
-                <div style={{ padding: 12, color: UI.text2 }}>No messages found.</div>
-              ) : (
-                <div style={{ padding: 12, display: "grid", gap: 10 }}>
-                  {leadPreviewMessages.map((m, idx) => (
-                    <div key={idx} style={{ border: `1px solid ${UI.borderSoft}`, borderRadius: UI.radius, padding: 10, background: "#fff" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-                        <div style={{ fontWeight: 900, fontSize: 12.5, color: m.role === "assistant" ? "#1D4ED8" : UI.text }}>{m.role}</div>
-                        <div style={{ fontSize: 12, color: UI.text3 }}>{m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div>
+              <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, overflow: "hidden" }}>
+                <div style={{ background: UI.surface2, padding: "10px 12px", fontSize: 12.5, color: UI.text2, fontWeight: 1000 }}>
+                  Conversation (latest {leadPreviewMessages.length})
+                </div>
+
+                {leadPreviewLoading ? (
+                  <div style={{ padding: 12, color: UI.text2 }}>Loading conversation…</div>
+                ) : leadPreviewMessages.length === 0 ? (
+                  <div style={{ padding: 12, color: UI.text2 }}>No messages found.</div>
+                ) : (
+                  <div style={{ padding: 12, display: "grid", gap: 10 }}>
+                    {leadPreviewMessages.map((m, idx) => (
+                      <div key={idx} style={{ border: `1px solid ${UI.borderSoft}`, borderRadius: UI.radiusLg, padding: 10, background: "#fff" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                          <div style={{ fontWeight: 1000, fontSize: 12.5, color: m.role === "assistant" ? "#1D4ED8" : UI.text }}>{m.role}</div>
+                          <div style={{ fontSize: 12, color: UI.text3 }}>{m.created_at ? new Date(m.created_at).toLocaleString() : ""}</div>
+                        </div>
+                        <div style={{ marginTop: 6, fontSize: 13.5, color: UI.text, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.content}</div>
                       </div>
-                      <div style={{ marginTop: 6, fontSize: 13.5, color: UI.text, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.content}</div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Modal>
+        ) : null}
+
+        {/* Lead Edit modal */}
+        {leadEditOpen && leadEditRow ? (
+          <Modal
+            title="Edit Lead"
+            onClose={() => {
+              setLeadEditOpen(false);
+              setLeadEditRow(null);
+            }}
+            right={
+              <Button onClick={saveLeadEdit} disabled={leadEditSaving} variant="primary">
+                {leadEditSaving ? "Saving…" : "Save"}
+              </Button>
+            }
+          >
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Status</div>
+                  <select
+                    value={leadEditStatus}
+                    onChange={(e) => setLeadEditStatus(e.target.value as any)}
+                    style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                  >
+                    <option value="new">new</option>
+                    <option value="contacted">contacted</option>
+                    <option value="closed">closed</option>
+                  </select>
                 </div>
-              )}
-            </div>
-          </div>
-        </Modal>
-      ) : null}
 
-      {/* Lead Edit modal (Knowledge-like) */}
-      {leadEditOpen && leadEditRow ? (
-        <Modal
-          title="Edit Lead"
-          onClose={() => {
-            setLeadEditOpen(false);
-            setLeadEditRow(null);
-          }}
-          right={
-            <Button onClick={saveLeadEdit} disabled={leadEditSaving} variant="primary">
-              {leadEditSaving ? "Saving…" : "Save"}
-            </Button>
-          }
-        >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Status</div>
-                <select
-                  value={leadEditStatus}
-                  onChange={(e) => setLeadEditStatus(e.target.value as any)}
-                  style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
-                >
-                  <option value="new">new</option>
-                  <option value="contacted">contacted</option>
-                  <option value="closed">closed</option>
-                </select>
+                <div>
+                  <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Assigned to</div>
+                  <Input value={leadEditAssignedTo} onChange={(e) => setLeadEditAssignedTo(e.target.value)} placeholder="Employee / agent name or id" />
+                </div>
               </div>
 
               <div>
-                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Assigned to</div>
-                <Input value={leadEditAssignedTo} onChange={(e) => setLeadEditAssignedTo(e.target.value)} placeholder="Employee / agent name or id" />
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Tags (comma separated)</div>
+                <Input value={leadEditTags} onChange={(e) => setLeadEditTags(e.target.value)} placeholder="vip, german, wants-demo, budget-high" />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Admin notes</div>
+                <Textarea value={leadEditNotes} onChange={(e) => setLeadEditNotes(e.target.value)} style={{ minHeight: 220 }} placeholder="Internal notes…" />
+              </div>
+
+              <div style={{ fontSize: 12.5, color: UI.text3 }}>
+                Lead ID: {leadEditRow.id} · Conversation: {leadEditRow.conversation_id}
               </div>
             </div>
+          </Modal>
+        ) : null}
 
-            <div>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Tags (comma separated)</div>
-              <Input value={leadEditTags} onChange={(e) => setLeadEditTags(e.target.value)} placeholder="vip, german, wants-demo, budget-high" />
-            </div>
-
-            <div>
-              <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Admin notes</div>
-              <Textarea value={leadEditNotes} onChange={(e) => setLeadEditNotes(e.target.value)} style={{ minHeight: 220 }} placeholder="Internal notes… (e.g. assign to Selene, follow up tomorrow, etc.)" />
-            </div>
-
-            <div style={{ fontSize: 12.5, color: UI.text3 }}>
-              Lead ID: {leadEditRow.id} · Conversation: {leadEditRow.conversation_id}
-            </div>
+        {toast && (
+          <div
+            onClick={() => setToast(null)}
+            style={{
+              position: "fixed",
+              right: 18,
+              bottom: 18,
+              background: "#fff",
+              color: UI.text,
+              padding: "12px 14px",
+              borderRadius: 16,
+              border: `1px solid ${UI.border}`,
+              boxShadow: UI.shadow,
+              cursor: "pointer",
+              fontSize: 13.5,
+              maxWidth: 360,
+              zIndex: 9999,
+            }}
+          >
+            <div style={{ fontWeight: 1000, marginBottom: 2 }}>Notice</div>
+            <div style={{ color: UI.text2 }}>{toast}</div>
+            <div style={{ marginTop: 8, fontSize: 12, color: UI.text3 }}>Click to dismiss</div>
           </div>
-        </Modal>
-      ) : null}
-
-      {toast && (
-        <div
-          onClick={() => setToast(null)}
-          style={{
-            position: "fixed",
-            right: 18,
-            bottom: 18,
-            background: "#fff",
-            color: UI.text,
-            padding: "12px 14px",
-            borderRadius: 16,
-            border: `1px solid ${UI.border}`,
-            boxShadow: UI.shadow,
-            cursor: "pointer",
-            fontSize: 13.5,
-            maxWidth: 360,
-          }}
-        >
-          <div style={{ fontWeight: 900, marginBottom: 2 }}>Notice</div>
-          <div style={{ color: UI.text2 }}>{toast}</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: UI.text3 }}>Click to dismiss</div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
