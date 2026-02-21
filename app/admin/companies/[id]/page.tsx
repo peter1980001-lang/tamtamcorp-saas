@@ -341,34 +341,34 @@ export default function CompanyDetailPage() {
   const [limitsSaving, setLimitsSaving] = useState(false);
   const [limitsDirty, setLimitsDirty] = useState(false);
 
-// Sales AI Config
-const [funnelConfig, setFunnelConfig] = useState<any>(null);
-const [funnelLoading, setFunnelLoading] = useState(false);
-const [funnelSaving, setFunnelSaving] = useState(false);
+  // Sales AI Config
+  const [funnelConfig, setFunnelConfig] = useState<any>(null);
+  const [funnelLoading, setFunnelLoading] = useState(false);
+  const [funnelSaving, setFunnelSaving] = useState(false);
 
-async function loadFunnelConfig() {
-  if (!id) return;
-  setFunnelLoading(true);
-  const res = await fetch(`/api/admin/companies/${id}/funnel-config`, { cache: "no-store" });
-  const json = await res.json().catch(() => null);
-  setFunnelLoading(false);
-  if (!res.ok) return setToast(json?.error || "funnel_config_failed");
-  setFunnelConfig(json?.config ?? null);
-}
+  async function loadFunnelConfig() {
+    if (!id) return;
+    setFunnelLoading(true);
+    const res = await fetch(`/api/admin/companies/${id}/funnel-config`, { cache: "no-store" });
+    const json = await res.json().catch(() => null);
+    setFunnelLoading(false);
+    if (!res.ok) return setToast(json?.error || "funnel_config_failed");
+    setFunnelConfig(json?.config ?? null);
+  }
 
-async function saveFunnelConfig() {
-  if (!id || !funnelConfig) return;
-  setFunnelSaving(true);
-  const res = await fetch(`/api/admin/companies/${id}/funnel-config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(funnelConfig),
-  });
-  const json = await res.json().catch(() => null);
-  setFunnelSaving(false);
-  if (!res.ok) return setToast(json?.error || "save_failed");
-  setToast("Saved");
-}
+  async function saveFunnelConfig() {
+    if (!id || !funnelConfig) return;
+    setFunnelSaving(true);
+    const res = await fetch(`/api/admin/companies/${id}/funnel-config`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(funnelConfig),
+    });
+    const json = await res.json().catch(() => null);
+    setFunnelSaving(false);
+    if (!res.ok) return setToast(json?.error || "save_failed");
+    setToast("Saved");
+  }
 
   // Admins/Invites
   const [admins, setAdmins] = useState<AdminRow[]>([]);
@@ -456,6 +456,10 @@ async function saveFunnelConfig() {
   const [leadEditTags, setLeadEditTags] = useState<string>(""); // comma separated
   const [leadEditSaving, setLeadEditSaving] = useState(false);
 
+  // Branding/logo upload (admin convenience)
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoUploadErr, setLogoUploadErr] = useState<string | null>(null);
+
   const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
 
@@ -471,7 +475,8 @@ async function saveFunnelConfig() {
       { key: "test-chat" as Tab, label: "Test-Chat" },
       { key: "knowledge" as Tab, label: "Knowledge" },
       { key: "leads" as Tab, label: "Leads" },
-{ key: "sales-ai" as Tab, label: "Sales AI" },    ];
+      { key: "sales-ai" as Tab, label: "Sales AI" },
+    ];
   }, [isOwner]);
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
@@ -614,7 +619,7 @@ async function saveFunnelConfig() {
     if (tab === "admins") void loadInvites();
     if (tab === "leads") void loadLeads();
     if (tab === "knowledge") void loadKnowledgeChunks();
-if (tab === "sales-ai") loadFunnelConfig();
+    if (tab === "sales-ai") void loadFunnelConfig();
 
     if (tab === "domains") {
       const current = data?.keys?.allowed_domains ?? [];
@@ -955,6 +960,10 @@ if (tab === "sales-ai") loadFunnelConfig();
 
     if (!res.ok) return setToast(json?.error || "knowledge_pages_ingest_failed");
     setToast(`Inserted ${json.inserted_chunks ?? json.chunks ?? "?"} chunks`);
+
+    // Optional: wenn euer ingest endpoint branding_json mitschreibt (persist_profile),
+    // dann holen wir danach frische company data, damit UI/Widget sofort die Farben sieht.
+    await load();
     await loadKnowledgeChunks();
   }
 
@@ -1154,7 +1163,6 @@ if (tab === "sales-ai") loadFunnelConfig();
       created_at: String(m?.created_at || ""),
     }));
     setLeadPreviewMessages(msgs);
-    // keep row from API if returned (optional)
     if (json?.lead) setLeadPreviewRow(json.lead as LeadRow);
   }
 
@@ -1206,6 +1214,43 @@ if (tab === "sales-ai") loadFunnelConfig();
     const end = billingInfo?.billing?.current_period_end || billingInfo?.current_period_end || null;
     return { status, planName, periodEnd: end ? new Date(end).toLocaleString() : null };
   }, [billingInfo]);
+
+  async function uploadCompanyLogo(file: File) {
+    if (!id) return;
+    setLogoUploadErr(null);
+    setLogoUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+
+      // ✅ this API route must exist:
+      // POST /api/admin/companies/[id]/logo  -> uploads to storage + updates settings.branding_json.logo_url
+      const res = await fetch(`/api/admin/companies/${id}/logo`, { method: "POST", body: fd });
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setLogoUploadErr(String(json?.error || `upload_failed_${res.status}`));
+        return;
+      }
+
+      const logoUrl = String(json?.logo_url || "");
+      setData((prev) => {
+        if (!prev) return prev;
+        const branding = prev.settings?.branding_json || {};
+        const nextBranding = { ...branding, logo_url: logoUrl };
+        return { ...prev, settings: { ...prev.settings, branding_json: nextBranding } };
+      });
+
+      setToast("Logo uploaded");
+    } catch (e: any) {
+      setLogoUploadErr(e?.message || "upload_error");
+    } finally {
+      setLogoUploading(false);
+    }
+  }
+
+  const currentBranding = useMemo(() => (data?.settings?.branding_json || {}) as any, [data?.settings?.branding_json]);
+  const currentLogoUrl = useMemo(() => String(currentBranding?.logo_url || ""), [currentBranding?.logo_url]);
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -1504,9 +1549,7 @@ if (tab === "sales-ai") loadFunnelConfig();
                     <div style={{ display: "grid", gap: 8 }}>
                       {testLog.map((m, idx) => (
                         <div key={idx} style={{ fontSize: 13.5 }}>
-                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>
-                            {m.role}:
-                          </b>{" "}
+                          <b style={{ color: m.role === "assistant" ? "#1D4ED8" : m.role === "error" ? UI.danger : UI.text }}>{m.role}:</b>{" "}
                           <span style={{ color: UI.text }}>{m.text}</span>
                         </div>
                       ))}
@@ -1517,9 +1560,64 @@ if (tab === "sales-ai") loadFunnelConfig();
             </Card>
           )}
 
-          {/* -------------------- KNOWLEDGE TAB (unchanged) -------------------- */}
+          {/* -------------------- KNOWLEDGE TAB (with Branding + Logo Upload) -------------------- */}
           {tab === "knowledge" && (
             <div style={{ display: "grid", gap: 14 }}>
+              <Card
+                title="Branding (Auto for Widget)"
+                subtitle="Optional: upload a company logo. Colors are auto-inferred when you generate knowledge from pages (persist_profile). If nothing is set, widget uses defaults."
+              >
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, alignItems: "center" }}>
+                    <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Current logo</div>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ width: 48, height: 48, borderRadius: 12, border: `1px solid ${UI.border}`, background: "#fff", overflow: "hidden" }}>
+                        {currentLogoUrl ? <img src={currentLogoUrl} alt="logo" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+                      </div>
+
+                      <div style={{ display: "grid", gap: 6, minWidth: 280 }}>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                          disabled={logoUploading}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void uploadCompanyLogo(f);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <div style={{ fontSize: 12.5, color: UI.text3 }}>
+                          PNG/JPG/WEBP/SVG · max 2MB · will be used by widget automatically
+                        </div>
+                        {logoUploading ? <div style={{ fontSize: 12.5, color: UI.text2 }}>Uploading…</div> : null}
+                        {logoUploadErr ? <div style={{ fontSize: 12.5, color: UI.danger }}>{logoUploadErr}</div> : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ borderTop: `1px solid ${UI.border}`, marginTop: 4, paddingTop: 12 }} />
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Current branding_json</div>
+                      <div style={{ marginTop: 8 }}>
+                        <CodeBox text={safeJsonStringify(currentBranding)} />
+                      </div>
+                    </div>
+
+                    <div style={{ border: `1px solid ${UI.border}`, borderRadius: UI.radius, padding: 12, background: "#fff" }}>
+                      <div style={{ fontSize: 12.5, color: UI.text2, fontWeight: 900 }}>Latest inferred hints (from Fetch Page)</div>
+                      <div style={{ marginTop: 8 }}>
+                        <CodeBox text={safeJsonStringify(kbBrandHints || {})} />
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12.5, color: UI.text3 }}>
+                        If “Save inferred profile/branding” is enabled, your ingest endpoint should persist these into company_settings.branding_json.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
               {/* Manual Pages -> Generate */}
               <Card
                 title="Manual Pages → Audit → Knowledge"
@@ -1569,7 +1667,8 @@ if (tab === "sales-ai") loadFunnelConfig();
 
                   {kbBrandHints ? (
                     <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                      Brand hints: <b>primary</b> {kbBrandHints.primary || "—"} · <b>accent</b> {kbBrandHints.accent || "—"}
+                      Brand hints: <b>primary</b> {kbBrandHints.primary || "—"} · <b>accent</b> {kbBrandHints.accent || "—"} · <b>logo</b>{" "}
+                      {kbBrandHints.logo_url ? "found" : "—"}
                     </div>
                   ) : null}
 
@@ -1973,9 +2072,7 @@ if (tab === "sales-ai") loadFunnelConfig();
                             {l.assigned_to || "—"}
                           </div>
 
-                          <div style={{ fontSize: 12.5, color: UI.text2 }}>
-                            {new Date(l.updated_at).toLocaleString()}
-                          </div>
+                          <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleString()}</div>
 
                           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                             <button
@@ -2031,6 +2128,107 @@ if (tab === "sales-ai") loadFunnelConfig();
                   )}
                 </div>
               </div>
+            </Card>
+          )}
+
+          {/* -------------------- SALES-AI TAB (kept minimal + inline styles) -------------------- */}
+          {tab === "sales-ai" && (
+            <Card
+              title="Sales AI Configuration"
+              subtitle="Tune the sales engine behavior for this company."
+              right={
+                <Button onClick={saveFunnelConfig} disabled={funnelSaving || !funnelConfig} variant="primary">
+                  {funnelSaving ? "Saving..." : "Save"}
+                </Button>
+              }
+            >
+              {funnelLoading ? (
+                <div style={{ color: UI.text2 }}>Loading…</div>
+              ) : !funnelConfig ? (
+                <div style={{ color: UI.text2 }}>No config found.</div>
+              ) : (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!funnelConfig.enabled}
+                      onChange={(e) => setFunnelConfig({ ...funnelConfig, enabled: e.target.checked })}
+                    />
+                    <span style={{ fontWeight: 900 }}>Enable Sales Engine</span>
+                  </label>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Tone</div>
+                      <select
+                        value={funnelConfig.tone}
+                        onChange={(e) => setFunnelConfig({ ...funnelConfig, tone: e.target.value })}
+                        style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                      >
+                        <option value="consultative">Consultative</option>
+                        <option value="direct">Direct</option>
+                        <option value="luxury">Luxury</option>
+                        <option value="formal">Formal</option>
+                        <option value="playful">Playful</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Response Length</div>
+                      <select
+                        value={funnelConfig.response_length}
+                        onChange={(e) => setFunnelConfig({ ...funnelConfig, response_length: e.target.value })}
+                        style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                      >
+                        <option value="concise">Concise</option>
+                        <option value="medium">Medium</option>
+                        <option value="detailed">Detailed</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!funnelConfig.objection_handling}
+                      onChange={(e) => setFunnelConfig({ ...funnelConfig, objection_handling: e.target.checked })}
+                    />
+                    <span style={{ fontWeight: 900 }}>Handle Price Objections</span>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!funnelConfig.show_pricing}
+                      onChange={(e) => setFunnelConfig({ ...funnelConfig, show_pricing: e.target.checked })}
+                    />
+                    <span style={{ fontWeight: 900 }}>Show Pricing</span>
+                  </label>
+
+                  <div>
+                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Pricing Strategy</div>
+                    <select
+                      value={funnelConfig.pricing_strategy}
+                      onChange={(e) => setFunnelConfig({ ...funnelConfig, pricing_strategy: e.target.value })}
+                      style={{ width: "100%", padding: "11px 12px", borderRadius: UI.radius, border: `1px solid ${UI.border}`, background: "#fff" }}
+                    >
+                      <option value="multi-tier">Multi Tier</option>
+                      <option value="anchor">Anchor Pricing</option>
+                      <option value="request-only">Request Only</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: 12.5, color: UI.text2, marginBottom: 6 }}>Default CTA (optional)</div>
+                    <Input
+                      type="text"
+                      value={funnelConfig.default_cta || ""}
+                      onChange={(e) => setFunnelConfig({ ...funnelConfig, default_cta: e.target.value })}
+                      placeholder="Override strategic question..."
+                    />
+                  </div>
+                </div>
+              )}
             </Card>
           )}
         </>
@@ -2267,120 +2465,6 @@ if (tab === "sales-ai") loadFunnelConfig();
           <div style={{ marginTop: 8, fontSize: 12, color: UI.text3 }}>Click to dismiss</div>
         </div>
       )}
-{tab === "sales-ai" && (
-  <div className="space-y-6">
-
-    <div className="card">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Sales AI Configuration</h2>
-        <button
-          onClick={saveFunnelConfig}
-          disabled={funnelSaving}
-          className="btn-primary"
-        >
-          {funnelSaving ? "Saving..." : "Save"}
-        </button>
-      </div>
-
-      {funnelLoading && <div>Loading...</div>}
-
-      {funnelConfig && (
-        <div className="grid gap-4">
-
-          <div className="flex items-center gap-3">
-            <label>Enable Sales Engine</label>
-            <input
-              type="checkbox"
-              checked={!!funnelConfig.enabled}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, enabled: e.target.checked })
-              }
-            />
-          </div>
-
-          <div>
-            <label>Tone</label>
-            <select
-              value={funnelConfig.tone}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, tone: e.target.value })
-              }
-            >
-              <option value="consultative">Consultative</option>
-              <option value="direct">Direct</option>
-              <option value="luxury">Luxury</option>
-              <option value="formal">Formal</option>
-              <option value="playful">Playful</option>
-            </select>
-          </div>
-
-          <div>
-            <label>Response Length</label>
-            <select
-              value={funnelConfig.response_length}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, response_length: e.target.value })
-              }
-            >
-              <option value="concise">Concise</option>
-              <option value="medium">Medium</option>
-              <option value="detailed">Detailed</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <label>Handle Price Objections</label>
-            <input
-              type="checkbox"
-              checked={!!funnelConfig.objection_handling}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, objection_handling: e.target.checked })
-              }
-            />
-          </div>
-
-          <div className="flex items-center gap-3">
-            <label>Show Pricing</label>
-            <input
-              type="checkbox"
-              checked={!!funnelConfig.show_pricing}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, show_pricing: e.target.checked })
-              }
-            />
-          </div>
-
-          <div>
-            <label>Pricing Strategy</label>
-            <select
-              value={funnelConfig.pricing_strategy}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, pricing_strategy: e.target.value })
-              }
-            >
-              <option value="multi-tier">Multi Tier</option>
-              <option value="anchor">Anchor Pricing</option>
-              <option value="request-only">Request Only</option>
-            </select>
-          </div>
-
-          <div>
-            <label>Default CTA (optional)</label>
-            <input
-              type="text"
-              value={funnelConfig.default_cta || ""}
-              onChange={(e) =>
-                setFunnelConfig({ ...funnelConfig, default_cta: e.target.value })
-              }
-              placeholder="Override strategic question..."
-            />
-          </div>
-
-        </div>
-      )}
-    </div>
-  </div>
-)}
     </div>
   );
 }
