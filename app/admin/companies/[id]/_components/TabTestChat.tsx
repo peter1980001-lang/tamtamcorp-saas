@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UI, Button } from "./ui";
 import type { DetailResponse } from "./types";
 import { safeJsonParse } from "./api";
@@ -15,9 +15,10 @@ export default function TabTestChat(props: {
   const { companyId, data, setToast } = props;
 
   const publicKey = String(data.keys?.public_key || "").trim();
-  const [token, setToken] = useState<string | null>(null);
 
+  const [token, setToken] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+
   const [msgs, setMsgs] = useState<Msg[]>([
     { role: "assistant", text: "Test chat ready. Ask something to verify knowledge chunks." },
   ]);
@@ -27,7 +28,6 @@ export default function TabTestChat(props: {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // auto-scroll
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
@@ -35,44 +35,18 @@ export default function TabTestChat(props: {
 
   async function ensureToken() {
     if (token) return token;
+
     const res = await fetch(`/api/admin/companies/${companyId}/widget-token`, { cache: "no-store" });
     const raw = await res.text();
     const json = safeJsonParse(raw);
+
     if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+
     const t = String((json as any)?.token || (json as any)?.widget_token || "").trim();
     if (!t) throw new Error("missing_token_field");
+
     setToken(t);
     return t;
-  }
-
-  async function ensureConversation() {
-    if (conversationId) return conversationId;
-
-    // try your admin start-conversation route first
-    try {
-      const res = await fetch(`/api/admin/companies/${companyId}/start-conversation`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ channel: "test-chat" }),
-      });
-      const raw = await res.text();
-      const json = safeJsonParse(raw);
-      if (res.ok) {
-        const cid = String((json as any)?.conversation_id || (json as any)?.id || "").trim();
-        if (cid) {
-          setConversationId(cid);
-          return cid;
-        }
-      }
-      // fall through
-    } catch {
-      // ignore, fall back to widget route creating conv implicitly
-    }
-
-    // fallback: let widget API create a conversation implicitly
-    const tmp = `temp_${Date.now()}`;
-    setConversationId(tmp);
-    return tmp;
   }
 
   async function send() {
@@ -85,11 +59,8 @@ export default function TabTestChat(props: {
 
     try {
       const t = await ensureToken();
-      const cid = await ensureConversation();
 
-      // This assumes your widget endpoint exists and supports:
-      // Authorization: Bearer <token>
-      // body: { conversation_id, message }
+      // Only one call: widget message
       const res = await fetch(`/api/widget/message`, {
         method: "POST",
         headers: {
@@ -97,9 +68,12 @@ export default function TabTestChat(props: {
           authorization: `Bearer ${t}`,
         },
         body: JSON.stringify({
-          conversation_id: cid.startsWith("temp_") ? null : cid,
+          // keep conversation if server returned one
+          conversation_id: conversationId,
+          // send multiple common field names to avoid schema mismatch
           message: text,
-          // optional hint; if your API ignores, fine
+          text,
+          content: text,
           public_key: publicKey || undefined,
         }),
       });
@@ -108,26 +82,17 @@ export default function TabTestChat(props: {
       const json = safeJsonParse(raw);
 
       if (!res.ok) {
-        setMsgs((m) => [
-          ...m,
-          { role: "assistant", text: `Error: ${json?.error || `HTTP ${res.status}`}` },
-        ]);
+        setMsgs((m) => [...m, { role: "assistant", text: `Error: ${json?.error || `HTTP ${res.status}`}` }]);
         return;
       }
 
-      // Try common response fields:
       const answer =
-        String((json as any)?.answer || (json as any)?.text || (json as any)?.message || "").trim();
+        String((json as any)?.answer || (json as any)?.text || (json as any)?.message || (json as any)?.output_text || "").trim();
 
       const newCid =
         String((json as any)?.conversation_id || (json as any)?.conversation?.id || "").trim();
 
-      if (newCid && newCid !== cid && !cid.startsWith("temp_")) {
-        setConversationId(newCid);
-      }
-      if (cid.startsWith("temp_") && newCid) {
-        setConversationId(newCid);
-      }
+      if (newCid) setConversationId(newCid);
 
       setMsgs((m) => [...m, { role: "assistant", text: answer || "OK" }]);
     } catch (e: any) {
@@ -137,14 +102,12 @@ export default function TabTestChat(props: {
     }
   }
 
-  const subtitle = useMemo(() => {
-    return "This chat uses your company’s knowledge chunks. Admins can test responses here.";
-  }, []);
-
   return (
     <div style={{ background: "#fff", border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow, padding: 16 }}>
       <div style={{ fontWeight: 1100, marginBottom: 6 }}>Test Chat</div>
-      <div style={{ color: UI.text2, fontSize: 13.5, lineHeight: 1.5 }}>{subtitle}</div>
+      <div style={{ color: UI.text2, fontSize: 13.5, lineHeight: 1.5 }}>
+        Admins can test how the bot responds to knowledge chunks here.
+      </div>
 
       <div
         ref={listRef}
@@ -177,9 +140,7 @@ export default function TabTestChat(props: {
             </div>
           </div>
         ))}
-        {busy ? (
-          <div style={{ color: UI.text2, fontSize: 13.5 }}>Thinking…</div>
-        ) : null}
+        {busy ? <div style={{ color: UI.text2, fontSize: 13.5 }}>Thinking…</div> : null}
       </div>
 
       <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
