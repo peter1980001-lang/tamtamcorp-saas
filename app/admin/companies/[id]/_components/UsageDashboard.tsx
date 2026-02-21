@@ -82,7 +82,9 @@ function KpiCard(props: {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
         <div>
           <div style={{ fontSize: 26, fontWeight: 700 }}>{props.value}</div>
-          {props.trend ? <div style={{ marginTop: 4, fontSize: 12.5, color: "#555" }}>vs prev 7d: {props.trend}</div> : null}
+          {props.trend ? (
+            <div style={{ marginTop: 4, fontSize: 12.5, color: "#555" }}>vs prev 7d: {props.trend}</div>
+          ) : null}
         </div>
         {props.spark ? (
           <div style={{ opacity: 0.9, marginTop: 2 }}>
@@ -133,7 +135,9 @@ export default function UsageDashboard(props: { companyId: string; setToast?: (s
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700 }}>Usage & Analytics</div>
-          <div style={{ marginTop: 2, fontSize: 13, color: "#666" }}>Chats, leads and conversion trends (last 30 days).</div>
+          <div style={{ marginTop: 2, fontSize: 13, color: "#666" }}>
+            Chats, leads and conversion trends (last 30 days).
+          </div>
         </div>
         <Button onClick={load} variant="secondary">
           Refresh
@@ -149,7 +153,11 @@ export default function UsageDashboard(props: { companyId: string; setToast?: (s
           <div style={{ fontSize: 12.5, color: "#a00", whiteSpace: "pre-wrap" }}>{err}</div>
         </Card>
       ) : !data ? (
-        <Card title="No data" subtitle="Nothing to show yet." />
+        <Card title="No data" subtitle="Nothing to show yet.">
+          <div style={{ fontSize: 13.5, color: "#666" }}>
+            No analytics available for this company yet.
+          </div>
+        </Card>
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
@@ -181,10 +189,7 @@ export default function UsageDashboard(props: { companyId: string; setToast?: (s
             />
           </div>
 
-          <Card
-            title="Daily breakdown (14d)"
-            subtitle={`Updated: ${new Date(data.generated_at).toLocaleString()}`}
-          >
+          <Card title="Daily breakdown (14d)" subtitle={`Updated: ${new Date(data.generated_at).toLocaleString()}`}>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, minWidth: 720 }}>
                 <thead>
@@ -213,7 +218,7 @@ export default function UsageDashboard(props: { companyId: string; setToast?: (s
               </table>
             </div>
             <div style={{ marginTop: 8, fontSize: 12.5, color: "#666" }}>
-              “Qualified” is derived from <code>qualification_json</code> (qualified/status/stage). We can align it 1:1 to your scoring rules anytime.
+              “Qualified” is derived from <code>qualification_json</code> (qualified/status/stage).
             </div>
           </Card>
         </>
