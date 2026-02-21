@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireOwner();

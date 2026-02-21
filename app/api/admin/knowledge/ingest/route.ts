@@ -1,7 +1,7 @@
 // app/api/admin/knowledge/ingest/route.ts
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import OpenAI from "openai";
 import { importFromWebsite } from "@/lib/knowledgeImport";
 import crypto from "crypto";
@@ -76,7 +76,7 @@ async function embedAndInsertRows(rows: Array<{ company_id: string; title: strin
     metadata: r.metadata ?? {},
   }));
 
-  const { error } = await supabaseServer.from("knowledge_chunks").insert(insertRows);
+  const { error } = await supabase.from("knowledge_chunks").insert(insertRows);
   if (error) throw new Error(`insert_failed:${error.message}`);
 
   return { chunks: rows.length };

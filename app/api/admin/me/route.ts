@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseUserClient } from "@/lib/supabaseUser";
 
 export async function GET() {
+  const supabase = createSupabaseServerClient();
   const supabase = await createSupabaseUserClient();
 
   const {

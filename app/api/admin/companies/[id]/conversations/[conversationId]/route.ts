@@ -2,9 +2,10 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { requireCompanyAccess } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string; conversationId: string }> }) {
+  const supabase = createSupabaseServerClient();
   const { id, conversationId } = await ctx.params;
   const company_id = String(id || "").trim();
   const conversation_id = String(conversationId || "").trim();

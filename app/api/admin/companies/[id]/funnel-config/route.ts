@@ -3,12 +3,13 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { requireCompanyAccess } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 /**
  * GET Funnel Config
  */
 export async function GET(
+  const supabase = createSupabaseServerClient();
   _req: Request,
   context: { params: Promise<{ id: string }> }
 ) {

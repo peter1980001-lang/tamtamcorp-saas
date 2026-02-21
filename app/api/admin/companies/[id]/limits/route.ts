@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
 
 function isPlainObject(v: any) {

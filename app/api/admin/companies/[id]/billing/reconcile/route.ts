@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function POST(_req: NextRequest) {
   const auth = await requireOwner();
@@ -46,6 +46,7 @@ export async function POST(_req: NextRequest) {
 
 // Optional: allow GET for cron ping testing
 export async function GET(req: NextRequest) {
+const supabase = createSupabaseServerClient();
   // small safety: require owner even for GET
   return POST(req);
 }

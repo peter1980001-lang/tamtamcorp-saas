@@ -2,9 +2,10 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function GET(req: Request) {
+  const supabase = createSupabaseServerClient();
   const auth = await requireOwner();
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 

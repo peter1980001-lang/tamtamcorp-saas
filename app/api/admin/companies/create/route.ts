@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { requireOwner } from "@/lib/adminGuard";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 function genKey(prefix: "pk" | "sk") {
   return `${prefix}_${crypto.randomBytes(24).toString("hex")}`;
@@ -65,7 +65,7 @@ export async function POST(req: Request) {
 
   if (sErr) {
     // cleanup: delete the company we just created to avoid half-created tenants
-    await supabaseServer.from("companies").delete().eq("id", company_id);
+    await supabase.from("companies").delete().eq("id", company_id);
     return NextResponse.json({ error: sErr.message }, { status: 500 });
   }
 
@@ -88,8 +88,8 @@ export async function POST(req: Request) {
 
   if (kErr) {
     // cleanup: remove created company + settings if keys fail
-    await supabaseServer.from("company_settings").delete().eq("company_id", company_id);
-    await supabaseServer.from("companies").delete().eq("id", company_id);
+    await supabase.from("company_settings").delete().eq("company_id", company_id);
+    await supabase.from("companies").delete().eq("id", company_id);
     return NextResponse.json({ error: kErr.message }, { status: 500 });
   }
 

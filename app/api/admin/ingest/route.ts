@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { chunkText } from "@/lib/chunkText";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -52,7 +52,7 @@ export async function POST(req: Request) {
     metadata: { chunk_index: i, chunks_total: chunks.length },
   }));
 
-  const { error } = await supabaseServer.from("knowledge_chunks").insert(rows);
+  const { error } = await supabase.from("knowledge_chunks").insert(rows);
   if (error) {
     return NextResponse.json({ error: "db_insert_failed", details: error }, { status: 500 });
   }

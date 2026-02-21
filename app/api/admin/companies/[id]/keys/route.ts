@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
 
 function maskSecret(s: string | null) {
@@ -11,6 +11,7 @@ function maskSecret(s: string | null) {
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const supabase = createSupabaseServerClient();
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ ok: false, error: "missing_company_id" }, { status: 400 });

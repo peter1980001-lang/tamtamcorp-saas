@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { requireCompanyAccess } from "@/lib/adminGuard";
 
 export async function GET(
+  const supabase = createSupabaseServerClient();
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
