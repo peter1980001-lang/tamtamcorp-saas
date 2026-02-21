@@ -15,7 +15,49 @@ import TabTeam from "./_components/TabTeam";
 import TabBilling from "./_components/TabBilling";
 import TabSettings from "./_components/TabSettings";
 
-const OWNER_ONLY_TABS: Tab[] = ["test-chat", "embed", "domains", "keys", "limits"];
+import TabKeys from "./_components/TabKeys";
+import TabLimits from "./_components/TabLimits";
+import TabDomains from "./_components/TabDomains";
+import TabEmbed from "./_components/TabEmbed";
+import TabTestChat from "./_components/TabTestChat";
+
+const BASE_TABS: { key: Tab; label: string }[] = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "branding", label: "Branding" },
+  { key: "knowledge", label: "Knowledge" },
+  { key: "leads", label: "Leads" },
+  { key: "team", label: "Team" },
+  { key: "billing", label: "Billing" },
+  { key: "settings", label: "Settings" },
+];
+
+// Visible for owner + admins (simple: they can test bot vs knowledge)
+const SHARED_TOOL_TABS: { key: Tab; label: string }[] = [
+  { key: "test-chat", label: "Test Chat" },
+];
+
+// Owner-only management tabs
+const OWNER_TABS: { key: Tab; label: string }[] = [
+  { key: "keys", label: "Keys" },
+  { key: "limits", label: "Limits" },
+  { key: "domains", label: "Domains" },
+  { key: "embed", label: "Embed" },
+];
+
+const ALL_TABS: Tab[] = [
+  "dashboard",
+  "branding",
+  "knowledge",
+  "leads",
+  "team",
+  "billing",
+  "settings",
+  "keys",
+  "limits",
+  "domains",
+  "embed",
+  "test-chat",
+];
 
 export default function CompanyDetailPage() {
   const params = useParams<{ id: string }>();
@@ -32,43 +74,25 @@ export default function CompanyDetailPage() {
   const isOwner = myRole === "owner";
 
   const visibleTabs = useMemo(() => {
-    const base: { key: Tab; label: string }[] = [
-      { key: "dashboard", label: "Dashboard" },
-      { key: "branding", label: "Branding" },
-      { key: "knowledge", label: "Knowledge" },
-      { key: "leads", label: "Leads" },
-      { key: "team", label: "Team" },
-      { key: "billing", label: "Billing" },
-      { key: "settings", label: "Settings" },
-    ];
+    // Insert test-chat next to Knowledge (so admins can always find it)
+    const idx = BASE_TABS.findIndex((t) => t.key === "leads");
+    const basePlusTest = [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...BASE_TABS.slice(idx)];
 
-    if (!isOwner) return base;
+    if (!isOwner) return basePlusTest;
 
-    const ownerExtras: { key: Tab; label: string }[] = [
-      { key: "keys", label: "Keys" },
-      { key: "limits", label: "Limits" },
-      { key: "domains", label: "Domains" },
-      { key: "embed", label: "Embed" },
-      { key: "test-chat", label: "Test Chat" },
-    ];
-
-    // place owner tools between Knowledge and Leads (nice spot)
-    const idx = base.findIndex((t) => t.key === "leads");
-    return [...base.slice(0, idx), ...ownerExtras, ...base.slice(idx)];
+    // Owner management tools placed before Leads (after test-chat)
+    return [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...OWNER_TABS, ...BASE_TABS.slice(idx)];
   }, [isOwner]);
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
 
-  // URL -> tab (no “dashboard fallback”; always first visible tab)
   useEffect(() => {
     if (!id) return;
-
-    const raw = String(searchParams?.get("tab") || "").toLowerCase();
-    const candidate = (raw || "dashboard") as Tab;
+    const raw = String(searchParams?.get("tab") || "dashboard").toLowerCase();
+    const candidate: Tab =
+      (ALL_TABS as unknown as string[]).includes(raw) ? (raw as Tab) : "dashboard";
 
     const firstAllowed = (visibleTabs[0]?.key || "dashboard") as Tab;
-
-    // If admin tries to deep-link an owner tab, it's simply not allowed.
     setTab(allowedTabsSet.has(candidate) ? candidate : firstAllowed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, searchParams, allowedTabsSet, visibleTabs]);
@@ -81,10 +105,8 @@ export default function CompanyDetailPage() {
 
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-
     if (safeNext === "dashboard") url.searchParams.delete("tab");
     else url.searchParams.set("tab", safeNext);
-
     window.history.replaceState({}, "", url.toString());
   }
 
@@ -135,6 +157,10 @@ export default function CompanyDetailPage() {
     return <Badge text="—" tone="neutral" />;
   }, [data?.company?.status]);
 
+  function goBack() {
+    window.location.href = "/admin/companies";
+  }
+
   async function logout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
@@ -142,30 +168,6 @@ export default function CompanyDetailPage() {
       window.location.href = "/login";
     }
   }
-
-  function goBack() {
-    window.location.href = "/admin/companies";
-  }
-
-  const ownerToolsCard = (title: string, desc: string) => (
-    <div
-      style={{
-        background: "#fff",
-        border: `1px solid ${UI.border}`,
-        borderRadius: UI.radiusLg,
-        boxShadow: UI.shadow,
-        padding: 16,
-      }}
-    >
-      <div style={{ fontWeight: 1100, marginBottom: 6 }}>{title}</div>
-      <div style={{ color: UI.text2, fontSize: 13.5, lineHeight: 1.5 }}>{desc}</div>
-      <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Button onClick={() => setToast("Owner tools tab is wired. Plug in the component when ready.")} variant="secondary">
-          Ok
-        </Button>
-      </div>
-    </div>
-  );
 
   return (
     <div style={{ background: UI.bg, minHeight: "100vh", padding: "18px 14px 60px" }}>
@@ -194,17 +196,7 @@ export default function CompanyDetailPage() {
 
             <div style={{ minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <div
-                  style={{
-                    fontWeight: 1100,
-                    fontSize: 18,
-                    color: UI.text,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: 520,
-                  }}
-                >
+                <div style={{ fontWeight: 1100, fontSize: 18, color: UI.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 }}>
                   {companyName}
                 </div>
                 {statusBadge}
@@ -216,7 +208,6 @@ export default function CompanyDetailPage() {
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {/* Back only for owner */}
             {isOwner ? (
               <Button onClick={goBack} variant="secondary">
                 Back
@@ -256,12 +247,14 @@ export default function CompanyDetailPage() {
             {tab === "billing" && <TabBilling companyId={id!} setToast={setToast} />}
             {tab === "settings" && <TabSettings companyId={id!} data={data} isOwner={isOwner} setData={setData} setToast={setToast} />}
 
-            {/* Owner-only tabs - never rendered for admins */}
-            {isOwner && tab === "keys" && ownerToolsCard("Keys", "Owner-only: manage API keys & secrets for this company.")}
-            {isOwner && tab === "limits" && ownerToolsCard("Limits", "Owner-only: manage plan limits / entitlements for this company.")}
-            {isOwner && tab === "domains" && ownerToolsCard("Domains", "Owner-only: manage allowed domains / widget origin allowlist.")}
-            {isOwner && tab === "embed" && ownerToolsCard("Embed", "Owner-only: embed code + widget configuration preview.")}
-            {isOwner && tab === "test-chat" && ownerToolsCard("Test Chat", "Owner-only: internal chat sandbox to test prompts & knowledge retrieval.")}
+            {/* Shared test chat for owner + admins */}
+            {tab === "test-chat" && <TabTestChat companyId={id!} data={data} setToast={setToast} />}
+
+            {/* Owner-only management tabs */}
+            {isOwner && tab === "keys" && <TabKeys companyId={id!} data={data} reload={load} setToast={setToast} />}
+            {isOwner && tab === "limits" && <TabLimits companyId={id!} data={data} reload={load} setToast={setToast} />}
+            {isOwner && tab === "domains" && <TabDomains companyId={id!} data={data} reload={load} setToast={setToast} />}
+            {isOwner && tab === "embed" && <TabEmbed companyId={id!} data={data} setToast={setToast} />}
           </>
         )}
 

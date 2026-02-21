@@ -90,9 +90,8 @@ export type Tab =
   | "team"
   | "billing"
   | "settings"
-  // owner-only extras
-  | "test-chat"
-  | "embed"
-  | "domains"
   | "keys"
-  | "limits";
+  | "limits"
+  | "domains"
+  | "embed"
+  | "test-chat";
