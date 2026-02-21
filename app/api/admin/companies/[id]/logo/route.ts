@@ -1,8 +1,10 @@
+// app/api/admin/companies/[id]/logo/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
-import { requireAdmin(companyId) } from "@/lib/adminGuard"; // falls ihr requireOwner nutzt, sonst anpassen
+import { requireOwner } from "@/lib/adminGuard"; // ✅ so lassen, falls ihr requireOwner habt
+// ODER: import { requireAdmin } from "@/lib/adminGuard";
 
 function sanitizeExt(filename: string) {
   const m = filename.toLowerCase().match(/\.(png|jpg|jpeg|webp|svg)$/);
@@ -11,11 +13,15 @@ function sanitizeExt(filename: string) {
 
 export async function POST(req: Request, ctx: { params: { id: string } }) {
   try {
-    // ✅ Sicherstellen, dass nur Admin/Owner uploaden darf
-    await requireOwner();
-
     const companyId = ctx.params.id;
     if (!companyId) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+
+    // ✅ Auth guard (WICHTIG: hier aufrufen, nicht im import!)
+    // Variante A: Owner-only
+    await requireOwner();
+
+    // Variante B: company-admin check (wenn ihr so eine Funktion habt)
+    // await requireAdmin(companyId);
 
     const form = await req.formData();
     const file = form.get("file");
@@ -31,7 +37,6 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
     const ext = sanitizeExt(file.name || "");
     const path = `${companyId}/logo.${ext}`;
 
-    // Upload to Supabase Storage (public bucket)
     const { error: upErr } = await supabaseServer.storage
       .from("company-assets")
       .upload(path, file, {
@@ -47,7 +52,6 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
     const { data: pub } = supabaseServer.storage.from("company-assets").getPublicUrl(path);
     const logoUrl = pub?.publicUrl || "";
 
-    // Update branding_json.logo_url
     const { data: existing, error: sErr } = await supabaseServer
       .from("company_settings")
       .select("branding_json")
@@ -68,6 +72,6 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
 
     return NextResponse.json({ ok: true, logo_url: logoUrl });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "unknown" }, { status: 401 });
+    return NextResponse.json({ error: e?.message || "unauthorized" }, { status: 401 });
   }
 }
