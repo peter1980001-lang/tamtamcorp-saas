@@ -14,13 +14,11 @@ export default function TabTestChat(props: {
 }) {
   const { companyId, data, setToast } = props;
 
-  const publicKey = String(data.keys?.public_key || "").trim();
-
   const [token, setToken] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", text: "Test chat ready. Ask something to verify knowledge chunks." },
+    { role: "assistant", text: "Test chat ready. Click “New session” and ask something to verify knowledge chunks." },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -49,6 +47,60 @@ export default function TabTestChat(props: {
     return t;
   }
 
+  async function createConversation(): Promise<string> {
+    // Try both paths to avoid “typo folder” issues
+    const endpoints = [
+      `/api/admin/companies/${companyId}/start-conversatio`,
+      `/api/admin/companies/${companyId}/start-conversation`,
+    ];
+
+    let lastErr = "start_conversation_failed";
+
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ channel: "test-chat" }),
+        });
+
+        const raw = await res.text();
+        const json = safeJsonParse(raw);
+
+        if (!res.ok) {
+          lastErr = json?.error || `HTTP ${res.status}`;
+          continue;
+        }
+
+        const cid = String((json as any)?.conversation_id || (json as any)?.id || "").trim();
+        if (cid) return cid;
+
+        lastErr = "missing_conversation_id_in_response";
+      } catch (e: any) {
+        lastErr = e?.message || "network_error";
+      }
+    }
+
+    throw new Error(lastErr);
+  }
+
+  async function newSession() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await ensureToken();
+      const cid = await createConversation();
+      setConversationId(cid);
+      setMsgs([{ role: "assistant", text: "New session created. Ask something now." }]);
+      setToast("New test session created");
+    } catch (e: any) {
+      setToast(`New session failed: ${e?.message || "failed"}`);
+      setMsgs((m) => [...m, { role: "assistant", text: `Error creating session: ${e?.message || "failed"}` }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
@@ -60,7 +112,13 @@ export default function TabTestChat(props: {
     try {
       const t = await ensureToken();
 
-      // Only one call: widget message
+      // Ensure conversation exists (required by /api/widget/message)
+      let cid = conversationId;
+      if (!cid) {
+        cid = await createConversation();
+        setConversationId(cid);
+      }
+
       const res = await fetch(`/api/widget/message`, {
         method: "POST",
         headers: {
@@ -68,13 +126,8 @@ export default function TabTestChat(props: {
           authorization: `Bearer ${t}`,
         },
         body: JSON.stringify({
-          // keep conversation if server returned one
-          conversation_id: conversationId,
-          // send multiple common field names to avoid schema mismatch
-          message: text,
-          text,
-          content: text,
-          public_key: publicKey || undefined,
+          conversation_id: cid,
+          message: text, // ✅ your route expects "message"
         }),
       });
 
@@ -86,15 +139,8 @@ export default function TabTestChat(props: {
         return;
       }
 
-      const answer =
-        String((json as any)?.answer || (json as any)?.text || (json as any)?.message || (json as any)?.output_text || "").trim();
-
-      const newCid =
-        String((json as any)?.conversation_id || (json as any)?.conversation?.id || "").trim();
-
-      if (newCid) setConversationId(newCid);
-
-      setMsgs((m) => [...m, { role: "assistant", text: answer || "OK" }]);
+      const reply = String((json as any)?.reply || "").trim();
+      setMsgs((m) => [...m, { role: "assistant", text: reply || "OK" }]);
     } catch (e: any) {
       setMsgs((m) => [...m, { role: "assistant", text: `Error: ${e?.message || "failed"}` }]);
     } finally {
@@ -106,7 +152,16 @@ export default function TabTestChat(props: {
     <div style={{ background: "#fff", border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow, padding: 16 }}>
       <div style={{ fontWeight: 1100, marginBottom: 6 }}>Test Chat</div>
       <div style={{ color: UI.text2, fontSize: 13.5, lineHeight: 1.5 }}>
-        Admins can test how the bot responds to knowledge chunks here.
+        This chat uses the same widget pipeline (knowledge retrieval + funnel rules). Admins can test responses here.
+      </div>
+
+      <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Button onClick={() => void newSession()} variant="secondary" disabled={busy}>
+          New session
+        </Button>
+        <div style={{ fontSize: 12.5, color: UI.text2, display: "flex", alignItems: "center" }}>
+          Conversation: {conversationId ? conversationId : "—"}
+        </div>
       </div>
 
       <div
@@ -168,7 +223,7 @@ export default function TabTestChat(props: {
         </Button>
         <Button
           onClick={() => {
-            setMsgs([{ role: "assistant", text: "New test session. Ask something to verify knowledge chunks." }]);
+            setMsgs([{ role: "assistant", text: "Reset. Click “New session” to create a new conversation." }]);
             setConversationId(null);
             setToast("Reset chat");
           }}
