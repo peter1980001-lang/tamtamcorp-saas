@@ -1,26 +1,29 @@
 // app/api/admin/companies/[id]/logo/route.ts
 export const runtime = "nodejs";
 
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
-import { requireOwner } from "@/lib/adminGuard"; // ✅ so lassen, falls ihr requireOwner habt
-// ODER: import { requireAdmin } from "@/lib/adminGuard";
+import { requireOwner } from "@/lib/adminGuard"; // oder requireAdmin (siehe unten)
 
 function sanitizeExt(filename: string) {
   const m = filename.toLowerCase().match(/\.(png|jpg|jpeg|webp|svg)$/);
   return m ? m[1] : "png";
 }
 
-export async function POST(req: Request, ctx: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
   try {
-    const companyId = ctx.params.id;
-    if (!companyId) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+    const { id: companyId } = await context.params;
 
-    // ✅ Auth guard (WICHTIG: hier aufrufen, nicht im import!)
-    // Variante A: Owner-only
+    if (!companyId) {
+      return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+    }
+
+    // ✅ Auth guard (hier aufrufen)
     await requireOwner();
-
-    // Variante B: company-admin check (wenn ihr so eine Funktion habt)
+    // falls ihr company-admin check habt:
     // await requireAdmin(companyId);
 
     const form = await req.formData();
@@ -49,7 +52,10 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
       return NextResponse.json({ error: upErr.message }, { status: 500 });
     }
 
-    const { data: pub } = supabaseServer.storage.from("company-assets").getPublicUrl(path);
+    const { data: pub } = supabaseServer.storage
+      .from("company-assets")
+      .getPublicUrl(path);
+
     const logoUrl = pub?.publicUrl || "";
 
     const { data: existing, error: sErr } = await supabaseServer
@@ -58,7 +64,9 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
       .eq("company_id", companyId)
       .maybeSingle();
 
-    if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 });
+    if (sErr) {
+      return NextResponse.json({ error: sErr.message }, { status: 500 });
+    }
 
     const branding = (existing?.branding_json || {}) as any;
     const nextBranding = { ...branding, logo_url: logoUrl };
@@ -68,10 +76,15 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
       .update({ branding_json: nextBranding })
       .eq("company_id", companyId);
 
-    if (uErr) return NextResponse.json({ error: uErr.message }, { status: 500 });
+    if (uErr) {
+      return NextResponse.json({ error: uErr.message }, { status: 500 });
+    }
 
     return NextResponse.json({ ok: true, logo_url: logoUrl });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { error: e?.message || "unauthorized" },
+      { status: 401 }
+    );
   }
 }
