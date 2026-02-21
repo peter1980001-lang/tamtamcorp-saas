@@ -82,4 +82,17 @@ export type LeadRow = {
 export type KbPage = { url: string; title: string; text: string; captured_at: string };
 export type BrandHints = { primary: string | null; accent: string | null; logo_url: string | null };
 
-export type Tab = "dashboard" | "branding" | "knowledge" | "leads" | "team" | "billing" | "settings";
+export type Tab =
+  | "dashboard"
+  | "branding"
+  | "knowledge"
+  | "leads"
+  | "team"
+  | "billing"
+  | "settings"
+  // owner-only extras
+  | "test-chat"
+  | "embed"
+  | "domains"
+  | "keys"
+  | "limits";
