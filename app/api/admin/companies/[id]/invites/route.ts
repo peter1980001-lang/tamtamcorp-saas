@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
 import crypto from "crypto";
 
@@ -17,7 +17,6 @@ function toRole(input: any) {
 }
 
 export async function GET(
-  const supabase = createSupabaseServerClient();
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {

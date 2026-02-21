@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { requireOwner } from "@/lib/adminGuard";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 // bump this whenever you redeploy to verify you’re hitting the new code:
 const VERSION = "reconcile_v3_debug_2026-02-15";
@@ -87,7 +87,6 @@ async function authorize(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const supabase = createSupabaseServerClient();
   const a = await authorize(req);
 
   if (!a.ok) {

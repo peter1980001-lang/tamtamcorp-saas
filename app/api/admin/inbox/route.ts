@@ -1,11 +1,10 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireOwnerOrAdmin } from "@/lib/rbac";
 
 export async function GET() {
-  const supabase = createSupabaseServerClient();
   const rbac = await requireOwnerOrAdmin();
   if (!rbac.ok) return NextResponse.json({ error: rbac.error }, { status: rbac.status });
 

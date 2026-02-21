@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  const supabase = createSupabaseServerClient();
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
@@ -34,7 +33,7 @@ export async function GET(
     return NextResponse.json({ error: "company_not_found" }, { status: 404 });
   }
 
-  const { data, error } = await supabase.rpc("get_company_usage", {
+  const { data, error } = await supabaseServer.rpc("get_company_usage", {
     p_company_id: companyId,
   });
 

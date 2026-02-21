@@ -2,7 +2,7 @@
 export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireOwner } from "@/lib/adminGuard"; // oder requireAdmin (siehe unten)
 
 function sanitizeExt(filename: string) {
@@ -40,7 +40,7 @@ export async function POST(
     const ext = sanitizeExt(file.name || "");
     const path = `${companyId}/logo.${ext}`;
 
-    const { error: upErr } = await supabase.storage
+    const { error: upErr } = await supabaseServer.storage
       .from("company-assets")
       .upload(path, file, {
         upsert: true,
@@ -52,7 +52,7 @@ export async function POST(
       return NextResponse.json({ error: upErr.message }, { status: 500 });
     }
 
-    const { data: pub } = supabase.storage
+    const { data: pub } = supabaseServer.storage
       .from("company-assets")
       .getPublicUrl(path);
 

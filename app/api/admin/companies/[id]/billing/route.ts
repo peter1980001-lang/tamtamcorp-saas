@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { requireCompanyAccess } from "@/lib/adminGuard";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 function isPayingStatus(status: string) {
   return status === "active" || status === "trialing";
@@ -84,7 +84,6 @@ async function validatePlanKey(planKey: string) {
  * GET: billing + usage (for owner OR company-admin of this company)
  */
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  const supabase = createSupabaseServerClient();
   const { id } = await context.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });

@@ -1,6 +1,6 @@
 // app/api/admin/knowledge/chunks/bulk-delete/route.ts
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireOwnerOrCompanyAdmin } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { requireOwner } from "@/lib/adminGuard";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireOwner();

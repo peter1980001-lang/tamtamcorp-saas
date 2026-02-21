@@ -1,12 +1,11 @@
 // app/api/admin/knowledge/chunks/route.ts
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireOwnerOrCompanyAdmin } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  const supabase = createSupabaseServerClient();
   const url = new URL(req.url);
   const company_id = String(url.searchParams.get("company_id") || "").trim();
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();

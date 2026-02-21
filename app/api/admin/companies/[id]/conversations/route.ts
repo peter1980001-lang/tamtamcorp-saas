@@ -2,10 +2,9 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { requireCompanyAccess } from "@/lib/adminGuard";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const supabase = createSupabaseServerClient();
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });

@@ -1,6 +1,6 @@
 // app/api/admin/knowledge/chunks/delete/route.ts
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 import { requireOwnerOrCompanyAdmin } from "@/lib/adminGuard";
 
 export const runtime = "nodejs";
@@ -27,7 +27,7 @@ export async function DELETE(req: Request) {
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   if (String((existing as any).company_id) !== company_id) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const { error } = await supabase.from("knowledge_chunks").delete().eq("id", id);
+  const { error } = await supabaseServer.from("knowledge_chunks").delete().eq("id", id);
   if (error) return NextResponse.json({ error: "delete_failed", details: error.message }, { status: 500 });
 
   return NextResponse.json({ ok: true });

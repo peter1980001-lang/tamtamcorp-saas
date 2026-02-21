@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { requireCompanyAccess } from "@/lib/adminGuard";
-import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 function addDaysIso(days: number) {
   const d = new Date();
