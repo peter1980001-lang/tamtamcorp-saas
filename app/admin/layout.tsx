@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import React from "react";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import IdleLogoutGate from "@/components/IdleLogoutGate";
 
 async function getSupabaseAuthServer() {
   const cookieStore = await cookies(); // ✅ FIX: await
@@ -35,5 +36,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // Aktuell machen wir NICHTS, damit es sicher deployt und keine Redirect-Loops entstehen.
   await getSupabaseAuthServer();
 
-  return <>{children}</>;
+  return (
+    <>
+      {/* Client-side idle logout (nur /admin) */}
+      <IdleLogoutGate redirectTo="/login" />
+      {children}
+    </>
+  );
 }
