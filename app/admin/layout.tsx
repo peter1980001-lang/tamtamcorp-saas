@@ -39,7 +39,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <>
       {/* Client-side idle logout (nur /admin) */}
-      <IdleLogoutGate warningMs={15_000} logoutMs={20_000} redirectTo="/login" />
+      <IdleLogoutGate redirectTo="/login" />
       {children}
     </>
   );
