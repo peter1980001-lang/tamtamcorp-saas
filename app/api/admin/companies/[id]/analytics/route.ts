@@ -2,20 +2,23 @@
 export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { supabaseServer } from "@/lib/supabaseServer";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 
 function toISO(d: Date) {
   return d.toISOString();
 }
+
 function startOfDayUTC(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
 }
+
 function addDaysUTC(d: Date, days: number) {
   const x = new Date(d);
   x.setUTCDate(x.getUTCDate() + days);
   return x;
 }
+
 function daysRangeUTC(daysBack: number) {
   const today = startOfDayUTC(new Date());
   const start = addDaysUTC(today, -(daysBack - 1));
@@ -26,6 +29,7 @@ function daysRangeUTC(daysBack: number) {
   }
   return out;
 }
+
 function pctChange(current: number, previous: number) {
   if (previous === 0) return current === 0 ? 0 : 100;
   return ((current - previous) / previous) * 100;
@@ -38,63 +42,27 @@ function isQualified(q: any) {
   return s === "qualified" || s === "hot" || s === "won";
 }
 
-async function getSupabaseAuthServer() {
-  const cookieStore = await cookies();
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !anon) throw new Error("missing_supabase_env_for_auth");
-
-  return createServerClient(url, anon, {
-    cookies: {
-      get(name) {
-        return cookieStore.get(name)?.value;
-      },
-      set(name, value, options) {
-        cookieStore.set({ name, value, ...options });
-      },
-      remove(name, options) {
-        cookieStore.set({ name, value: "", ...options, maxAge: 0 });
-      },
-    },
-  });
-}
-
-async function requireCompanyAdmin(supabase: ReturnType<typeof createServerClient>, companyId: string) {
-  const { data: auth, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !auth?.user) return { ok: false as const, status: 401, reason: "unauthorized" as const };
-
-  const { data: row, error } = await supabase
-    .from("company_admins")
-    .select("role")
-    .eq("company_id", companyId)
-    .eq("user_id", auth.user.id)
-    .maybeSingle();
-
-  if (error) return { ok: false as const, status: 500, reason: "company_admins_query_failed" as const };
-  if (!row) return { ok: false as const, status: 403, reason: "forbidden" as const };
-
-  return { ok: true as const, role: row.role as string };
-}
-
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: companyId } = await params;
 
-  const supabase = await getSupabaseAuthServer();
-
-  const gate = await requireCompanyAdmin(supabase, companyId);
-  if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
+  // ✅ Auth: owner OR mapped company_admin
+  const gate = await requireCompanyAccess(companyId);
+  if (!gate.ok) {
+    return NextResponse.json({ error: gate.error }, { status: gate.status });
+  }
 
   const today0 = startOfDayUTC(new Date());
   const since7 = addDaysUTC(today0, -6);
   const since14 = addDaysUTC(today0, -13);
   const since30 = addDaysUTC(today0, -29);
 
-  const { data: conv30, error: convErr } = await supabase
+  // -----------------------
+  // Conversations (30d)
+  // -----------------------
+  const { data: conv30, error: convErr } = await supabaseServer
     .from("conversations")
     .select("id, created_at")
     .eq("company_id", companyId)
@@ -102,10 +70,16 @@ export async function GET(
     .order("created_at", { ascending: true });
 
   if (convErr) {
-    return NextResponse.json({ error: "conversations_fetch_failed", details: convErr.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "conversations_fetch_failed", details: convErr.message },
+      { status: 500 }
+    );
   }
 
-  const { data: leads30, error: leadsErr } = await supabase
+  // -----------------------
+  // Leads (30d)
+  // -----------------------
+  const { data: leads30, error: leadsErr } = await supabaseServer
     .from("company_leads")
     .select("id, created_at, qualification_json")
     .eq("company_id", companyId)
@@ -113,20 +87,30 @@ export async function GET(
     .order("created_at", { ascending: true });
 
   if (leadsErr) {
-    return NextResponse.json({ error: "leads_fetch_failed", details: leadsErr.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "leads_fetch_failed", details: leadsErr.message },
+      { status: 500 }
+    );
   }
 
-  const conv7 = (conv30 || []).filter((c) => new Date(c.created_at) >= since7).length;
-  const conv14 = (conv30 || []).filter((c) => new Date(c.created_at) >= since14).length;
-  const conv30Count = (conv30 || []).length;
+  const conv30Arr = conv30 || [];
+  const leads30Arr = leads30 || [];
 
-  const leads7 = (leads30 || []).filter((l) => new Date(l.created_at) >= since7).length;
-  const leads14 = (leads30 || []).filter((l) => new Date(l.created_at) >= since14).length;
-  const leads30Count = (leads30 || []).length;
+  const conv7 = conv30Arr.filter((c) => new Date(c.created_at) >= since7).length;
+  const conv14 = conv30Arr.filter((c) => new Date(c.created_at) >= since14).length;
+  const conv30Count = conv30Arr.length;
 
-  const qualified30 = (leads30 || []).filter((l) => isQualified(l.qualification_json)).length;
-  const qualified7 = (leads30 || []).filter((l) => new Date(l.created_at) >= since7 && isQualified(l.qualification_json)).length;
-  const qualified14 = (leads30 || []).filter((l) => new Date(l.created_at) >= since14 && isQualified(l.qualification_json)).length;
+  const leads7 = leads30Arr.filter((l) => new Date(l.created_at) >= since7).length;
+  const leads14 = leads30Arr.filter((l) => new Date(l.created_at) >= since14).length;
+  const leads30Count = leads30Arr.length;
+
+  const qualified30 = leads30Arr.filter((l) => isQualified((l as any).qualification_json)).length;
+  const qualified7 = leads30Arr.filter(
+    (l) => new Date(l.created_at) >= since7 && isQualified((l as any).qualification_json)
+  ).length;
+  const qualified14 = leads30Arr.filter(
+    (l) => new Date(l.created_at) >= since14 && isQualified((l as any).qualification_json)
+  ).length;
 
   const leadPerChat30 = conv30Count > 0 ? (leads30Count / conv30Count) * 100 : 0;
   const qualPerLead30 = leads30Count > 0 ? (qualified30 / leads30Count) * 100 : 0;
@@ -134,34 +118,38 @@ export async function GET(
   const prev7Start = addDaysUTC(since7, -7);
   const prev7End = addDaysUTC(since7, -1);
 
-  const convPrev7 = (conv30 || []).filter((c) => {
+  const convPrev7 = conv30Arr.filter((c) => {
     const t = new Date(c.created_at);
     return t >= prev7Start && t <= prev7End;
   }).length;
 
-  const leadsPrev7 = (leads30 || []).filter((l) => {
+  const leadsPrev7 = leads30Arr.filter((l) => {
     const t = new Date(l.created_at);
     return t >= prev7Start && t <= prev7End;
   }).length;
 
-  const qualifiedPrev7 = (leads30 || []).filter((l) => {
+  const qualifiedPrev7 = leads30Arr.filter((l) => {
     const t = new Date(l.created_at);
-    return t >= prev7Start && t <= prev7End && isQualified(l.qualification_json);
+    return t >= prev7Start && t <= prev7End && isQualified((l as any).qualification_json);
   }).length;
 
+  // -----------------------
+  // 14-day series
+  // -----------------------
   const days = daysRangeUTC(14);
   const map = new Map<string, { chats: number; leads: number; qualified: number }>();
   for (const d of days) map.set(d, { chats: 0, leads: 0, qualified: 0 });
 
-  for (const c of conv30 || []) {
+  for (const c of conv30Arr) {
     const day = new Date(c.created_at).toISOString().slice(0, 10);
     if (map.has(day)) map.get(day)!.chats += 1;
   }
-  for (const l of leads30 || []) {
+
+  for (const l of leads30Arr) {
     const day = new Date(l.created_at).toISOString().slice(0, 10);
     if (map.has(day)) {
       map.get(day)!.leads += 1;
-      if (isQualified(l.qualification_json)) map.get(day)!.qualified += 1;
+      if (isQualified((l as any).qualification_json)) map.get(day)!.qualified += 1;
     }
   }
 
