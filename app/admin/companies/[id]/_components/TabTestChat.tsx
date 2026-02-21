@@ -12,7 +12,7 @@ export default function TabTestChat(props: {
   data: DetailResponse;
   setToast: (s: string) => void;
 }) {
-  const { companyId, data, setToast } = props;
+  const { companyId, setToast } = props;
 
   const [token, setToken] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -47,41 +47,24 @@ export default function TabTestChat(props: {
     return t;
   }
 
-  async function createConversation(): Promise<string> {
-    // Try both paths to avoid “typo folder” issues
-    const endpoints = [
-      `/api/admin/companies/${companyId}/start-conversatio`,
-      `/api/admin/companies/${companyId}/start-conversation`,
-    ];
+  async function ensureConversation() {
+    if (conversationId) return conversationId;
 
-    let lastErr = "start_conversation_failed";
+    const res = await fetch(`/api/admin/companies/${companyId}/start-conversation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
 
-    for (const url of endpoints) {
-      try {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ channel: "test-chat" }),
-        });
+    const raw = await res.text();
+    const json = safeJsonParse(raw);
 
-        const raw = await res.text();
-        const json = safeJsonParse(raw);
+    if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
 
-        if (!res.ok) {
-          lastErr = json?.error || `HTTP ${res.status}`;
-          continue;
-        }
+    const cid = String((json as any)?.conversation?.id || "").trim();
+    if (!cid) throw new Error("missing_conversation_id");
 
-        const cid = String((json as any)?.conversation_id || (json as any)?.id || "").trim();
-        if (cid) return cid;
-
-        lastErr = "missing_conversation_id_in_response";
-      } catch (e: any) {
-        lastErr = e?.message || "network_error";
-      }
-    }
-
-    throw new Error(lastErr);
+    setConversationId(cid);
+    return cid;
   }
 
   async function newSession() {
@@ -89,10 +72,9 @@ export default function TabTestChat(props: {
     setBusy(true);
     try {
       await ensureToken();
-      const cid = await createConversation();
-      setConversationId(cid);
+      const cid = await ensureConversation();
       setMsgs([{ role: "assistant", text: "New session created. Ask something now." }]);
-      setToast("New test session created");
+      setToast(`New session: ${cid}`);
     } catch (e: any) {
       setToast(`New session failed: ${e?.message || "failed"}`);
       setMsgs((m) => [...m, { role: "assistant", text: `Error creating session: ${e?.message || "failed"}` }]);
@@ -111,13 +93,7 @@ export default function TabTestChat(props: {
 
     try {
       const t = await ensureToken();
-
-      // Ensure conversation exists (required by /api/widget/message)
-      let cid = conversationId;
-      if (!cid) {
-        cid = await createConversation();
-        setConversationId(cid);
-      }
+      const cid = await ensureConversation();
 
       const res = await fetch(`/api/widget/message`, {
         method: "POST",
@@ -127,7 +103,7 @@ export default function TabTestChat(props: {
         },
         body: JSON.stringify({
           conversation_id: cid,
-          message: text, // ✅ your route expects "message"
+          message: text,
         }),
       });
 
@@ -152,7 +128,7 @@ export default function TabTestChat(props: {
     <div style={{ background: "#fff", border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow, padding: 16 }}>
       <div style={{ fontWeight: 1100, marginBottom: 6 }}>Test Chat</div>
       <div style={{ color: UI.text2, fontSize: 13.5, lineHeight: 1.5 }}>
-        This chat uses the same widget pipeline (knowledge retrieval + funnel rules). Admins can test responses here.
+        Uses the real widget pipeline (funnel config + knowledge retrieval). Admins can test responses here.
       </div>
 
       <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -160,7 +136,7 @@ export default function TabTestChat(props: {
           New session
         </Button>
         <div style={{ fontSize: 12.5, color: UI.text2, display: "flex", alignItems: "center" }}>
-          Conversation: {conversationId ? conversationId : "—"}
+          Conversation: {conversationId || "—"}
         </div>
       </div>
 

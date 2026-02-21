@@ -1,20 +1,22 @@
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
-import { requireOwner } from "@/lib/adminGuard";
+import { requireCompanyAccess } from "@/lib/adminGuard";
 import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireOwner();
-  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
-
   const { id } = await ctx.params;
   const company_id = String(id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+
+  const auth = await requireCompanyAccess(company_id);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   const { data, error } = await supabaseServer
     .from("conversations")
     .insert({
       company_id,
-      session_id: crypto.randomUUID(), // ✅ required
+      session_id: crypto.randomUUID(), // required
     })
     .select("id, company_id, session_id, created_at")
     .single();
