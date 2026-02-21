@@ -2,7 +2,8 @@
 export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
 function toISO(d: Date) {
   return d.toISOString();
@@ -30,9 +31,37 @@ function pctChange(current: number, previous: number) {
   return ((current - previous) / previous) * 100;
 }
 
-async function requireCompanyAdmin(companyId: string) {
-  const supabase = supabaseServer;
+function isQualified(q: any) {
+  if (!q) return false;
+  if (q.qualified === true) return true;
+  const s = String(q.status || q.stage || "").toLowerCase();
+  return s === "qualified" || s === "hot" || s === "won";
+}
 
+async function getSupabaseAuthServer() {
+  const cookieStore = await cookies();
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anon) throw new Error("missing_supabase_env_for_auth");
+
+  return createServerClient(url, anon, {
+    cookies: {
+      get(name) {
+        return cookieStore.get(name)?.value;
+      },
+      set(name, value, options) {
+        cookieStore.set({ name, value, ...options });
+      },
+      remove(name, options) {
+        cookieStore.set({ name, value: "", ...options, maxAge: 0 });
+      },
+    },
+  });
+}
+
+async function requireCompanyAdmin(supabase: ReturnType<typeof createServerClient>, companyId: string) {
   const { data: auth, error: authErr } = await supabase.auth.getUser();
   if (authErr || !auth?.user) return { ok: false as const, status: 401, reason: "unauthorized" as const };
 
@@ -49,23 +78,16 @@ async function requireCompanyAdmin(companyId: string) {
   return { ok: true as const, role: row.role as string };
 }
 
-function isQualified(q: any) {
-  if (!q) return false;
-  if (q.qualified === true) return true;
-  const s = String(q.status || q.stage || "").toLowerCase();
-  return s === "qualified" || s === "hot" || s === "won";
-}
-
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> } // ✅ params is async in your Next version
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: companyId } = await params; // ✅ await params
+  const { id: companyId } = await params;
 
-  const gate = await requireCompanyAdmin(companyId);
+  const supabase = await getSupabaseAuthServer();
+
+  const gate = await requireCompanyAdmin(supabase, companyId);
   if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
-
-  const supabase = supabaseServer;
 
   const today0 = startOfDayUTC(new Date());
   const since7 = addDaysUTC(today0, -6);
