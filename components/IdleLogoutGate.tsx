@@ -22,7 +22,6 @@ export default function IdleLogoutGate({
   const enabled = useMemo(() => pathname?.startsWith("/admin"), [pathname]);
 
   const [open, setOpen] = useState(false);
-  const warnedRef = useRef(false);
 
   const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,7 +39,6 @@ export default function IdleLogoutGate({
       await supabase.auth.signOut();
     } finally {
       setOpen(false);
-      warnedRef.current = false;
       router.replace(redirectTo);
       router.refresh();
     }
@@ -48,11 +46,8 @@ export default function IdleLogoutGate({
 
   const schedule = () => {
     clearTimers();
-    warnedRef.current = false;
-    setOpen(false);
 
     warningTimer.current = setTimeout(() => {
-      warnedRef.current = true;
       setOpen(true);
     }, warningMs);
 
@@ -61,12 +56,14 @@ export default function IdleLogoutGate({
     }, logoutMs);
   };
 
+  // User activity verlängert Session, aber schließt NICHT das Popup automatisch
   const markActive = () => {
-    // wenn modal offen ist und user macht was -> weiter
-    if (warnedRef.current) {
-      setOpen(false);
-      warnedRef.current = false;
-    }
+    schedule();
+  };
+
+  // Nur expliziter Click schließt Popup + verlängert
+  const continueWorking = () => {
+    setOpen(false);
     schedule();
   };
 
@@ -108,13 +105,13 @@ export default function IdleLogoutGate({
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
             <div className="text-lg font-semibold">Bist du noch da?</div>
             <p className="mt-2 text-sm text-gray-600">
-              Aus Sicherheitsgründen wirst du gleich automatisch ausgeloggt, wenn keine Aktivität erfolgt.
+              Aus Sicherheitsgründen läuft deine Sitzung gleich ab. Bitte bestätige, dass du weiterarbeiten möchtest.
             </p>
 
             <div className="mt-5 flex gap-3">
               <button
                 className="flex-1 rounded-xl bg-black px-4 py-2 text-white"
-                onClick={markActive}
+                onClick={continueWorking}
               >
                 Weiterarbeiten
               </button>
@@ -127,7 +124,7 @@ export default function IdleLogoutGate({
             </div>
 
             <p className="mt-3 text-xs text-gray-500">
-              Diese Warnung erscheint nach ~10 Minuten Inaktivität.
+              Hinweis: Aktivität (Maus/Keyboard) hält dich zwar eingeloggt, aber dieses Fenster schließt sich nur per Klick.
             </p>
           </div>
         </div>
