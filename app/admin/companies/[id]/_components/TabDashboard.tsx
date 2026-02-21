@@ -4,9 +4,10 @@ import { useMemo } from "react";
 import type { DetailResponse } from "./types";
 import { Card, Button, CodeBox } from "./ui";
 import { copyToClipboard } from "./api";
+import UsageDashboard from "./UsageDashboard";
 
 export default function TabDashboard(props: { companyId: string; data: DetailResponse; setToast: (s: string) => void }) {
-  const { data, setToast } = props;
+  const { data, setToast, companyId } = props;
 
   const embedSnippet = useMemo(() => {
     const pk = data?.keys?.public_key || "pk_xxx";
@@ -26,7 +27,12 @@ export default function TabDashboard(props: { companyId: string; data: DetailRes
               <b>Chat mode:</b> {data.settings?.branding_json?.chat?.mode ?? data.settings?.limits_json?.chat?.mode ?? "hybrid"}
             </div>
             <div>
-              <b>Public key:</b> {data.keys?.public_key ? <span style={{ fontFamily: "ui-monospace" }}>{String(data.keys.public_key).slice(0, 14)}…</span> : "—"}
+              <b>Public key:</b>{" "}
+              {data.keys?.public_key ? (
+                <span style={{ fontFamily: "ui-monospace" }}>{String(data.keys.public_key).slice(0, 14)}…</span>
+              ) : (
+                "—"
+              )}
             </div>
           </div>
         </Card>
@@ -49,6 +55,9 @@ export default function TabDashboard(props: { companyId: string; data: DetailRes
           <CodeBox text={embedSnippet} />
         </Card>
       </div>
+
+      {/* NEW: Customer-ready Usage & Analytics */}
+      <UsageDashboard companyId={companyId} setToast={setToast} />
     </div>
   );
 }
