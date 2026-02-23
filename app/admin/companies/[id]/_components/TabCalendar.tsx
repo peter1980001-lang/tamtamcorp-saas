@@ -127,6 +127,25 @@ function downloadIcs(appt: ApptRow) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// Convert ISO -> datetime-local value in user's local timezone: YYYY-MM-DDTHH:MM
+function isoToDateTimeLocalValue(iso: string) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+function dateTimeLocalValueToIso(v: string) {
+  // v like "2026-02-24T10:30" interpreted as local time
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toISOString();
+}
+
 export default function TabCalendar(props: { companyId: string; setToast: (s: string) => void }) {
   const { companyId, setToast } = props;
 
@@ -150,6 +169,12 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
   const [publicLink, setPublicLink] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [publicErr, setPublicErr] = useState<string | null>(null);
+
+  // Reschedule modal state
+  const [rsOpen, setRsOpen] = useState(false);
+  const [rsRow, setRsRow] = useState<ApptRow | null>(null);
+  const [rsValue, setRsValue] = useState<string>(""); // datetime-local
+  const [rsSaving, setRsSaving] = useState(false);
 
   function quickRange(kind: "today" | "7" | "30" | "all") {
     const now = new Date();
@@ -230,7 +255,7 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, query]);
 
-  // ✅ Auto-refresh every 60s (quick mode)
+  // Auto-refresh every 60s
   useEffect(() => {
     if (!companyId) return;
     const t = setInterval(() => {
@@ -263,21 +288,35 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     }
   }
 
-  async function rescheduleAppointment(row: ApptRow) {
-    const ns = prompt("New start_at (ISO):", row.start_at);
-    if (!ns) return;
-    const ne = prompt("New end_at (ISO):", row.end_at);
-    if (!ne) return;
+  function openReschedule(row: ApptRow) {
+    setRsRow(row);
+    setRsValue(isoToDateTimeLocalValue(row.start_at));
+    setRsOpen(true);
+  }
 
+  async function submitReschedule() {
+    if (!rsRow) return;
+    const newStartIso = dateTimeLocalValueToIso(rsValue);
+    if (!newStartIso) {
+      setToast("Invalid date/time");
+      return;
+    }
+
+    const oldStart = new Date(rsRow.start_at);
+    const oldEnd = new Date(rsRow.end_at);
+    const durMs = Math.max(5 * 60_000, oldEnd.getTime() - oldStart.getTime()); // min 5 min safety
+    const newEndIso = new Date(new Date(newStartIso).getTime() + durMs).toISOString();
+
+    setRsSaving(true);
     try {
       const { ok, status: http, json } = await fetchJson(`/api/admin/companies/${companyId}/calendar`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "reschedule",
-          appointment_id: row.id,
-          new_start_at: ns,
-          new_end_at: ne,
+          appointment_id: rsRow.id,
+          new_start_at: newStartIso,
+          new_end_at: newEndIso,
         }),
       });
 
@@ -287,9 +326,13 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
       }
 
       setToast("Rescheduled ✅");
+      setRsOpen(false);
+      setRsRow(null);
       void load();
     } catch (e: any) {
       setToast(e?.message || "reschedule_failed");
+    } finally {
+      setRsSaving(false);
     }
   }
 
@@ -323,6 +366,101 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      {/* Reschedule modal */}
+      {rsOpen && rsRow ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => {
+            if (!rsSaving) {
+              setRsOpen(false);
+              setRsRow(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              background: "#fff",
+              borderRadius: 16,
+              border: `1px solid ${UI.border}`,
+              padding: 14,
+              display: "grid",
+              gap: 12,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div style={{ fontWeight: 1000, color: UI.text }}>Reschedule</div>
+              <Button
+                variant="secondary"
+                disabled={rsSaving}
+                onClick={() => {
+                  setRsOpen(false);
+                  setRsRow(null);
+                }}
+              >
+                Close
+              </Button>
+            </div>
+
+            <div style={{ color: UI.text2, fontSize: 13.5 }}>
+              <div>
+                <span style={{ fontWeight: 950, color: UI.text }}>Current:</span>{" "}
+                {fmtLocal(rsRow.start_at)} → {fmtLocal(rsRow.end_at)}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <span style={{ fontWeight: 950, color: UI.text }}>New date & time:</span>
+              </div>
+            </div>
+
+            <input
+              type="datetime-local"
+              value={rsValue}
+              onChange={(e) => setRsValue(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "11px 12px",
+                borderRadius: UI.radius,
+                border: `1px solid ${UI.border}`,
+                background: "#fff",
+                fontSize: 13.5,
+                fontWeight: 900,
+              }}
+            />
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <Button
+                variant="secondary"
+                disabled={rsSaving}
+                onClick={() => {
+                  setRsOpen(false);
+                  setRsRow(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={submitReschedule} disabled={rsSaving || !rsValue}>
+                {rsSaving ? "Saving…" : "Confirm reschedule"}
+              </Button>
+            </div>
+
+            <div style={{ fontSize: 12, color: UI.text3 }}>
+              Tip: On iPhone/iPad this opens the native Apple wheel picker.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <Card
         title="Calendar"
         subtitle="View and manage booked appointments. Use filters to narrow down upcoming or past bookings."
@@ -545,7 +683,7 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
                         </Button>
 
                         {s !== "cancelled" ? (
-                          <Button variant="secondary" onClick={() => rescheduleAppointment(r)}>
+                          <Button variant="secondary" onClick={() => openReschedule(r)}>
                             Reschedule
                           </Button>
                         ) : null}
