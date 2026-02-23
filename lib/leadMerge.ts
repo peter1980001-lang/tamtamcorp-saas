@@ -128,8 +128,9 @@ export async function findOrCreateCompanyLead(params: FindOrCreateParams) {
 }
 
 export async function updateLeadBookingSignals(lead_id: string) {
-  // optional RPC (we keep it tolerant if not present)
-  await supabaseServer
-    .rpc("increment_lead_booking_count", { p_lead_id: lead_id })
-    .catch(() => {});
+  try {
+    await supabaseServer.rpc("increment_lead_booking_count", { p_lead_id: lead_id });
+  } catch {
+    // ignore (optional)
+  }
 }
