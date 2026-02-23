@@ -384,8 +384,7 @@ function goToLeads(leadId?: string | null) {
                               onClick={() => {
                                 navigator.clipboard.writeText(String(r.company_lead_id));
                                 setToast("Lead ID copied — opening Leads tab");
-                                goToLeads();
-                              }}
+goToLeads(r.company_lead_id);                              }}
                             >
                               Go to Leads
                             </Button>
