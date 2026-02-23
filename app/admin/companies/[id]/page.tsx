@@ -11,6 +11,7 @@ import TabDashboard from "./_components/TabDashboard";
 import TabBranding from "./_components/TabBranding";
 import TabKnowledge from "./_components/TabKnowledge";
 import TabLeads from "./_components/TabLeads";
+import TabCalendar from "./_components/TabCalendar";
 import TabTeam from "./_components/TabTeam";
 import TabBilling from "./_components/TabBilling";
 import TabSettings from "./_components/TabSettings";
@@ -26,6 +27,7 @@ const BASE_TABS: { key: Tab; label: string }[] = [
   { key: "branding", label: "Branding" },
   { key: "knowledge", label: "Knowledge" },
   { key: "leads", label: "Leads" },
+  { key: "calendar", label: "Calendar" },
   { key: "team", label: "Team" },
   { key: "billing", label: "Billing" },
   { key: "settings", label: "Settings" },
@@ -49,6 +51,7 @@ const ALL_TABS: Tab[] = [
   "branding",
   "knowledge",
   "leads",
+  "calendar",
   "team",
   "billing",
   "settings",
@@ -74,7 +77,7 @@ export default function CompanyDetailPage() {
   const isOwner = myRole === "owner";
 
   const visibleTabs = useMemo(() => {
-    // Insert test-chat next to Knowledge (so admins can always find it)
+    // Insert test-chat next to Leads (so admins can always find it)
     const idx = BASE_TABS.findIndex((t) => t.key === "leads");
     const basePlusTest = [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...BASE_TABS.slice(idx)];
 
@@ -89,8 +92,7 @@ export default function CompanyDetailPage() {
   useEffect(() => {
     if (!id) return;
     const raw = String(searchParams?.get("tab") || "dashboard").toLowerCase();
-    const candidate: Tab =
-      (ALL_TABS as unknown as string[]).includes(raw) ? (raw as Tab) : "dashboard";
+    const candidate: Tab = (ALL_TABS as unknown as string[]).includes(raw) ? (raw as Tab) : "dashboard";
 
     const firstAllowed = (visibleTabs[0]?.key || "dashboard") as Tab;
     setTab(allowedTabsSet.has(candidate) ? candidate : firstAllowed);
@@ -243,6 +245,7 @@ export default function CompanyDetailPage() {
             {tab === "branding" && <TabBranding companyId={id!} data={data} setData={setData} setToast={setToast} />}
             {tab === "knowledge" && <TabKnowledge companyId={id!} data={data} setData={setData} isOwner={isOwner} setToast={setToast} />}
             {tab === "leads" && <TabLeads companyId={id!} setToast={setToast} />}
+            {tab === "calendar" && <TabCalendar companyId={id!} setToast={setToast} />}
             {tab === "team" && <TabTeam companyId={id!} isOwner={isOwner} setToast={setToast} />}
             {tab === "billing" && <TabBilling companyId={id!} setToast={setToast} />}
             {tab === "settings" && <TabSettings companyId={id!} data={data} isOwner={isOwner} setData={setData} setToast={setToast} />}

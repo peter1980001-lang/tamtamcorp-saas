@@ -87,6 +87,7 @@ export type Tab =
   | "branding"
   | "knowledge"
   | "leads"
+  | "calendar"
   | "team"
   | "billing"
   | "settings"

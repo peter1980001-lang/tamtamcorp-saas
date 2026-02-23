@@ -20,20 +20,48 @@ function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-async function resolveCompanyLeadId(params: { company_id: string; company_lead_id?: string | null; conversation_id?: string | null }) {
-  const { company_id, company_lead_id, conversation_id } = params;
+async function resolveCompanyLeadId(params: {
+  company_id: string;
+  company_lead_id?: string | null;
+  conversation_id?: string | null;
+  contact_email?: string | null;
+}) {
+  const { company_id, company_lead_id, conversation_id, contact_email } = params;
 
+  // 1) If explicitly provided, validate it belongs to company
   if (company_lead_id) {
-    const { data } = await supabaseServer.from("company_leads").select("id,company_id").eq("id", company_lead_id).maybeSingle();
-    if (data && String((data as any).company_id) === company_id) return String((data as any).id);
-  }
-
-  if (conversation_id) {
     const { data } = await supabaseServer
       .from("company_leads")
       .select("id,company_id")
-      .eq("conversation_id", conversation_id)
+      .eq("id", company_lead_id)
+      .maybeSingle();
+
+    if (data && String((data as any).company_id) === company_id) return String((data as any).id);
+  }
+
+  // 2) Best: resolve by conversation_id
+  if (conversation_id) {
+    const { data } = await supabaseServer
+      .from("company_leads")
+      .select("id")
       .eq("company_id", company_id)
+      .eq("conversation_id", conversation_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data) return String((data as any).id);
+  }
+
+  // 3) Fallback: resolve by contact_email (useful when conversation_id isn't available)
+  if (contact_email) {
+    const { data } = await supabaseServer
+      .from("company_leads")
+      .select("id")
+      .eq("company_id", company_id)
+      .eq("email", contact_email)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (data) return String((data as any).id);
@@ -62,8 +90,9 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
   const hold_token = String(body?.hold_token || "").trim();
-  const conversation_id = String(body?.conversation_id || "").trim() || null;
+  if (!hold_token) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
 
+  const conversation_id_in = String(body?.conversation_id || "").trim() || null;
   const company_lead_id_in = String(body?.company_lead_id || "").trim() || null;
 
   const contact_name = body?.contact_name ? String(body.contact_name).trim() : null;
@@ -74,16 +103,6 @@ export async function POST(req: Request) {
   const description = body?.description ? String(body.description).trim() : null;
 
   const meta = body?.meta ?? {};
-
-  if (!hold_token) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-
-  // Validate conversation (optional but recommended)
-  if (conversation_id) {
-    const { data: conv } = await supabaseServer.from("conversations").select("id,company_id").eq("id", conversation_id).maybeSingle();
-    if (!conv || String((conv as any).company_id) !== company_id) {
-      return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
-    }
-  }
 
   const now = new Date();
 
@@ -107,11 +126,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "hold_invalid_time" }, { status: 500 });
   }
 
-  // Prefer company_lead_id:
+  // Conversation: prefer body, fallback to hold
+  const conversation_id =
+    conversation_id_in ||
+    (String((hold as any).conversation_id || "").trim() || null);
+
+  // (Optional) validate conversation belongs to company
+  if (conversation_id) {
+    const { data: conv } = await supabaseServer
+      .from("conversations")
+      .select("id,company_id")
+      .eq("id", conversation_id)
+      .maybeSingle();
+
+    if (!conv || String((conv as any).company_id) !== company_id) {
+      return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
+    }
+  }
+
+  // Resolve company_lead_id (preferred)
   const resolvedCompanyLeadId = await resolveCompanyLeadId({
     company_id,
-    company_lead_id: company_lead_id_in || String((hold as any).company_lead_id || "").trim() || null,
-    conversation_id: conversation_id || String((hold as any).conversation_id || "").trim() || null,
+    company_lead_id: company_lead_id_in || (String((hold as any).company_lead_id || "").trim() || null),
+    conversation_id,
+    contact_email,
   });
 
   // Final conflict check (appointments + active holds excluding current hold)
@@ -127,7 +165,7 @@ export async function POST(req: Request) {
 
   const { data: holds, error: holdsErr } = await supabaseServer
     .from("company_appointment_holds")
-    .select("id,start_at,end_at,expires_at")
+    .select("id,start_at,end_at,expires_at,hold_token")
     .eq("company_id", company_id)
     .gt("expires_at", asIso(now))
     .neq("hold_token", hold_token)
@@ -147,7 +185,7 @@ export async function POST(req: Request) {
     if (intervalsOverlap(start, end, s, e)) return NextResponse.json({ error: "slot_held" }, { status: 409 });
   }
 
-  // Consume hold (delete) BEFORE insert to ensure single-use
+  // Consume hold (single-use)
   const { data: deleted, error: dErr } = await supabaseServer
     .from("company_appointment_holds")
     .delete()
@@ -163,8 +201,8 @@ export async function POST(req: Request) {
   // Create appointment
   const insertPayload: any = {
     company_id,
-    company_lead_id: resolvedCompanyLeadId,
-    conversation_id: conversation_id || String((hold as any).conversation_id || "").trim() || null,
+    company_lead_id: resolvedCompanyLeadId, // ✅ THIS is the preferred link (company_leads)
+    conversation_id,
 
     start_at: asIso(start),
     end_at: asIso(end),
@@ -185,11 +223,13 @@ export async function POST(req: Request) {
     },
   };
 
-  const { data: appt, error: iErr } = await supabaseServer.from("company_appointments").insert(insertPayload).select("*").maybeSingle();
+  const { data: appt, error: iErr } = await supabaseServer
+    .from("company_appointments")
+    .insert(insertPayload)
+    .select("*")
+    .maybeSingle();
+
   if (iErr) return NextResponse.json({ error: "appointment_create_failed" }, { status: 500 });
 
-  return NextResponse.json({
-    ok: true,
-    appointment: appt,
-  });
+  return NextResponse.json({ ok: true, appointment: appt });
 }
