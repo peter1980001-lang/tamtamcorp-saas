@@ -64,13 +64,16 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
   const body = await req.json().catch(() => null);
-  const ids: string[] = Array.isArray(body?.ids) ? body.ids.map(String).map((s) => s.trim()).filter(Boolean) : [];
+
+  const ids: string[] = Array.isArray(body?.ids)
+    ? (body.ids as unknown[]).map((v: unknown) => String(v).trim()).filter((v: string) => Boolean(v))
+    : [];
 
   if (ids.length === 0) {
     return NextResponse.json({ error: "no_ids_provided" }, { status: 400 });
   }
 
-  // ✅ Prevent deleting leads that are referenced by appointments (Lead-first enforcement)
+  // ✅ Prevent deleting leads that are referenced by appointments
   const { data: appts, error: aErr } = await supabaseServer
     .from("company_appointments")
     .select("id,company_lead_id")
@@ -94,7 +97,6 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     );
   }
 
-  // 🔒 tenant-scope enforced
   const { data, error } = await supabaseServer
     .from("company_leads")
     .delete()
