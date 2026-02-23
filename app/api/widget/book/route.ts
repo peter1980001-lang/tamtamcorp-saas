@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
+import { getBookingEntitlement } from "@/lib/bookingEntitlement";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
@@ -84,8 +85,18 @@ export async function POST(req: Request) {
   const company_id = String(payload.company_id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company" }, { status: 401 });
 
+  // Existing billing gate
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
+
+  // ✅ NEW: Booking entitlement gate (Pro or trial active)
+  const ent = await getBookingEntitlement(company_id);
+  if (!ent.can_book) {
+    return NextResponse.json(
+      { error: "booking_locked", message: ent.reason, trial_ends_at: ent.current_period_end, plan_key: ent.plan_key, status: ent.status },
+      { status: 402 }
+    );
+  }
 
   const body = await req.json().catch(() => null);
 
@@ -201,7 +212,7 @@ export async function POST(req: Request) {
   // Create appointment
   const insertPayload: any = {
     company_id,
-    company_lead_id: resolvedCompanyLeadId, // ✅ THIS is the preferred link (company_leads)
+    company_lead_id: resolvedCompanyLeadId, // ✅ preferred link (company_leads)
     conversation_id,
 
     start_at: asIso(start),

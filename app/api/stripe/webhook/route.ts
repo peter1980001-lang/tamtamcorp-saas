@@ -1,3 +1,4 @@
+// /api/stripe/webhooks/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { supabaseServer } from "@/lib/supabaseServer";
@@ -52,6 +53,33 @@ async function upsertCompanyBilling(input: {
     .upsert(payload, { onConflict: "company_id" });
 
   if (error) throw new Error(`company_billing_upsert_failed: ${error.message}`);
+
+  return { plan_key };
+}
+
+/**
+ * Booking Trial:
+ * - starter/growth: set booking_trial_ends_at = now + 14 days (on successful payment / subscription activation)
+ * - pro: leave booking_trial_ends_at as-is (not needed), pro always has booking
+ */
+async function maybeStartBookingTrial(company_id: string, plan_key: string | null) {
+  if (!company_id) return;
+
+  // Only starter/growth get a 14-day calendar trial
+  if (plan_key !== "starter" && plan_key !== "growth") return;
+
+  // Set trial end = now + 14 days
+  const trialEnds = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  // "Best effort": update if row exists; if it doesn't, ignore silently (you can ensure row exists at company create)
+  const { error } = await supabaseServer
+    .from("company_settings")
+    .update({ booking_trial_ends_at: trialEnds, updated_at: new Date().toISOString() as any })
+    .eq("company_id", company_id);
+
+  // If company_settings row doesn't exist, Supabase returns 0 updated but no error.
+  // If error is real (permissions, schema), throw.
+  if (error) throw new Error(`booking_trial_update_failed: ${error.message}`);
 }
 
 async function findCompanyIdForSubscription(sub: Stripe.Subscription) {
@@ -135,7 +163,7 @@ export async function POST(req: Request) {
           // non-fatal
         }
 
-        await upsertCompanyBilling({
+        const { plan_key } = await upsertCompanyBilling({
           company_id,
           stripe_customer_id: customerId,
           stripe_subscription_id: sub.id,
@@ -143,6 +171,9 @@ export async function POST(req: Request) {
           status: sub.status,
           current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
         });
+
+        // ✅ Start 14-day booking trial for starter/growth on successful checkout
+        await maybeStartBookingTrial(company_id, plan_key ?? null);
       }
 
       return NextResponse.json({ received: true });
@@ -169,7 +200,7 @@ export async function POST(req: Request) {
       const status =
         event.type === "customer.subscription.deleted" ? "canceled" : (sub.status as any);
 
-      await upsertCompanyBilling({
+      const { plan_key } = await upsertCompanyBilling({
         company_id,
         stripe_customer_id: customerId,
         stripe_subscription_id: sub.id,
@@ -177,6 +208,13 @@ export async function POST(req: Request) {
         status,
         current_period_end: toIsoOrNull(currentPeriodEndUnix ?? null),
       });
+
+      // Optional: if a subscription becomes active/created again, re-start the trial window
+      // for starter/growth. This is up to you; I’m enabling it because it matches "after payment".
+      // If you don't want this on "updated", remove this line.
+      if (event.type !== "customer.subscription.deleted") {
+        await maybeStartBookingTrial(company_id, plan_key ?? null);
+      }
 
       return NextResponse.json({ received: true });
     }

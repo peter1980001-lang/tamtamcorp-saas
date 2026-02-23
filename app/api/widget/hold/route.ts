@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
+import { getBookingEntitlement } from "@/lib/bookingEntitlement";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
@@ -35,8 +36,18 @@ export async function POST(req: Request) {
   const company_id = String(payload.company_id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company" }, { status: 401 });
 
+  // Existing billing gate (keeps your current paywall logic intact)
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
+
+  // ✅ NEW: Booking entitlement gate (Pro or trial active)
+  const ent = await getBookingEntitlement(company_id);
+  if (!ent.can_hold) {
+    return NextResponse.json(
+      { error: "booking_locked", message: ent.reason, trial_ends_at: ent.current_period_end, plan_key: ent.plan_key, status: ent.status },
+      { status: 402 }
+    );
+  }
 
   const body = await req.json().catch(() => null);
 
@@ -60,7 +71,11 @@ export async function POST(req: Request) {
 
   // (Optional) validate conversation belongs to company if provided (same pattern as widget/messages)
   if (conversation_id) {
-    const { data: conv } = await supabaseServer.from("conversations").select("id,company_id").eq("id", conversation_id).maybeSingle();
+    const { data: conv } = await supabaseServer
+      .from("conversations")
+      .select("id,company_id")
+      .eq("id", conversation_id)
+      .maybeSingle();
     if (!conv || String((conv as any).company_id) !== company_id) {
       return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
     }
