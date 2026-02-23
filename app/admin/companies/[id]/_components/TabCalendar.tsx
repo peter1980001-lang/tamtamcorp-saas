@@ -42,6 +42,92 @@ function toDateInputValue(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function addDays(d: Date, days: number) {
+  const x = new Date(d.getTime());
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function icsEscape(s: string) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,");
+}
+
+function toIcsUtc(dtIso: string) {
+  const d = new Date(dtIso);
+  // YYYYMMDDTHHMMSSZ
+  return (
+    d.getUTCFullYear() +
+    pad2(d.getUTCMonth() + 1) +
+    pad2(d.getUTCDate()) +
+    "T" +
+    pad2(d.getUTCHours()) +
+    pad2(d.getUTCMinutes()) +
+    pad2(d.getUTCSeconds()) +
+    "Z"
+  );
+}
+
+function downloadIcs(appt: ApptRow) {
+  const uid = `${appt.id}@tamtamcorp`;
+  const dtStart = toIcsUtc(appt.start_at);
+  const dtEnd = toIcsUtc(appt.end_at);
+
+  const summary = icsEscape(appt.title || "Appointment");
+  const description = icsEscape(
+    [
+      appt.description || "",
+      appt.contact_name ? `Contact: ${appt.contact_name}` : "",
+      appt.contact_email ? `Email: ${appt.contact_email}` : "",
+      appt.contact_phone ? `Phone: ${appt.contact_phone}` : "",
+      appt.source ? `Source: ${appt.source}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+
+  const now = new Date().toISOString();
+  const dtStamp = toIcsUtc(now);
+
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//TamTam Corp//Scheduler//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${dtStamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${summary}`,
+    description ? `DESCRIPTION:${description}` : "",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ]
+    .filter(Boolean)
+    .join("\r\n");
+
+  const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `appointment-${appt.id}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 export default function TabCalendar(props: { companyId: string; setToast: (s: string) => void }) {
   const { companyId, setToast } = props;
 
@@ -62,12 +148,34 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     return toDateInputValue(d);
   });
 
+  function quickRange(kind: "today" | "7" | "30" | "all") {
+    const now = new Date();
+    if (kind === "today") {
+      setFrom(toDateInputValue(now));
+      setTo(toDateInputValue(now));
+      return;
+    }
+    if (kind === "7") {
+      setFrom(toDateInputValue(addDays(now, -2)));
+      setTo(toDateInputValue(addDays(now, 7)));
+      return;
+    }
+    if (kind === "30") {
+      setFrom(toDateInputValue(addDays(now, -2)));
+      setTo(toDateInputValue(addDays(now, 30)));
+      return;
+    }
+    // all
+    setFrom("");
+    setTo("");
+  }
+
   const query = useMemo(() => {
     const sp = new URLSearchParams();
     sp.set("status", status);
     if (from) sp.set("from", from);
     if (to) sp.set("to", to);
-    sp.set("limit", "100");
+    sp.set("limit", "150");
     return sp.toString();
   }, [status, from, to]);
 
@@ -122,6 +230,15 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     }
   }
 
+function goToLeads(leadId?: string | null) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", "leads");
+  if (leadId) url.searchParams.set("lead_id", leadId);
+  else url.searchParams.delete("lead_id");
+  window.history.replaceState({}, "", url.toString());
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
   const stats = useMemo(() => {
     const total = rows.length;
     const confirmed = rows.filter((r) => String(r.status).toLowerCase() === "confirmed").length;
@@ -144,6 +261,22 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
         }
       >
         <div style={{ display: "grid", gap: 12 }}>
+          {/* Quick ranges */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Button variant="secondary" onClick={() => quickRange("today")}>
+              Today
+            </Button>
+            <Button variant="secondary" onClick={() => quickRange("7")}>
+              Next 7 days
+            </Button>
+            <Button variant="secondary" onClick={() => quickRange("30")}>
+              Next 30 days
+            </Button>
+            <Button variant="secondary" onClick={() => quickRange("all")}>
+              All
+            </Button>
+          </div>
+
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ minWidth: 220 }}>
               <div style={{ fontSize: 12.5, fontWeight: 900, color: UI.text2, marginBottom: 6 }}>Status</div>
@@ -218,23 +351,45 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
                         <div style={{ fontWeight: 1000, color: UI.text }}>
                           {r.title || "Appointment"}{" "}
                           <span style={{ fontWeight: 900, color: UI.text3 }}>•</span>{" "}
-                          <span style={{ color: UI.text2, fontWeight: 900 }}>{fmtLocal(r.start_at)} → {fmtLocal(r.end_at)}</span>
+                          <span style={{ color: UI.text2, fontWeight: 900 }}>
+                            {fmtLocal(r.start_at)} → {fmtLocal(r.end_at)}
+                          </span>
                         </div>
                       </div>
 
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            downloadIcs(r);
+                            setToast("ICS downloaded");
+                          }}
+                        >
+                          ICS
+                        </Button>
+
                         {r.company_lead_id ? (
-                          <Button
-                            variant="secondary"
-                            onClick={() => {
-                              // If you later add a dedicated lead page, change this link.
-                              // For now, we just copy lead id.
-                              navigator.clipboard.writeText(String(r.company_lead_id));
-                              setToast("Lead ID copied");
-                            }}
-                          >
-                            Copy Lead ID
-                          </Button>
+                          <>
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                navigator.clipboard.writeText(String(r.company_lead_id));
+                                setToast("Lead ID copied");
+                              }}
+                            >
+                              Copy Lead ID
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                navigator.clipboard.writeText(String(r.company_lead_id));
+                                setToast("Lead ID copied — opening Leads tab");
+                                goToLeads();
+                              }}
+                            >
+                              Go to Leads
+                            </Button>
+                          </>
                         ) : null}
 
                         {s !== "cancelled" ? (

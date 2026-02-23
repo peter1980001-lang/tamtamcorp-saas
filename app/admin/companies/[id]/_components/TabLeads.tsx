@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { LeadRow } from "./types";
 import { Card, Button, Input, Modal, Textarea, CodeBox, UI } from "./ui";
 import { fetchJson } from "./api";
@@ -15,6 +16,9 @@ function safeJsonStringify(v: any) {
 
 export default function TabLeads(props: { companyId: string; setToast: (s: string) => void }) {
   const { companyId, setToast } = props;
+
+  const searchParams = useSearchParams();
+  const leadIdFromUrl = String(searchParams?.get("lead_id") || "").trim();
 
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -42,7 +46,10 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
 
   const visibleLeads = useMemo(() => leads, [leads]);
 
-  async function loadLeads() {
+  const autoOpenedRef = useRef(false);
+  const autoExpandedSearchRef = useRef(false);
+
+  async function loadLeads(opts?: { force?: boolean }) {
     setLoading(true);
 
     const qs = new URLSearchParams({
@@ -129,7 +136,10 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
     setPreviewMessages([]);
     setPreviewLoading(true);
 
-    const { ok, json } = await fetchJson(`/api/admin/companies/${companyId}/leads/${encodeURIComponent(row.id)}/conversation`, { cache: "no-store" as any });
+    const { ok, json } = await fetchJson(
+      `/api/admin/companies/${companyId}/leads/${encodeURIComponent(row.id)}/conversation`,
+      { cache: "no-store" as any }
+    );
     setPreviewLoading(false);
 
     if (!ok) {
@@ -186,8 +196,56 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
     await loadLeads();
   }
 
+  // ✅ Auto-open lead from URL (?lead_id=...)
+  useEffect(() => {
+    if (!leadIdFromUrl) return;
+    if (!companyId) return;
+    if (loading) return;
+
+    // Try to find in current list
+    const found = leads.find((l) => l.id === leadIdFromUrl);
+
+    if (found && !autoOpenedRef.current) {
+      autoOpenedRef.current = true;
+
+      // scroll into view
+      setTimeout(() => {
+        const el = document.getElementById(`lead-${leadIdFromUrl}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
+
+      void openPreview(found);
+      return;
+    }
+
+    // If not found, expand search once (limits/filters might hide it)
+    if (!found && !autoExpandedSearchRef.current) {
+      autoExpandedSearchRef.current = true;
+
+      // broaden filters
+      setLeadQuery("");
+      setLeadBand("all");
+      setLeadStatus("all");
+      setLeadSort("updated");
+      setLeadLimit(200);
+
+      // reload after state applied
+      setTimeout(() => {
+        void loadLeads();
+      }, 0);
+    }
+  }, [leadIdFromUrl, companyId, loading, leads]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <Card title="Leads" subtitle="Qualified leads captured by your widget." right={<Button onClick={loadLeads} disabled={loading} variant="secondary">{loading ? "Loading…" : "Refresh"}</Button>}>
+    <Card
+      title="Leads"
+      subtitle="Qualified leads captured by your widget."
+      right={
+        <Button onClick={() => loadLeads()} disabled={loading} variant="secondary">
+          {loading ? "Loading…" : "Refresh"}
+        </Button>
+      }
+    >
       <div style={{ display: "grid", gap: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 140px 120px 120px", gap: 10 }}>
           <Input value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} placeholder="Search…" />
@@ -201,12 +259,17 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
             <option value="last_touch">last_touch</option><option value="updated">updated</option><option value="score">score</option>
           </select>
           <Input type="number" min={10} max={500} value={leadLimit} onChange={(e) => setLeadLimit(Number(e.target.value || 50))} />
-          <Button onClick={loadLeads} disabled={loading} variant="primary">Apply</Button>
+          <Button onClick={() => loadLeads()} disabled={loading} variant="primary">Apply</Button>
         </div>
 
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ fontSize: 12.5, color: UI.text2 }}>
             Showing <b>{visibleLeads.length}</b> · Selected <b>{selectedLeadIds.size}</b>
+            {leadIdFromUrl ? (
+              <span style={{ marginLeft: 10, color: UI.text3 }}>
+                • deep link: <b>{leadIdFromUrl.slice(0, 8)}…</b>
+              </span>
+            ) : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -226,6 +289,8 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
           ) : (
             visibleLeads.map((l) => {
               const isSel = selectedLeadIds.has(l.id);
+              const isDeepLinked = leadIdFromUrl && l.id === leadIdFromUrl;
+
               const preview =
                 (l.lead_preview || "").trim() ||
                 [l.email || "", l.phone || "", String(l?.qualification_json?.use_case || "").trim(), String(l?.qualification_json?.note || "").trim()]
@@ -234,11 +299,26 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
                   .slice(0, 180);
 
               return (
-                <div key={l.id} style={{ display: "grid", gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px", padding: "10px 12px", borderTop: `1px solid ${UI.border}`, gap: 10, alignItems: "center", background: isSel ? "#F8FAFF" : "#fff" }}>
+                <div
+                  key={l.id}
+                  id={`lead-${l.id}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "42px 2.4fr 110px 90px 120px 160px 160px 190px",
+                    padding: "10px 12px",
+                    borderTop: `1px solid ${UI.border}`,
+                    gap: 10,
+                    alignItems: "center",
+                    background: isDeepLinked ? "#FFF7ED" : isSel ? "#F8FAFF" : "#fff",
+                  }}
+                >
                   <div><input type="checkbox" checked={isSel} onChange={() => toggleSelectLead(l.id)} /></div>
 
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name || l.email || l.phone || "(unknown)"}</div>
+                    <div style={{ fontWeight: 1000, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {l.name || l.email || l.phone || "(unknown)"}
+                      {isDeepLinked ? <span style={{ marginLeft: 8, fontSize: 12, color: "#9A3412", fontWeight: 1000 }}>• linked</span> : null}
+                    </div>
                     <div style={{ fontSize: 12.5, color: UI.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview || l.conversation_id || l.id}</div>
                   </div>
 
@@ -249,6 +329,17 @@ export default function TabLeads(props: { companyId: string; setToast: (s: strin
                   <div style={{ fontSize: 12.5, color: UI.text2 }}>{new Date(l.updated_at).toLocaleString()}</div>
 
                   <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(l.id);
+                        setToast("Lead ID copied");
+                      }}
+                      style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}
+                    >
+                      Copy ID
+                    </button>
+
                     <button type="button" onClick={() => openPreview(l)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Preview</button>
                     <button type="button" onClick={() => openEdit(l)} style={{ border: `1px solid ${UI.border}`, background: "#fff", borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Edit</button>
                     <button type="button" onClick={() => deleteLead(l)} style={{ border: "1px solid #FECACA", background: "#fff", color: UI.danger, borderRadius: 999, padding: "7px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 1000 }}>Delete</button>
