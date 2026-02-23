@@ -62,7 +62,6 @@ function icsEscape(s: string) {
 
 function toIcsUtc(dtIso: string) {
   const d = new Date(dtIso);
-  // YYYYMMDDTHHMMSSZ
   return (
     d.getUTCFullYear() +
     pad2(d.getUTCMonth() + 1) +
@@ -148,6 +147,10 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     return toDateInputValue(d);
   });
 
+  const [publicLink, setPublicLink] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [publicErr, setPublicErr] = useState<string | null>(null);
+
   function quickRange(kind: "today" | "7" | "30" | "all") {
     const now = new Date();
     if (kind === "today") {
@@ -165,7 +168,6 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
       setTo(toDateInputValue(addDays(now, 30)));
       return;
     }
-    // all
     setFrom("");
     setTo("");
   }
@@ -202,8 +204,39 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     }
   }
 
+  async function loadPublicLink() {
+    if (!companyId) return;
+    setPublicErr(null);
+    try {
+      const { ok, status: http, json } = await fetchJson(`/api/admin/companies/${companyId}/public-booking`, {
+        cache: "no-store",
+      });
+      if (!ok) {
+        setPublicLink(null);
+        setPublicKey(null);
+        setPublicErr(`HTTP ${http}: ${json?.error || "public_booking_load_failed"}`);
+        return;
+      }
+      setPublicLink(String(json?.link || ""));
+      setPublicKey(String(json?.public_booking_key || ""));
+    } catch (e: any) {
+      setPublicErr(e?.message || "public_booking_load_failed");
+    }
+  }
+
   useEffect(() => {
     void load();
+    void loadPublicLink();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, query]);
+
+  // ✅ Auto-refresh every 60s (quick mode)
+  useEffect(() => {
+    if (!companyId) return;
+    const t = setInterval(() => {
+      void load();
+    }, 60_000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, query]);
 
@@ -230,14 +263,55 @@ export default function TabCalendar(props: { companyId: string; setToast: (s: st
     }
   }
 
-function goToLeads(leadId?: string | null) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", "leads");
-  if (leadId) url.searchParams.set("lead_id", leadId);
-  else url.searchParams.delete("lead_id");
-  window.history.replaceState({}, "", url.toString());
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
+  async function rescheduleAppointment(row: ApptRow) {
+    const ns = prompt("New start_at (ISO):", row.start_at);
+    if (!ns) return;
+    const ne = prompt("New end_at (ISO):", row.end_at);
+    if (!ne) return;
+
+    try {
+      const { ok, status: http, json } = await fetchJson(`/api/admin/companies/${companyId}/calendar`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "reschedule",
+          appointment_id: row.id,
+          new_start_at: ns,
+          new_end_at: ne,
+        }),
+      });
+
+      if (!ok) {
+        setToast(`Reschedule failed: HTTP ${http} ${json?.message || json?.error || ""}`.trim());
+        return;
+      }
+
+      setToast("Rescheduled ✅");
+      void load();
+    } catch (e: any) {
+      setToast(e?.message || "reschedule_failed");
+    }
+  }
+
+  function goToLeads(leadId?: string | null) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "leads");
+    if (leadId) url.searchParams.set("lead_id", leadId);
+    else url.searchParams.delete("lead_id");
+    window.history.replaceState({}, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
+  function downloadRangeIcs() {
+    const sp = new URLSearchParams();
+    if (from) sp.set("from", new Date(`${from}T00:00:00`).toISOString());
+    if (to) sp.set("to", new Date(`${to}T23:59:59`).toISOString());
+    if (status && status !== "all" && status !== "upcoming") sp.set("status", status);
+    const url = `/api/admin/companies/${companyId}/calendar/ics?${sp.toString()}`;
+
+    window.open(url, "_blank", "noopener,noreferrer");
+    setToast("ICS export opened");
+  }
 
   const stats = useMemo(() => {
     const total = rows.length;
@@ -261,6 +335,108 @@ function goToLeads(leadId?: string | null) {
         }
       >
         <div style={{ display: "grid", gap: 12 }}>
+          {/* Public booking link + ICS export */}
+          <div
+            style={{
+              border: `1px solid ${UI.border}`,
+              borderRadius: 16,
+              padding: 12,
+              background: "#fff",
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ fontWeight: 1000, color: UI.text }}>Public booking page</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Button variant="secondary" onClick={loadPublicLink}>
+                  Reload link
+                </Button>
+                <Button variant="secondary" onClick={downloadRangeIcs}>
+                  Download ICS (range)
+                </Button>
+              </div>
+            </div>
+
+            {publicErr ? (
+              <div style={{ border: "1px solid #FECACA", background: "#FEF2F2", padding: 10, borderRadius: 12, color: "#991B1B", fontSize: 13.5 }}>
+                {publicErr}
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ flex: 1, minWidth: 280 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 900, color: UI.text2, marginBottom: 6 }}>Link</div>
+                <div
+                  style={{
+                    padding: "11px 12px",
+                    borderRadius: UI.radius,
+                    border: `1px solid ${UI.border}`,
+                    background: "#fff",
+                    fontSize: 13,
+                    color: UI.text2,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={publicLink || ""}
+                >
+                  {publicLink || "—"}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <Button
+                  variant="secondary"
+                  disabled={!publicLink}
+                  onClick={() => {
+                    if (!publicLink) return;
+                    navigator.clipboard.writeText(publicLink);
+                    setToast("Public booking link copied");
+                  }}
+                >
+                  Copy link
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  disabled={!publicLink}
+                  onClick={() => {
+                    if (!publicLink) return;
+                    window.open(publicLink, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Open
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  disabled={!publicLink}
+                  onClick={() => {
+                    if (!publicLink) return;
+                    const text = `Book an appointment here: ${publicLink}`;
+                    const wa = `https://wa.me/?text=${encodeURIComponent(text)}`;
+                    window.open(wa, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Share WhatsApp
+                </Button>
+
+                <Button
+                  variant="secondary"
+                  disabled={!publicKey}
+                  onClick={() => {
+                    if (!publicKey) return;
+                    navigator.clipboard.writeText(publicKey);
+                    setToast("Public booking key copied");
+                  }}
+                >
+                  Copy key
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* Quick ranges */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Button variant="secondary" onClick={() => quickRange("today")}>
@@ -368,6 +544,12 @@ function goToLeads(leadId?: string | null) {
                           ICS
                         </Button>
 
+                        {s !== "cancelled" ? (
+                          <Button variant="secondary" onClick={() => rescheduleAppointment(r)}>
+                            Reschedule
+                          </Button>
+                        ) : null}
+
                         {r.company_lead_id ? (
                           <>
                             <Button
@@ -384,7 +566,8 @@ function goToLeads(leadId?: string | null) {
                               onClick={() => {
                                 navigator.clipboard.writeText(String(r.company_lead_id));
                                 setToast("Lead ID copied — opening Leads tab");
-goToLeads(r.company_lead_id);                              }}
+                                goToLeads(r.company_lead_id);
+                              }}
                             >
                               Go to Leads
                             </Button>

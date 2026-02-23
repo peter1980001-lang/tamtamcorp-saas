@@ -2,10 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type Slot = {
-  start_at: string;
-  end_at: string;
-};
+type Slot = { start_at: string; end_at: string };
 
 export default function PublicBookingClient({ publicKey }: { publicKey: string }) {
   const [loading, setLoading] = useState(true);
@@ -18,10 +15,8 @@ export default function PublicBookingClient({ publicKey }: { publicKey: string }
   const [error, setError] = useState<string | null>(null);
   const [booking, setBooking] = useState(false);
 
-  // Load availability
   useEffect(() => {
     let dead = false;
-
     (async () => {
       try {
         const res = await fetch(`/api/book/${publicKey}/availability`, {
@@ -29,26 +24,27 @@ export default function PublicBookingClient({ publicKey }: { publicKey: string }
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ limit: 12 }),
         });
-
         const data = await res.json();
         if (!dead) {
           setSlots(data.slots || []);
           setLocked(Boolean(data.locked));
           setReason(data.reason || null);
         }
-      } catch (e: any) {
+      } catch {
         if (!dead) setError("Failed to load availability.");
       } finally {
         if (!dead) setLoading(false);
       }
     })();
-
     return () => {
       dead = true;
     };
   }, [publicKey]);
 
   async function handleHold(slot: Slot) {
+    // ✅ hard stop when locked
+    if (locked) return;
+
     setError(null);
     setHoldToken(null);
     setSelected(slot);
@@ -57,10 +53,7 @@ export default function PublicBookingClient({ publicKey }: { publicKey: string }
       const res = await fetch(`/api/book/${publicKey}/hold`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          start_at: slot.start_at,
-          end_at: slot.end_at,
-        }),
+        body: JSON.stringify({ start_at: slot.start_at, end_at: slot.end_at }),
       });
 
       const data = await res.json();
@@ -74,6 +67,8 @@ export default function PublicBookingClient({ publicKey }: { publicKey: string }
 
   async function handleBook() {
     if (!holdToken) return;
+    if (locked) return;
+
     setBooking(true);
     setError(null);
 
@@ -111,52 +106,66 @@ export default function PublicBookingClient({ publicKey }: { publicKey: string }
   if (loading) return <div>Loading available slots…</div>;
 
   return (
-    <div style={{ marginTop: 20 }}>
+    <div style={{ marginTop: 20, position: "relative" }}>
+      {/* 🔒 Overlay when locked */}
       {locked && (
         <div
           style={{
-            background: "#fff4d6",
-            padding: 12,
-            borderRadius: 8,
-            marginBottom: 16,
-            fontSize: 14,
+            position: "absolute",
+            inset: 0,
+            background: "rgba(255,255,255,0.85)",
+            borderRadius: 12,
+            zIndex: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            textAlign: "center",
+            border: "1px solid #eee",
           }}
         >
-          <strong>Booking currently locked.</strong>
-          <div style={{ opacity: 0.8 }}>{reason || "Upgrade to Pro to enable booking."}</div>
+          <div style={{ maxWidth: 520 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>
+              Booking is locked
+            </div>
+            <div style={{ opacity: 0.8, marginBottom: 12 }}>
+              {reason || "This company needs TamTam Pro to accept bookings."}
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>
+              Slots remain visible for preview. To activate booking, upgrade to Pro.
+            </div>
+          </div>
         </div>
       )}
 
-      {error && (
-        <div style={{ color: "crimson", marginBottom: 10 }}>
-          {error}
-        </div>
-      )}
-
+      {error && <div style={{ color: "crimson", marginBottom: 10 }}>{error}</div>}
       {!slots.length && <div>No available slots.</div>}
 
-      <div style={{ display: "grid", gap: 10 }}>
-        {slots.map((slot, i) => (
-          <button
-            key={i}
-            onClick={() => handleHold(slot)}
-            style={{
-              padding: 12,
-              borderRadius: 8,
-              border: "1px solid #ddd",
-              cursor: "pointer",
-              background:
-                selected?.start_at === slot.start_at ? "#000" : "#fff",
-              color:
-                selected?.start_at === slot.start_at ? "#fff" : "#000",
-            }}
-          >
-            {formatDate(slot.start_at)}
-          </button>
-        ))}
+      <div style={{ display: "grid", gap: 10, filter: locked ? "blur(0px)" : "none" }}>
+        {slots.map((slot, i) => {
+          const isSelected = selected?.start_at === slot.start_at;
+          return (
+            <button
+              key={i}
+              onClick={() => handleHold(slot)}
+              disabled={locked}
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid #ddd",
+                cursor: locked ? "not-allowed" : "pointer",
+                opacity: locked ? 0.7 : 1,
+                background: isSelected ? "#000" : "#fff",
+                color: isSelected ? "#fff" : "#000",
+              }}
+            >
+              {formatDate(slot.start_at)}
+            </button>
+          );
+        })}
       </div>
 
-      {holdToken && (
+      {holdToken && !locked && (
         <div style={{ marginTop: 20 }}>
           <button
             onClick={handleBook}
