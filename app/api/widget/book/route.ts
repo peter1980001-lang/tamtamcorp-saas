@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
 import { getBookingEntitlement } from "@/lib/bookingEntitlement";
+import { findOrCreateCompanyLead, updateLeadBookingSignals } from "@/lib/leadMerge";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
@@ -19,56 +20,6 @@ function asIso(d: Date) {
 
 function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
-}
-
-async function resolveCompanyLeadId(params: {
-  company_id: string;
-  company_lead_id?: string | null;
-  conversation_id?: string | null;
-  contact_email?: string | null;
-}) {
-  const { company_id, company_lead_id, conversation_id, contact_email } = params;
-
-  // 1) If explicitly provided, validate it belongs to company
-  if (company_lead_id) {
-    const { data } = await supabaseServer
-      .from("company_leads")
-      .select("id,company_id")
-      .eq("id", company_lead_id)
-      .maybeSingle();
-
-    if (data && String((data as any).company_id) === company_id) return String((data as any).id);
-  }
-
-  // 2) Best: resolve by conversation_id
-  if (conversation_id) {
-    const { data } = await supabaseServer
-      .from("company_leads")
-      .select("id")
-      .eq("company_id", company_id)
-      .eq("conversation_id", conversation_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (data) return String((data as any).id);
-  }
-
-  // 3) Fallback: resolve by contact_email (useful when conversation_id isn't available)
-  if (contact_email) {
-    const { data } = await supabaseServer
-      .from("company_leads")
-      .select("id")
-      .eq("company_id", company_id)
-      .eq("email", contact_email)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (data) return String((data as any).id);
-  }
-
-  return null;
 }
 
 export async function POST(req: Request) {
@@ -89,7 +40,7 @@ export async function POST(req: Request) {
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
 
-  // ✅ NEW: Booking entitlement gate (Pro or trial active)
+  // Booking entitlement gate (Pro or active trial)
   const ent = await getBookingEntitlement(company_id);
   if (!ent.can_book) {
     return NextResponse.json(
@@ -104,7 +55,6 @@ export async function POST(req: Request) {
   if (!hold_token) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
 
   const conversation_id_in = String(body?.conversation_id || "").trim() || null;
-  const company_lead_id_in = String(body?.company_lead_id || "").trim() || null;
 
   const contact_name = body?.contact_name ? String(body.contact_name).trim() : null;
   const contact_email = body?.contact_email ? String(body.contact_email).trim().toLowerCase() : null;
@@ -114,7 +64,6 @@ export async function POST(req: Request) {
   const description = body?.description ? String(body.description).trim() : null;
 
   const meta = body?.meta ?? {};
-
   const now = new Date();
 
   // Fetch hold
@@ -142,7 +91,7 @@ export async function POST(req: Request) {
     conversation_id_in ||
     (String((hold as any).conversation_id || "").trim() || null);
 
-  // (Optional) validate conversation belongs to company
+  // Validate conversation belongs to company (if present)
   if (conversation_id) {
     const { data: conv } = await supabaseServer
       .from("conversations")
@@ -155,12 +104,14 @@ export async function POST(req: Request) {
     }
   }
 
-  // Resolve company_lead_id (preferred)
-  const resolvedCompanyLeadId = await resolveCompanyLeadId({
+  // ✅ Lead-first: always resolve or create a company_lead_id (NO NULLS anymore)
+  const lead = await findOrCreateCompanyLead({
     company_id,
-    company_lead_id: company_lead_id_in || (String((hold as any).company_lead_id || "").trim() || null),
-    conversation_id,
-    contact_email,
+    conversation_id, // if null, leadMerge will create a conversation
+    name: contact_name,
+    email: contact_email,
+    phone: contact_phone,
+    source: "widget_booking",
   });
 
   // Final conflict check (appointments + active holds excluding current hold)
@@ -212,7 +163,7 @@ export async function POST(req: Request) {
   // Create appointment
   const insertPayload: any = {
     company_id,
-    company_lead_id: resolvedCompanyLeadId, // ✅ preferred link (company_leads)
+    company_lead_id: String((lead as any).id),
     conversation_id,
 
     start_at: asIso(start),
@@ -241,6 +192,8 @@ export async function POST(req: Request) {
     .maybeSingle();
 
   if (iErr) return NextResponse.json({ error: "appointment_create_failed" }, { status: 500 });
+
+  await updateLeadBookingSignals(String((lead as any).id));
 
   return NextResponse.json({ ok: true, appointment: appt });
 }

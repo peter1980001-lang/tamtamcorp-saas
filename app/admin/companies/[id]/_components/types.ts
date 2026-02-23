@@ -34,6 +34,22 @@ export type InviteRow = {
   created_by: string | null;
 };
 
+export type IntegrationProvider = "google_calendar" | "microsoft_calendar" | "hubspot" | "calendly";
+
+export type IntegrationRow = {
+  id: string;
+  company_id: string;
+  provider: IntegrationProvider | string;
+  status: "connected" | "revoked" | "error" | string;
+  account_email: string | null;
+  external_account_id: string | null;
+  token_expires_at: string | null;
+  scopes: string[];
+  provider_meta: any;
+  created_at: string;
+  updated_at: string;
+};
+
 export type DetailResponse = {
   company: Company;
   keys: Keys | null;
@@ -88,6 +104,7 @@ export type Tab =
   | "knowledge"
   | "leads"
   | "calendar"
+  | "integrations"
   | "team"
   | "billing"
   | "settings"

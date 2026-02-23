@@ -5,6 +5,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { resolveCompanyByPublicKey } from "@/lib/publicBooking";
 import { getBookingEntitlement } from "@/lib/bookingEntitlement";
+import { findOrCreateCompanyLead, updateLeadBookingSignals } from "@/lib/leadMerge";
 
 function asIso(d: Date) {
   return d.toISOString();
@@ -36,8 +37,14 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
   }
 
   const body = await req.json().catch(() => null);
+
   const hold_token = String(body?.hold_token || "").trim();
   if (!hold_token) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
+
+  // Contact fields from body (may be missing if client only sends them on /hold)
+  const body_contact_name = body?.contact_name ? String(body.contact_name).trim() : null;
+  const body_contact_email = body?.contact_email ? String(body.contact_email).trim().toLowerCase() : null;
+  const body_contact_phone = body?.contact_phone ? String(body.contact_phone).trim() : null;
 
   const now = new Date();
 
@@ -60,6 +67,26 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !(end > start)) {
     return NextResponse.json({ error: "hold_invalid_time" }, { status: 500 });
   }
+
+  // ✅ Fallback contact from hold.meta.contact (written by /hold route)
+  const holdMeta = ((hold as any).meta ?? {}) as any;
+  const holdContact = (holdMeta?.contact ?? {}) as any;
+
+  const contact_name = body_contact_name ?? (holdContact?.name ? String(holdContact.name).trim() : null);
+  const contact_email =
+    body_contact_email ??
+    (holdContact?.email ? String(holdContact.email).trim().toLowerCase() : null);
+  const contact_phone = body_contact_phone ?? (holdContact?.phone ? String(holdContact.phone).trim() : null);
+
+  // ✅ Public Booking V2: resolve or create lead (email/phone merge)
+  const lead = await findOrCreateCompanyLead({
+    company_id: company.company_id,
+    conversation_id: null, // leadMerge will create a conversation if missing
+    name: contact_name,
+    email: contact_email,
+    phone: contact_phone,
+    source: "public_booking",
+  });
 
   // Final conflict check (appointments + active holds excluding current hold)
   const { data: appts, error: aErr } = await supabaseServer
@@ -107,30 +134,37 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
   if (dErr) return NextResponse.json({ error: "hold_consume_failed" }, { status: 500 });
   if (!deleted) return NextResponse.json({ error: "hold_already_used" }, { status: 409 });
 
-  // Create appointment (public page V1: minimal record)
+  // Create appointment (Public Booking V2: linked to company_leads)
   const { data: appt, error: iErr } = await supabaseServer
     .from("company_appointments")
     .insert({
       company_id: company.company_id,
-      company_lead_id: null,       // V2: lead capture -> company_leads
-      conversation_id: null,       // widget flow only
+      company_lead_id: String((lead as any).id),
+      conversation_id: null,
+
       start_at: asIso(start),
       end_at: asIso(end),
+
       status: "confirmed",
       source: "public_booking",
+
       title: null,
       description: null,
-      contact_name: null,
-      contact_email: null,
-      contact_phone: null,
+
+      contact_name,
+      contact_email,
+      contact_phone,
+
       meta: {
-        hold_meta: (hold as any).meta ?? {},
+        hold_meta: holdMeta,
       },
     })
     .select("*")
     .maybeSingle();
 
   if (iErr) return NextResponse.json({ error: "appointment_create_failed" }, { status: 500 });
+
+  await updateLeadBookingSignals(String((lead as any).id));
 
   return NextResponse.json({ ok: true, appointment: appt });
 }

@@ -1,3 +1,4 @@
+// app/api/admin/companies/[id]/leads/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -63,10 +64,34 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
 
   const body = await req.json().catch(() => null);
-  const ids: string[] = Array.isArray(body?.ids) ? body.ids.filter(Boolean) : [];
+  const ids: string[] = Array.isArray(body?.ids) ? body.ids.map(String).map((s) => s.trim()).filter(Boolean) : [];
 
   if (ids.length === 0) {
     return NextResponse.json({ error: "no_ids_provided" }, { status: 400 });
+  }
+
+  // ✅ Prevent deleting leads that are referenced by appointments (Lead-first enforcement)
+  const { data: appts, error: aErr } = await supabaseServer
+    .from("company_appointments")
+    .select("id,company_lead_id")
+    .eq("company_id", company_id)
+    .in("company_lead_id", ids)
+    .limit(500);
+
+  if (aErr) {
+    return NextResponse.json({ error: "appointments_check_failed", details: aErr.message }, { status: 500 });
+  }
+
+  if ((appts?.length || 0) > 0) {
+    const blocked = Array.from(new Set((appts || []).map((r: any) => String(r.company_lead_id)).filter(Boolean)));
+    return NextResponse.json(
+      {
+        error: "lead_has_appointments",
+        message: "One or more leads cannot be deleted because they have appointments.",
+        blocked_lead_ids: blocked,
+      },
+      { status: 409 }
+    );
   }
 
   // 🔒 tenant-scope enforced

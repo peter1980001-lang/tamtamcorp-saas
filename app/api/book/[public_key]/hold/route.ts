@@ -40,7 +40,13 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
 
   const start_at = String(body?.start_at || "").trim();
   const end_at = String(body?.end_at || "").trim();
-  const meta = body?.meta ?? {};
+
+  // ✅ Public Booking V2: optional pre-capture contact fields for the hold
+  const contact_name = body?.contact_name ? String(body.contact_name).trim() : null;
+  const contact_email = body?.contact_email ? String(body.contact_email).trim().toLowerCase() : null;
+  const contact_phone = body?.contact_phone ? String(body.contact_phone).trim() : null;
+
+  const metaIn = body?.meta ?? {};
 
   if (!start_at || !end_at) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
 
@@ -87,15 +93,27 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
 
   const hold_token = crypto.randomBytes(24).toString("hex");
 
+  // ✅ Store contact fields inside meta for fallback (book can read hold_meta later)
+  const meta = {
+    ...metaIn,
+    contact: {
+      name: contact_name,
+      email: contact_email,
+      phone: contact_phone,
+    },
+  };
+
   const { error: iErr } = await supabaseServer.from("company_appointment_holds").insert({
     company_id: company.company_id,
     hold_token,
     start_at: asIso(start),
     end_at: asIso(end),
     expires_at: asIso(expires),
+
     // public booking page: no conversation_id, no company_lead_id by default
     conversation_id: null,
     company_lead_id: null,
+
     meta,
   });
 

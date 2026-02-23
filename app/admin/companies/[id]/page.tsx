@@ -21,6 +21,7 @@ import TabLimits from "./_components/TabLimits";
 import TabDomains from "./_components/TabDomains";
 import TabEmbed from "./_components/TabEmbed";
 import TabTestChat from "./_components/TabTestChat";
+import TabIntegrations from "./_components/TabIntegrations";
 
 const BASE_TABS: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
@@ -31,6 +32,7 @@ const BASE_TABS: { key: Tab; label: string }[] = [
   { key: "team", label: "Team" },
   { key: "billing", label: "Billing" },
   { key: "settings", label: "Settings" },
+{ key: "integrations", label: "Integrations" },
 ];
 
 // Visible for owner + admins (simple: they can test bot vs knowledge)
@@ -60,6 +62,7 @@ const ALL_TABS: Tab[] = [
   "domains",
   "embed",
   "test-chat",
+"integrations",
 ];
 
 export default function CompanyDetailPage() {
@@ -249,6 +252,7 @@ export default function CompanyDetailPage() {
             {tab === "team" && <TabTeam companyId={id!} isOwner={isOwner} setToast={setToast} />}
             {tab === "billing" && <TabBilling companyId={id!} setToast={setToast} />}
             {tab === "settings" && <TabSettings companyId={id!} data={data} isOwner={isOwner} setData={setData} setToast={setToast} />}
+{tab === "integrations" && <TabIntegrations companyId={id!} setToast={setToast} />}
 
             {/* Shared test chat for owner + admins */}
             {tab === "test-chat" && <TabTestChat companyId={id!} data={data} setToast={setToast} />}
