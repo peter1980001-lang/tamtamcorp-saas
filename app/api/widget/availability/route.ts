@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
+import { getExternalBusyBlocks } from "@/lib/integrations/calendarBusy";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
@@ -162,7 +163,6 @@ export async function POST(req: Request) {
   const localNow = getTzParts(now, tz);
   const localStartDate = { year: localNow.year, month: localNow.month, day: localNow.day };
 
-  // We'll query exceptions by date range in UTC-derived local range
   // Build local end date by adding max_days_ahead
   const localEndDate = addDaysLocal(localStartDate, settings.max_days_ahead);
 
@@ -193,13 +193,16 @@ export async function POST(req: Request) {
   }
 
   // Load busy appointments + holds in UTC range
+  const rangeStartIso = asIso(new Date(minStart.getTime() - 24 * 60 * 60_000));
+  const rangeEndIso = asIso(maxEnd);
+
   const { data: appts, error: aErr } = await supabaseServer
     .from("company_appointments")
     .select("start_at,end_at,status")
     .eq("company_id", company_id)
     .neq("status", "cancelled")
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (aErr) return NextResponse.json({ error: "appointments_load_failed" }, { status: 500 });
 
@@ -208,8 +211,8 @@ export async function POST(req: Request) {
     .select("start_at,end_at,expires_at")
     .eq("company_id", company_id)
     .gt("expires_at", asIso(now))
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (hErr) return NextResponse.json({ error: "holds_load_failed" }, { status: 500 });
 
@@ -228,6 +231,15 @@ export async function POST(req: Request) {
     const s = new Date(String((ho as any).start_at));
     const e = new Date(String((ho as any).end_at));
     busy.push({ start: new Date(s.getTime() - expandBefore), end: new Date(e.getTime() + expandAfter) });
+  }
+
+  // ✅ External busy blocks (fail-open)
+  const ext = await getExternalBusyBlocks(company_id, rangeStartIso, rangeEndIso);
+  for (const b of ext.blocks) {
+    busy.push({
+      start: new Date(b.start.getTime() - expandBefore),
+      end: new Date(b.end.getTime() + expandAfter),
+    });
   }
 
   // Generate next slots
@@ -267,8 +279,6 @@ export async function POST(req: Request) {
     if (!windows.length) continue;
 
     for (const w of windows) {
-      // Generate slots within window
-      // slotStart from w.start to w.end-duration
       const windowStartUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.startH, minute: w.startM }, tz);
       const windowEndUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.endH, minute: w.endM }, tz);
 
@@ -285,7 +295,6 @@ export async function POST(req: Request) {
         if (slotStart < minStart) continue;
         if (slotEnd > maxEnd) continue;
 
-        // Busy check
         let ok = true;
         for (const b of busy) {
           if (intervalsOverlap(slotStart, slotEnd, b.start, b.end)) {
@@ -307,5 +316,8 @@ export async function POST(req: Request) {
     duration_minutes: duration,
     step_minutes,
     slots: results,
+
+    external_busy_warning: ext.warning,
+    external_busy_sources: ext.sources,
   });
 }

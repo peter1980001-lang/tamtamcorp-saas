@@ -4,6 +4,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { requireCompanyAccess } from "@/lib/adminGuard";
+import { getExternalBusyBlocks } from "@/lib/integrations/calendarBusy";
 
 function clampInt(v: any, min: number, max: number, fallback: number) {
   const n = Number(v);
@@ -19,14 +20,7 @@ function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-/**
- * Convert a "local time in tz" into a UTC Date.
- * Intl-based offset correction (no external libs).
- */
-function zonedTimeToUtc(
-  params: { year: number; month: number; day: number; hour: number; minute: number },
-  timeZone: string
-) {
+function zonedTimeToUtc(params: { year: number; month: number; day: number; hour: number; minute: number }, timeZone: string) {
   const approxUtc = new Date(Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0));
   const dtf = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -69,7 +63,7 @@ function getTzParts(d: Date, timeZone: string) {
   const hour = Number(get("hour"));
   const minute = Number(get("minute"));
 
-  const wd = get("weekday"); // "Mon", "Tue", ...
+  const wd = get("weekday");
   const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const weekday = map[wd] ?? 0;
 
@@ -118,11 +112,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const body = await req.json().catch(() => null);
 
-  const duration_minutes = clampInt(body?.duration_minutes, 5, 240, 0); // 0 => default
+  const duration_minutes = clampInt(body?.duration_minutes, 5, 240, 0);
   const step_minutes = clampInt(body?.step_minutes, 5, 60, 15);
   const limit = clampInt(body?.limit, 1, 80, 24);
 
-  // For reschedule: ignore the appointment being rescheduled (so it doesn't block its own slot)
   const exclude_appointment_id = String(body?.exclude_appointment_id || "").trim() || null;
 
   const settings = await loadSettings(company_id);
@@ -133,7 +126,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const minStart = new Date(now.getTime() + settings.min_notice_minutes * 60_000);
   const maxEnd = new Date(now.getTime() + settings.max_days_ahead * 24 * 60 * 60_000);
 
-  // Weekly rules
   const { data: rules, error: rErr } = await supabaseServer
     .from("company_availability_rules")
     .select("weekday,start_time,end_time,is_active")
@@ -141,10 +133,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .eq("is_active", true);
 
   if (rErr) return NextResponse.json({ error: "rules_load_failed" }, { status: 500 });
-
   const activeRules = (rules || []) as Array<{ weekday: number; start_time: string; end_time: string; is_active: boolean }>;
 
-  // Exceptions in local date span
   const localNow = getTzParts(now, tz);
   const localStartDate = { year: localNow.year, month: localNow.month, day: localNow.day };
   const localEndDate = addDaysLocal(localStartDate, settings.max_days_ahead);
@@ -175,14 +165,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
   }
 
-  // Busy appointments + holds
+  const rangeStartIso = asIso(new Date(minStart.getTime() - 24 * 60 * 60_000));
+  const rangeEndIso = asIso(maxEnd);
+
   let apptQ = supabaseServer
     .from("company_appointments")
     .select("id,start_at,end_at,status")
     .eq("company_id", company_id)
     .neq("status", "cancelled")
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (exclude_appointment_id) apptQ = apptQ.neq("id", exclude_appointment_id);
 
@@ -194,8 +186,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .select("start_at,end_at,expires_at")
     .eq("company_id", company_id)
     .gt("expires_at", asIso(now))
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (hErr) return NextResponse.json({ error: "holds_load_failed" }, { status: 500 });
 
@@ -213,6 +205,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const s = new Date(String((ho as any).start_at));
     const e = new Date(String((ho as any).end_at));
     busy.push({ start: new Date(s.getTime() - expandBefore), end: new Date(e.getTime() + expandAfter) });
+  }
+
+  const ext = await getExternalBusyBlocks(company_id, rangeStartIso, rangeEndIso);
+  for (const b of ext.blocks) {
+    busy.push({
+      start: new Date(b.start.getTime() - expandBefore),
+      end: new Date(b.end.getTime() + expandAfter),
+    });
   }
 
   const results: Array<{ start_at: string; end_at: string }> = [];
@@ -284,5 +284,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     duration_minutes: duration,
     step_minutes,
     slots: results,
+
+    external_busy_warning: ext.warning,
+    external_busy_sources: ext.sources,
   });
 }

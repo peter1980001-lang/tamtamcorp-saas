@@ -5,6 +5,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { resolveCompanyByPublicKey } from "@/lib/publicBooking";
 import { getBookingEntitlement } from "@/lib/bookingEntitlement";
+import { getExternalBusyBlocks } from "@/lib/integrations/calendarBusy";
 
 function clampInt(v: any, min: number, max: number, fallback: number) {
   const n = Number(v);
@@ -20,17 +21,8 @@ function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-/**
- * Convert a "local time in tz" into a UTC Date.
- * This uses an Intl-based offset correction (works without external libs).
- */
-function zonedTimeToUtc(
-  params: { year: number; month: number; day: number; hour: number; minute: number },
-  timeZone: string
-) {
-  const approxUtc = new Date(
-    Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0)
-  );
+function zonedTimeToUtc(params: { year: number; month: number; day: number; hour: number; minute: number }, timeZone: string) {
+  const approxUtc = new Date(Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0));
   const dtf = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hour12: false,
@@ -45,14 +37,7 @@ function zonedTimeToUtc(
   const parts = dtf.formatToParts(approxUtc);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
 
-  const asIfLocal = Date.UTC(
-    get("year"),
-    get("month") - 1,
-    get("day"),
-    get("hour"),
-    get("minute"),
-    get("second")
-  );
+  const asIfLocal = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
   const intended = Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0);
 
   const diffMs = asIfLocal - intended;
@@ -79,7 +64,7 @@ function getTzParts(d: Date, timeZone: string) {
   const hour = Number(get("hour"));
   const minute = Number(get("minute"));
 
-  const wd = get("weekday"); // "Mon", "Tue", ...
+  const wd = get("weekday");
   const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const weekday = map[wd] ?? 0;
 
@@ -104,9 +89,7 @@ type Settings = {
 async function loadSettings(company_id: string): Promise<Settings> {
   const { data } = await supabaseServer
     .from("company_calendar_settings")
-    .select(
-      "timezone, booking_duration_minutes, buffer_before_minutes, buffer_after_minutes, min_notice_minutes, max_days_ahead"
-    )
+    .select("timezone, booking_duration_minutes, buffer_before_minutes, buffer_after_minutes, min_notice_minutes, max_days_ahead")
     .eq("company_id", company_id)
     .maybeSingle();
 
@@ -126,12 +109,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
   const company = await resolveCompanyByPublicKey(public_key);
   if (!company) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  // ✅ Entitlement only for "locked" indicator (do NOT block viewing slots)
   const ent = await getBookingEntitlement(company.company_id);
 
   const body = await req.json().catch(() => null);
 
-  const duration_minutes = clampInt(body?.duration_minutes, 5, 240, 0); // 0 = default
+  const duration_minutes = clampInt(body?.duration_minutes, 5, 240, 0);
   const step_minutes = clampInt(body?.step_minutes, 5, 60, 15);
   const limit = clampInt(body?.limit, 1, 50, 12);
 
@@ -140,12 +122,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
 
   const duration = duration_minutes > 0 ? duration_minutes : settings.booking_duration_minutes;
 
-  // Time range
   const now = new Date();
   const minStart = new Date(now.getTime() + settings.min_notice_minutes * 60_000);
   const maxEnd = new Date(now.getTime() + settings.max_days_ahead * 24 * 60 * 60_000);
 
-  // Load weekly rules
   const { data: rules, error: rErr } = await supabaseServer
     .from("company_availability_rules")
     .select("weekday,start_time,end_time,is_active")
@@ -153,26 +133,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     .eq("is_active", true);
 
   if (rErr) return NextResponse.json({ error: "rules_load_failed" }, { status: 500 });
-  const activeRules = (rules || []) as Array<{
-    weekday: number;
-    start_time: string;
-    end_time: string;
-    is_active: boolean;
-  }>;
+  const activeRules = (rules || []) as Array<{ weekday: number; start_time: string; end_time: string; is_active: boolean }>;
 
-  // Load exceptions in date span (local date range)
   const localNow = getTzParts(now, tz);
   const localStartDate = { year: localNow.year, month: localNow.month, day: localNow.day };
   const localEndDate = addDaysLocal(localStartDate, settings.max_days_ahead);
 
-  const startIso = `${String(localStartDate.year).padStart(4, "0")}-${String(localStartDate.month).padStart(
+  const startIso = `${String(localStartDate.year).padStart(4, "0")}-${String(localStartDate.month).padStart(2, "0")}-${String(
+    localStartDate.day
+  ).padStart(2, "0")}`;
+  const endIso = `${String(localEndDate.year).padStart(4, "0")}-${String(localEndDate.month).padStart(2, "0")}-${String(localEndDate.day).padStart(
     2,
     "0"
-  )}-${String(localStartDate.day).padStart(2, "0")}`;
-  const endIso = `${String(localEndDate.year).padStart(4, "0")}-${String(localEndDate.month).padStart(
-    2,
-    "0"
-  )}-${String(localEndDate.day).padStart(2, "0")}`;
+  )}`;
 
   const { data: exceptions, error: eErr } = await supabaseServer
     .from("company_availability_exceptions")
@@ -183,10 +156,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
 
   if (eErr) return NextResponse.json({ error: "exceptions_load_failed" }, { status: 500 });
 
-  const exceptionByDay = new Map<
-    string,
-    { is_closed: boolean; start_time: string | null; end_time: string | null }
-  >();
+  const exceptionByDay = new Map<string, { is_closed: boolean; start_time: string | null; end_time: string | null }>();
   for (const ex of exceptions || []) {
     exceptionByDay.set(String((ex as any).day), {
       is_closed: Boolean((ex as any).is_closed),
@@ -195,14 +165,16 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     });
   }
 
-  // Load busy appointments + holds in UTC range
+  const rangeStartIso = asIso(new Date(minStart.getTime() - 24 * 60 * 60_000));
+  const rangeEndIso = asIso(maxEnd);
+
   const { data: appts, error: aErr } = await supabaseServer
     .from("company_appointments")
     .select("start_at,end_at,status")
     .eq("company_id", company.company_id)
     .neq("status", "cancelled")
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (aErr) return NextResponse.json({ error: "appointments_load_failed" }, { status: 500 });
 
@@ -211,13 +183,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     .select("start_at,end_at,expires_at")
     .eq("company_id", company.company_id)
     .gt("expires_at", asIso(now))
-    .gte("start_at", asIso(new Date(minStart.getTime() - 24 * 60 * 60_000)))
-    .lte("start_at", asIso(maxEnd));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (hErr) return NextResponse.json({ error: "holds_load_failed" }, { status: 500 });
 
   const busy: Array<{ start: Date; end: Date }> = [];
-
   const expandBefore = settings.buffer_before_minutes * 60_000;
   const expandAfter = settings.buffer_after_minutes * 60_000;
 
@@ -233,15 +204,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     busy.push({ start: new Date(s.getTime() - expandBefore), end: new Date(e.getTime() + expandAfter) });
   }
 
-  // Generate next slots
+  const ext = await getExternalBusyBlocks(company.company_id, rangeStartIso, rangeEndIso);
+  for (const b of ext.blocks) {
+    busy.push({
+      start: new Date(b.start.getTime() - expandBefore),
+      end: new Date(b.end.getTime() + expandAfter),
+    });
+  }
+
   const results: Array<{ start_at: string; end_at: string }> = [];
 
   for (let dayOffset = 0; dayOffset <= settings.max_days_ahead && results.length < limit; dayOffset++) {
     const d = addDaysLocal(localStartDate, dayOffset);
-    const dayStr = `${String(d.year).padStart(4, "0")}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(
-      2,
-      "0"
-    )}`;
+    const dayStr = `${String(d.year).padStart(4, "0")}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
 
     const noonUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: 12, minute: 0 }, tz);
     const wd = getTzParts(noonUtc, tz).weekday;
@@ -270,14 +245,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     if (!windows.length) continue;
 
     for (const w of windows) {
-      const windowStartUtc = zonedTimeToUtc(
-        { year: d.year, month: d.month, day: d.day, hour: w.startH, minute: w.startM },
-        tz
-      );
-      const windowEndUtc = zonedTimeToUtc(
-        { year: d.year, month: d.month, day: d.day, hour: w.endH, minute: w.endM },
-        tz
-      );
+      const windowStartUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.startH, minute: w.startM }, tz);
+      const windowEndUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.endH, minute: w.endM }, tz);
 
       const latestStart = new Date(windowEndUtc.getTime() - duration * 60_000);
 
@@ -314,11 +283,15 @@ export async function POST(req: NextRequest, context: { params: Promise<{ public
     step_minutes,
     slots: results,
 
-    // ✅ what the public page needs for upsell state
+    // upsell state
     locked: !ent.can_book,
     reason: ent.reason ?? null,
     plan_key: ent.plan_key ?? null,
     status: (ent as any).status ?? null,
     trial_ends_at: (ent as any).current_period_end ?? null,
+
+    // external sync state
+    external_busy_warning: ext.warning,
+    external_busy_sources: ext.sources,
   });
 }
