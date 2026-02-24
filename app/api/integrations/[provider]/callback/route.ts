@@ -1,9 +1,15 @@
+// app/api/integrations/[provider]/callback/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { PROVIDERS, type ProviderKey } from "@/lib/integrations/providers";
 import { verifyState } from "@/lib/integrations/state";
+
+function abs(req: Request, path: string) {
+  const u = new URL(req.url);
+  return new URL(path, `${u.protocol}//${u.host}`).toString();
+}
 
 async function exchangeCode(provider: ProviderKey, code: string) {
   const cfg = PROVIDERS[provider];
@@ -44,7 +50,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
   const stateRaw = String(url.searchParams.get("state") || "").trim();
   const err = String(url.searchParams.get("error") || "").trim();
 
-  if (err) return NextResponse.redirect(`/admin/companies?oauth_error=${encodeURIComponent(err)}`);
+  if (err) {
+    return NextResponse.redirect(abs(req, `/admin/companies?oauth_error=${encodeURIComponent(err)}`));
+  }
   if (!code || !stateRaw) return NextResponse.json({ error: "missing_code_or_state" }, { status: 400 });
 
   const state = verifyState(stateRaw);
@@ -78,5 +86,5 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
 
   if (upErr) return NextResponse.json({ error: "db_upsert_failed", details: upErr.message }, { status: 500 });
 
-  return NextResponse.redirect(`/admin/companies/${company_id}?tab=integrations`);
+  return NextResponse.redirect(abs(req, `/admin/companies/${company_id}?tab=integrations`));
 }
