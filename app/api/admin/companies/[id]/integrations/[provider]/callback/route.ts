@@ -14,6 +14,7 @@ async function exchangeCode(provider: ProviderKey, code: string) {
 
   if (!client_id || !client_secret || !redirect_uri) throw new Error("missing_oauth_env");
 
+  // Most providers accept x-www-form-urlencoded for token exchange.
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
   body.set("code", code);
@@ -59,6 +60,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
   const expires_in = Number(tok.expires_in || 0);
   const token_expires_at = expires_in ? new Date(Date.now() + expires_in * 1000).toISOString() : null;
 
+  // store/upsert
   const { error: upErr } = await supabaseServer
     .from("company_integrations")
     .upsert(
@@ -78,5 +80,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
 
   if (upErr) return NextResponse.json({ error: "db_upsert_failed", details: upErr.message }, { status: 500 });
 
+  // back to company page integrations tab
   return NextResponse.redirect(`/admin/companies/${company_id}?tab=integrations`);
 }
