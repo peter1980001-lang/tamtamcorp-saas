@@ -40,6 +40,39 @@ async function exchangeCode(provider: ProviderKey, code: string) {
   return json;
 }
 
+async function tryFetchAccount(provider: ProviderKey, access_token: string): Promise<{ account_email?: string | null; external_account_id?: string | null }> {
+  if (!access_token) return {};
+
+  try {
+    if (provider === "google_calendar") {
+      // Google userinfo (email)
+      const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return {};
+      const email = json?.email ? String(json.email) : null;
+      return { account_email: email };
+    }
+
+    if (provider === "microsoft_calendar") {
+      // Microsoft Graph /me
+      const res = await fetch("https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName", {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return {};
+      const id = json?.id ? String(json.id) : null;
+      const email = (json?.mail || json?.userPrincipalName) ? String(json.mail || json.userPrincipalName) : null;
+      return { account_email: email, external_account_id: id };
+    }
+
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: string }> }) {
   const { provider } = await ctx.params;
   const p = String(provider || "").trim() as ProviderKey;
@@ -67,6 +100,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
   const expires_in = Number(tok.expires_in || 0);
   const token_expires_at = expires_in ? new Date(Date.now() + expires_in * 1000).toISOString() : null;
 
+  // Best-effort: fetch account info (doesn't block connection)
+  const acct = await tryFetchAccount(p, access_token);
+
   const { error: upErr } = await supabaseServer
     .from("company_integrations")
     .upsert(
@@ -79,6 +115,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ provider: s
         token_expires_at,
         scopes: (PROVIDERS[p].scopes || []) as any,
         provider_meta: tok || {},
+
+        // ✅ new fields
+        account_email: acct.account_email ?? null,
+        external_account_id: acct.external_account_id ?? null,
+
         updated_at: new Date().toISOString(),
       },
       { onConflict: "company_id,provider" }
