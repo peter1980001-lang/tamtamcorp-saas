@@ -4,25 +4,15 @@
 
   var publicKey = script.getAttribute("data-public-key") || script.getAttribute("data-client") || "";
   publicKey = String(publicKey || "").trim();
+
   if (!publicKey) {
     console.error("[TamTam Widget] Missing data-public-key");
     return;
   }
 
   var host = script.getAttribute("data-host") || "https://tamtamcorp-saas-pcwl.vercel.app";
-  var position = script.getAttribute("data-position") || "right";
+  var position = script.getAttribute("data-position") || "right"; // "right" | "left"
   var zIndex = script.getAttribute("data-z") || "2147483000";
-
-  // Optional brand hint (accent only, no yellow tint)
-  var accent = String(script.getAttribute("data-accent") || "#111111").trim();
-  function safeCssColor(s) {
-    s = String(s || "").trim();
-    if (!s) return "";
-    if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) return s;
-    if (/^(rgb|rgba|hsl|hsla)\(/i.test(s)) return s;
-    return "";
-  }
-  accent = safeCssColor(accent) || "#111111";
 
   function el(tag, props) {
     var node = document.createElement(tag);
@@ -36,12 +26,14 @@
     return node;
   }
 
-  // Modern minimal icon (spark/ai)
+  // Minimal ultra-modern chat outline icon
   var icon = `
 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-  <path d="M7.5 12c0-3.314 2.686-6 6-6h3a3 3 0 0 1 3 3v2.5c0 3.314-2.686 6-6 6H12l-3.5 2.5V17.5h-1c-3.314 0-6-2.686-6-6V10a3 3 0 0 1 3-3h2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M6 4l.7 2L9 6.7 7 7.4 6.3 9.4 5.6 7.4 3.6 6.7 5.6 6 6 4Z" fill="currentColor"/>
-  <path d="M18 2l.8 2.2L21 5l-2.2.8L18 8l-.8-2.2L15 5l2.2-.8L18 2Z" fill="currentColor"/>
+  <path d="M6 6.5h12a2.5 2.5 0 0 1 2.5 2.5v4a5 5 0 0 1-5 5H11l-5 3v-3H6A2.5 2.5 0 0 1 3.5 15.5V9A2.5 2.5 0 0 1 6 6.5Z"
+        stroke="currentColor"
+        stroke-width="1.7"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
 </svg>`;
 
   var css = `
@@ -50,69 +42,104 @@
   bottom: 20px;
   ${position}: 20px;
   z-index: ${zIndex};
-  width: 56px;
-  height: 56px;
+
+  width: 58px;
+  height: 58px;
   border-radius: 999px;
-  border: 1px solid rgba(17,17,17,0.10);
-  background: rgba(255,255,255,0.96);
-  box-shadow: 0 18px 55px rgba(0,0,0,0.18);
-  cursor: pointer;
+
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(255,255,255,0.45);
+
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.70);
+
   display:flex;
   align-items:center;
   justify-content:center;
   padding: 0;
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 140ms ease, box-shadow 140ms ease;
-}
-#tamtam-launcher-btn:hover{ transform: translateY(-1px); box-shadow: 0 22px 70px rgba(0,0,0,0.22); }
-#tamtam-launcher-btn:active{ transform: translateY(0px) scale(0.98); }
-#tamtam-launcher-btn::after{
-  content:"";
-  position:absolute;
-  inset:-3px;
-  border-radius:999px;
-  border:2px solid color-mix(in srgb, ${accent} 18%, transparent 82%);
-  pointer-events:none;
-}
-#tamtam-launcher-btn svg{ width:24px; height:24px; color:#111; }
+  cursor: pointer;
 
-#tamtam-widget-wrap{
-  position: fixed;
-  bottom: 86px;
-  ${position}: 20px;
-  width: 392px;
-  height: 600px;
-  border-radius: 22px;
-  overflow: hidden;
-  background: #fff;
-  z-index: ${zIndex};
-  display: none;
-  box-shadow: 0 22px 80px rgba(0,0,0,0.22);
-  border: 1px solid rgba(17,17,17,0.10);
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
-#tamtam-widget-iframe{
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display:block;
-  background:#fff;
+
+#tamtam-launcher-btn:hover{
+  transform: translateY(-2px);
+  box-shadow:
+    0 28px 80px rgba(0,0,0,0.28),
+    inset 0 1px 0 rgba(255,255,255,0.75);
+}
+
+#tamtam-launcher-btn:active{
+  transform: translateY(0px) scale(0.98);
+}
+
+#tamtam-launcher-btn svg{
+  width: 22px;
+  height: 22px;
+  color: #111;
 }
 
 #tamtam-widget-backdrop{
   position: fixed;
   inset: 0;
-  z-index: ${zIndex - 1};
+  z-index: ${Number(zIndex) - 1};
   display: none;
-  background: rgba(0,0,0,0.00);
+
+  background: rgba(0,0,0,0.18);
+
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
+
+#tamtam-widget-wrap{
+  position: fixed;
+  bottom: 90px;
+  ${position}: 20px;
+  z-index: ${zIndex};
+
+  width: 420px;
+  height: 640px;
+
+  border-radius: 28px;
+
+  background: rgba(255,255,255,0.72);
+  border: 1px solid rgba(255,255,255,0.45);
+
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+
+  box-shadow:
+    0 40px 100px rgba(0,0,0,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.60);
+
+  overflow: hidden;
+  display: none;
+}
+
+#tamtam-widget-iframe{
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display:block;
+  background: transparent;
+}
+
 @media (max-width: 480px){
   #tamtam-widget-wrap{
     ${position}: 10px;
-    bottom: 76px;
+    bottom: 78px;
     width: calc(100vw - 20px);
     height: min(78vh, 720px);
   }
-  #tamtam-launcher-btn{ ${position}: 14px; bottom: 14px; }
+  #tamtam-launcher-btn{
+    ${position}: 14px;
+    bottom: 14px;
+  }
 }
 `;
   document.head.appendChild(el("style", { html: css }));
@@ -121,6 +148,7 @@
   btn.innerHTML = icon;
 
   var backdrop = el("div", { id: "tamtam-widget-backdrop" });
+
   var frameWrap = el("div", { id: "tamtam-widget-wrap" });
 
   var iframe = el("iframe", { id: "tamtam-widget-iframe", title: "Chat Widget" });
