@@ -53,9 +53,17 @@
   width: 56px;
   height: 56px;
   border-radius: 999px;
-  border: 1px solid rgba(17,17,17,0.10);
-  background: rgba(255,255,255,0.96);
-  box-shadow: 0 18px 55px rgba(0,0,0,0.18);
+
+  /* GLASS */
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(255,255,255,0.45);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+
+  box-shadow:
+    0 18px 55px rgba(0,0,0,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.75);
+
   cursor: pointer;
   display:flex;
   align-items:center;
@@ -64,17 +72,38 @@
   -webkit-tap-highlight-color: transparent;
   transition: transform 140ms ease, box-shadow 140ms ease;
 }
-#tamtam-launcher-btn:hover{ transform: translateY(-1px); box-shadow: 0 22px 70px rgba(0,0,0,0.22); }
+#tamtam-launcher-btn:hover{
+  transform: translateY(-2px);
+  box-shadow:
+    0 24px 80px rgba(0,0,0,0.26),
+    inset 0 1px 0 rgba(255,255,255,0.80);
+}
 #tamtam-launcher-btn:active{ transform: translateY(0px) scale(0.98); }
+
 #tamtam-launcher-btn::after{
   content:"";
   position:absolute;
   inset:-3px;
   border-radius:999px;
-  border:2px solid color-mix(in srgb, ${accent} 18%, transparent 82%);
+
+  /* subtle ring, NOT yellow */
+  border: 2px solid rgba(17,17,17,0.10);
   pointer-events:none;
 }
+
 #tamtam-launcher-btn svg{ width:24px; height:24px; color:#111; }
+
+#tamtam-widget-backdrop{
+  position: fixed;
+  inset: 0;
+  z-index: ${zIndex - 1};
+  display: none;
+
+  /* dim + blur behind */
+  background: rgba(0,0,0,0.18);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
 
 #tamtam-widget-wrap{
   position: fixed;
@@ -82,36 +111,54 @@
   ${position}: 20px;
   width: 392px;
   height: 600px;
-  border-radius: 22px;
+  border-radius: 26px;
   overflow: hidden;
-  background: #fff;
+
+  /* GLASS */
+  background: rgba(255,255,255,0.62);
+  border: 1px solid rgba(255,255,255,0.45);
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+
+  box-shadow:
+    0 30px 100px rgba(0,0,0,0.26),
+    inset 0 1px 0 rgba(255,255,255,0.70);
+
   z-index: ${zIndex};
   display: none;
-  box-shadow: 0 22px 80px rgba(0,0,0,0.22);
-  border: 1px solid rgba(17,17,17,0.10);
 }
+
+/* Optional: inner frame highlight (premium) */
+#tamtam-widget-wrap::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius: 26px;
+  pointer-events:none;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.65),
+    inset 0 -1px 0 rgba(0,0,0,0.04);
+}
+
 #tamtam-widget-iframe{
   width: 100%;
   height: 100%;
   border: 0;
   display:block;
-  background:#fff;
+
+  /* make iframe look integrated with glass */
+  background: transparent;
 }
 
-#tamtam-widget-backdrop{
-  position: fixed;
-  inset: 0;
-  z-index: ${zIndex - 1};
-  display: none;
-  background: rgba(0,0,0,0.00);
-}
 @media (max-width: 480px){
   #tamtam-widget-wrap{
     ${position}: 10px;
     bottom: 76px;
     width: calc(100vw - 20px);
     height: min(78vh, 720px);
+    border-radius: 24px;
   }
+  #tamtam-widget-wrap::before{ border-radius: 24px; }
   #tamtam-launcher-btn{ ${position}: 14px; bottom: 14px; }
 }
 `;
