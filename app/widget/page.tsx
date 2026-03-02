@@ -353,8 +353,8 @@ export default function WidgetPage() {
   border: 1px solid var(--tt-border);
   border-radius: 26px;
   background: var(--tt-glass);
-  backdrop-filter: blur(22px) saturate(180%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.75);
   overflow: hidden;
 }
@@ -366,7 +366,7 @@ export default function WidgetPage() {
   justify-content:space-between;
   gap:12px;
   padding: 14px 14px 12px 14px;
-  background: rgba(255,255,255,0.34);
+  background: rgba(255,255,255,0.26);
   border-bottom: 1px solid var(--tt-border-soft);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -417,7 +417,7 @@ export default function WidgetPage() {
   box-shadow: 0 0 0 3px rgba(0,0,0,0.08);
 }
 
-.tt-shell{ height: 600px; display:flex; flex-direction:column; }
+.tt-shell{ height: 100%; display:flex; flex-direction:column; }
 .tt-chat{ flex:1; min-height:0; overflow:auto; padding:16px; background: transparent; }
 
 .tt-row{ display:flex; margin-bottom:10px; }
@@ -454,7 +454,7 @@ export default function WidgetPage() {
   display:flex;
   gap:10px;
   padding:12px;
-  background: rgba(255,255,255,0.34);
+  background: rgba(255,255,255,0.26);
   border-top:1px solid rgba(0,0,0,0.06);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
