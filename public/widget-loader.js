@@ -37,13 +37,12 @@
   }
 
   // Modern minimal icon (spark/ai)
-  var icon = `
+var icon = `
 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-  <path d="M7.5 12c0-3.314 2.686-6 6-6h3a3 3 0 0 1 3 3v2.5c0 3.314-2.686 6-6 6H12l-3.5 2.5V17.5h-1c-3.314 0-6-2.686-6-6V10a3 3 0 0 1 3-3h2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M6 4l.7 2L9 6.7 7 7.4 6.3 9.4 5.6 7.4 3.6 6.7 5.6 6 6 4Z" fill="currentColor"/>
-  <path d="M18 2l.8 2.2L21 5l-2.2.8L18 8l-.8-2.2L15 5l2.2-.8L18 2Z" fill="currentColor"/>
+  <path d="M7 7h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M10 7v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M14 7v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity="0.92"/>
 </svg>`;
-
   var css = `
 #tamtam-launcher-btn{
   position: fixed;
