@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-
 type Msg = { role: "user" | "assistant"; text: string };
 
 type Branding = {
@@ -32,21 +31,27 @@ function isValidEmail(email: string) {
 function safeCssColor(v: any) {
   const s = String(v || "").trim();
   if (!s) return "";
-  // allow #RGB/#RRGGBB/#RRGGBBAA or rgb/rgba/hsl/hsla or css var
   if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) return s;
   if (/^(rgb|rgba|hsl|hsla)\(/i.test(s)) return s;
   if (/^var\(--[a-z0-9\-_]+\)$/i.test(s)) return s;
   return "";
 }
 
+function safePublicLogoUrl(url: any) {
+  const s = String(url || "").trim();
+  if (!s) return null;
+  // avoid mixed-content issues if someone pasted http://
+  if (s.startsWith("http://")) return "https://" + s.slice("http://".length);
+  return s;
+}
+
 function applyBrandingCSS(branding: Branding) {
   const root = document.documentElement;
 
-  // TamTam default theme
   const defaults = {
     primary: "#111111",
     secondary: "#ffffff",
-    accent: "#F5C400", // subtle TamTam yellow
+    accent: "#F5C400",
   };
 
   const primary = safeCssColor(branding.primary) || defaults.primary;
@@ -57,16 +62,25 @@ function applyBrandingCSS(branding: Branding) {
   root.style.setProperty("--tt-secondary", secondary);
   root.style.setProperty("--tt-accent", accent);
 
-  // derived
+  // base
   root.style.setProperty("--tt-bg", secondary);
   root.style.setProperty("--tt-fg", primary);
-  root.style.setProperty("--tt-border", "rgba(17,17,17,0.15)");
-  root.style.setProperty("--tt-muted", "rgba(17,17,17,0.65)");
+
+  // premium neutrals + subtle brand tint
+  root.style.setProperty("--tt-border", "rgba(17,17,17,0.10)");
+  root.style.setProperty("--tt-muted", "rgba(17,17,17,0.62)");
   root.style.setProperty("--tt-panel", "#ffffff");
+
   root.style.setProperty("--tt-user", primary);
   root.style.setProperty("--tt-user-text", "#ffffff");
-  root.style.setProperty("--tt-assistant", "rgba(17,17,17,0.06)");
+
+  root.style.setProperty("--tt-assistant", "rgba(17,17,17,0.045)");
   root.style.setProperty("--tt-assistant-text", primary);
+
+  root.style.setProperty("--tt-shadow", "0 14px 40px rgba(17,17,17,0.10)");
+  root.style.setProperty("--tt-shadow-soft", "0 10px 24px rgba(17,17,17,0.08)");
+  root.style.setProperty("--tt-header-bg", "color-mix(in srgb, var(--tt-accent) 8%, white 92%)");
+  root.style.setProperty("--tt-ring", "color-mix(in srgb, var(--tt-accent) 22%, transparent 78%)");
 }
 
 export default function WidgetPage() {
@@ -82,7 +96,6 @@ export default function WidgetPage() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // theming
   const [branding, setBranding] = useState<Branding>({
     primary: null,
     secondary: null,
@@ -91,7 +104,6 @@ export default function WidgetPage() {
     company_name: null,
     greeting: null,
   });
-  const [themeReady, setThemeReady] = useState(false);
 
   // lead capture
   const [leadMode, setLeadMode] = useState(false);
@@ -105,10 +117,11 @@ export default function WidgetPage() {
   const [leadSubmitting, setLeadSubmitting] = useState(false);
 
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const canSend = useMemo(
-    () => !!token && !!conversationId && !busy && input.trim().length > 0,
-    [token, conversationId, busy, input]
+    () => !!token && !!conversationId && !busy && input.trim().length > 0 && status === "ready",
+    [token, conversationId, busy, input, status]
   );
 
   useEffect(() => {
@@ -119,10 +132,7 @@ export default function WidgetPage() {
     setPublicKey(pk);
     setSite(s);
 
-    // default theme immediately (prevents flash)
     applyBrandingCSS({});
-    setThemeReady(true);
-
     setMessages([{ role: "assistant", text: "Hi! How can I help?" }]);
   }, []);
 
@@ -160,22 +170,19 @@ export default function WidgetPage() {
           const bJson = await b.json().catch(() => null);
           if (b.ok) {
             const br = (bJson?.branding || {}) as Branding;
-            setBranding(br);
+            // normalize logo url to avoid http mixed-content
+            const normalized = { ...br, logo_url: safePublicLogoUrl(br.logo_url) };
+            setBranding(normalized);
+            applyBrandingCSS(normalized);
 
-            applyBrandingCSS(br);
+            const greet = String(normalized?.greeting || "").trim();
+            const name = String(normalized?.company_name || "").trim();
 
-            // greeting override (if provided)
-            const greet = String(br?.greeting || "").trim();
-            const name = String(br?.company_name || "").trim();
-
-            if (greet) {
-              setMessages([{ role: "assistant", text: greet }]);
-            } else if (name) {
-              setMessages([{ role: "assistant", text: `Hi! Welcome to ${name}. How can I help?` }]);
-            }
+            if (greet) setMessages([{ role: "assistant", text: greet }]);
+            else if (name) setMessages([{ role: "assistant", text: `Hi! Welcome to ${name}. How can I help?` }]);
           }
         } catch {
-          // ignore bootstrap errors, keep default theme
+          // ignore bootstrap errors
         }
 
         setStatus("conversation");
@@ -193,6 +200,7 @@ export default function WidgetPage() {
 
         setConversationId(String(convJson?.conversation?.id || ""));
         setStatus("ready");
+        setTimeout(() => inputRef.current?.focus(), 50);
       } catch (e: any) {
         setStatus(`boot_error:${e?.message || "unknown"}`);
       }
@@ -202,7 +210,7 @@ export default function WidgetPage() {
   useEffect(() => {
     if (!boxRef.current) return;
     boxRef.current.scrollTop = boxRef.current.scrollHeight;
-  }, [messages, leadMode]);
+  }, [messages, leadMode, busy]);
 
   async function send() {
     if (!canSend) return;
@@ -242,9 +250,10 @@ export default function WidgetPage() {
         setLeadMode(true);
       }
     } catch {
-      setMessages((prev) => [...prev, { role: "assistant", text: "Network error. Please try again." }]);
+      setMessages((prev) => [...prev, { role: "assistant", text: lang === "de" ? "Netzwerkfehler. Bitte erneut versuchen." : "Network error. Please try again." }]);
     } finally {
       setBusy(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }
 
@@ -307,21 +316,41 @@ export default function WidgetPage() {
       setLeadTimeline("");
     } finally {
       setLeadSubmitting(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }
 
   const title = useMemo(() => {
     const name = String(branding.company_name || "").trim();
-    return name ? name : "TamTam Widget";
+    return name ? name : "TamTam";
   }, [branding.company_name]);
+
+  const initials = useMemo(() => {
+    const name = String(branding.company_name || "TamTam").trim();
+    const parts = name.split(/\s+/).filter(Boolean);
+    const a = parts[0]?.[0] || "T";
+    const b = parts[1]?.[0] || parts[0]?.[1] || "T";
+    return (a + b).toUpperCase();
+  }, [branding.company_name]);
+
+  const statusLabel = useMemo(() => {
+    if (status === "ready") return lang === "de" ? "Online" : "Online";
+    if (status === "booting") return lang === "de" ? "Startet…" : "Starting…";
+    if (status === "auth") return lang === "de" ? "Verbindet…" : "Connecting…";
+    if (status === "conversation") return lang === "de" ? "Initialisiert…" : "Initializing…";
+    if (status.startsWith("auth_error")) return lang === "de" ? "Auth Fehler" : "Auth error";
+    if (status.startsWith("conversation_error")) return lang === "de" ? "Fehler" : "Error";
+    if (status.startsWith("boot_error")) return lang === "de" ? "Fehler" : "Error";
+    return status;
+  }, [status, lang]);
 
   return (
     <div
       style={{
-        fontFamily: "system-ui",
+        fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial",
         padding: 14,
         maxWidth: 420,
-        background: "var(--tt-bg)",
+        background: "transparent",
         color: "var(--tt-fg)",
       }}
     >
@@ -332,118 +361,185 @@ export default function WidgetPage() {
           --tt-accent:#F5C400;
           --tt-bg:var(--tt-secondary);
           --tt-fg:var(--tt-primary);
-          --tt-border:rgba(17,17,17,0.15);
-          --tt-muted:rgba(17,17,17,0.65);
+          --tt-border:rgba(17,17,17,0.10);
+          --tt-muted:rgba(17,17,17,0.62);
           --tt-panel:#fff;
           --tt-user:var(--tt-primary);
           --tt-user-text:#fff;
-          --tt-assistant:rgba(17,17,17,0.06);
+          --tt-assistant:rgba(17,17,17,0.045);
           --tt-assistant-text:var(--tt-primary);
+          --tt-shadow:0 14px 40px rgba(17,17,17,0.10);
+          --tt-shadow-soft:0 10px 24px rgba(17,17,17,0.08);
+          --tt-header-bg: color-mix(in srgb, var(--tt-accent) 8%, white 92%);
+          --tt-ring: color-mix(in srgb, var(--tt-accent) 22%, transparent 78%);
         }
-        .tt-card{
+
+        .tt-shell{
           border:1px solid var(--tt-border);
-          border-radius:14px;
+          border-radius:18px;
           background:var(--tt-panel);
+          box-shadow: var(--tt-shadow);
+          overflow:hidden;
         }
-        .tt-header{
+
+        .tt-topbar{
           display:flex;
           align-items:center;
           justify-content:space-between;
-          gap:10px;
+          gap:12px;
+          padding:10px 12px;
+          background: var(--tt-header-bg);
+          border:1px solid var(--tt-border);
+          border-radius:18px;
           margin-bottom:10px;
         }
+
         .tt-brand{
           display:flex;
           align-items:center;
           gap:10px;
           min-width:0;
         }
+
         .tt-logo{
-          width:28px;height:28px;border-radius:8px;
+          width:30px;height:30px;border-radius:10px;
           border:1px solid var(--tt-border);
           object-fit:cover;
           background:#fff;
           flex:0 0 auto;
         }
+
+        .tt-logoFallback{
+          width:30px;height:30px;border-radius:10px;
+          border:1px solid var(--tt-border);
+          background: rgba(255,255,255,0.9);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-weight:900;
+          font-size:12px;
+          color: var(--tt-fg);
+          box-shadow: var(--tt-shadow-soft);
+        }
+
+        .tt-titleWrap{
+          min-width:0;
+          display:flex;
+          flex-direction:column;
+          gap:2px;
+        }
+
         .tt-title{
-          font-weight:800;
-          line-height:1.1;
+          font-weight:900;
+          font-size:14px;
+          line-height:1.15;
           white-space:nowrap;
           overflow:hidden;
           text-overflow:ellipsis;
-          max-width:260px;
+          max-width:240px;
         }
+
+        .tt-sub{
+          font-size:12px;
+          color:var(--tt-muted);
+          white-space:nowrap;
+          overflow:hidden;
+          text-overflow:ellipsis;
+          max-width:240px;
+        }
+
         .tt-badge{
           font-size:12px;
-          padding:4px 8px;
+          padding:6px 10px;
           border-radius:999px;
           border:1px solid var(--tt-border);
           color:var(--tt-muted);
-          background:rgba(255,255,255,0.6);
-        }
-        .tt-chat{
-          height:300px;
-          overflow:auto;
-          padding:12px;
-        }
-        .tt-row{
+          background:rgba(255,255,255,0.75);
           display:flex;
-          margin-bottom:10px;
+          align-items:center;
+          gap:8px;
         }
+
+        .tt-dot{
+          width:8px;height:8px;border-radius:999px;
+          background: var(--tt-accent);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--tt-accent) 18%, transparent 82%);
+        }
+
+        .tt-chat{
+          height:320px;
+          overflow:auto;
+          padding:14px;
+          background: linear-gradient(180deg, rgba(17,17,17,0.015), transparent 30%);
+        }
+
+        .tt-row{ display:flex; margin-bottom:10px; }
         .tt-row.user{ justify-content:flex-end; }
         .tt-row.assistant{ justify-content:flex-start; }
 
         .tt-bubble{
-          max-width:80%;
+          max-width:82%;
           padding:10px 12px;
-          border-radius:14px;
+          border-radius:16px;
           white-space:pre-wrap;
-          line-height:1.35;
+          line-height:1.38;
           border:1px solid transparent;
+          font-size:14px;
         }
         .tt-bubble.user{
           background:var(--tt-user);
           color:var(--tt-user-text);
           border-color:rgba(255,255,255,0.12);
-          border-top-right-radius:6px;
+          border-top-right-radius:8px;
         }
         .tt-bubble.assistant{
           background:var(--tt-assistant);
           color:var(--tt-assistant-text);
-          border-color:rgba(17,17,17,0.08);
-          border-top-left-radius:6px;
+          border-color:rgba(17,17,17,0.06);
+          border-top-left-radius:8px;
         }
 
+        .tt-divider{ height:1px; background:var(--tt-border); }
+
         .tt-composer{
+          padding:12px;
           display:flex;
-          gap:8px;
-          margin-top:10px;
+          gap:10px;
+          align-items:flex-end;
+          background: rgba(255,255,255,0.88);
+          backdrop-filter: blur(10px);
         }
-        .tt-input{
+
+        .tt-textarea{
           flex:1;
           padding:10px 12px;
-          border-radius:12px;
+          border-radius:14px;
           border:1px solid var(--tt-border);
           background:#fff;
           color:var(--tt-fg);
           outline:none;
+          min-height:42px;
+          max-height:120px;
+          resize:none;
+          line-height:1.3;
+          box-shadow: var(--tt-shadow-soft);
         }
-        .tt-input:focus{
+        .tt-textarea:focus{
           border-color: color-mix(in srgb, var(--tt-accent) 55%, #111 45%);
-          box-shadow: 0 0 0 3px color-mix(in srgb, var(--tt-accent) 25%, transparent 75%);
+          box-shadow: 0 0 0 3px var(--tt-ring), var(--tt-shadow-soft);
         }
+
         .tt-btn{
           padding:10px 14px;
-          border-radius:12px;
+          border-radius:14px;
           border:1px solid var(--tt-primary);
           background:var(--tt-primary);
           color:#fff;
           cursor:pointer;
+          box-shadow: var(--tt-shadow-soft);
+          font-weight:800;
         }
-        .tt-btn:disabled{
-          opacity:0.55;
-          cursor:not-allowed;
-        }
+        .tt-btn:disabled{ opacity:0.55; cursor:not-allowed; }
         .tt-btn.secondary{
           border:1px solid var(--tt-border);
           background:#fff;
@@ -451,114 +547,147 @@ export default function WidgetPage() {
         }
 
         .tt-lead{
-          margin-top:10px;
-          padding:12px;
+          margin-top:12px;
+          padding:14px;
+          border:1px solid var(--tt-border);
+          border-radius:18px;
+          background:var(--tt-panel);
+          box-shadow: var(--tt-shadow);
         }
-        .tt-lead h3{
-          margin:0 0 8px 0;
-          font-size:14px;
-        }
-        .tt-help{
-          font-size:12px;
-          color:var(--tt-muted);
-          margin-top:8px;
-        }
-        .tt-grid{
-          display:grid;
-          gap:8px;
-        }
-        .tt-textarea{
+        .tt-lead h3{ margin:0 0 8px 0; font-size:14px; font-weight:900; }
+        .tt-help{ font-size:12px; color:var(--tt-muted); margin-top:8px; }
+        .tt-grid{ display:grid; gap:8px; }
+        .tt-input{
           padding:10px 12px;
-          border-radius:12px;
+          border-radius:14px;
+          border:1px solid var(--tt-border);
+          background:#fff;
+          color:var(--tt-fg);
+          outline:none;
+          box-shadow: var(--tt-shadow-soft);
+        }
+        .tt-input:focus{
+          border-color: color-mix(in srgb, var(--tt-accent) 55%, #111 45%);
+          box-shadow: 0 0 0 3px var(--tt-ring), var(--tt-shadow-soft);
+        }
+        .tt-textarea2{
+          padding:10px 12px;
+          border-radius:14px;
           border:1px solid var(--tt-border);
           background:#fff;
           color:var(--tt-fg);
           min-height:78px;
           resize:vertical;
           outline:none;
+          box-shadow: var(--tt-shadow-soft);
         }
-        .tt-textarea:focus{
+        .tt-textarea2:focus{
           border-color: color-mix(in srgb, var(--tt-accent) 55%, #111 45%);
-          box-shadow: 0 0 0 3px color-mix(in srgb, var(--tt-accent) 25%, transparent 75%);
-        }
-        .tt-divider{
-          height:1px;
-          background:var(--tt-border);
-          margin:10px 0;
+          box-shadow: 0 0 0 3px var(--tt-ring), var(--tt-shadow-soft);
         }
       `}</style>
 
-      <div className="tt-header">
+      <div className="tt-topbar">
         <div className="tt-brand">
-          {branding.logo_url ? <img className="tt-logo" src={branding.logo_url} alt="logo" /> : <div className="tt-logo" />}
-          <div className="tt-title">{title}</div>
+          {branding.logo_url ? (
+            <img className="tt-logo" src={String(branding.logo_url)} alt="logo" />
+          ) : (
+            <div className="tt-logoFallback" aria-hidden="true">{initials}</div>
+          )}
+
+          <div className="tt-titleWrap">
+            <div className="tt-title">{title}</div>
+            <div className="tt-sub">{lang === "de" ? "Schnelle Hilfe & Anfrage" : "Quick help & inquiry"}</div>
+          </div>
         </div>
 
-        <div className="tt-badge">{status === "ready" ? (lang === "de" ? "Online" : "Online") : status}</div>
+        <div className="tt-badge" title={status}>
+          <span className="tt-dot" aria-hidden="true" />
+          <span>{statusLabel}</span>
+        </div>
       </div>
 
-      <div className="tt-card">
+      <div className="tt-shell">
         <div ref={boxRef} className="tt-chat">
           {messages.map((m, idx) => (
             <div key={idx} className={`tt-row ${m.role}`}>
               <div className={`tt-bubble ${m.role}`}>
-  <ReactMarkdown
-    remarkPlugins={[remarkGfm]}
-    components={{
-      a: ({ node, ...props }) => (
-        <a
-          {...props}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            color: "var(--tt-accent)",
-            textDecoration: "underline",
-            fontWeight: 600,
-          }}
-        />
-      ),
-    }}
-  >
-    {m.text}
-  </ReactMarkdown>
-</div>
-
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ node, ...props }) => (
+                      <a
+                        {...props}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: "var(--tt-accent)", textDecoration: "underline", fontWeight: 700 }}
+                      />
+                    ),
+                    ul: ({ node, ...props }) => <ul {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
+                    ol: ({ node, ...props }) => <ol {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
+                    li: ({ node, ...props }) => <li {...props} style={{ margin: "4px 0" }} />,
+                    code: ({ node, ...props }) => (
+                      <code
+                        {...props}
+                        style={{
+                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                          fontSize: 13,
+                          background: "rgba(17,17,17,0.06)",
+                          padding: "2px 6px",
+                          borderRadius: 8,
+                        }}
+                      />
+                    ),
+                  }}
+                >
+                  {m.text}
+                </ReactMarkdown>
+              </div>
             </div>
           ))}
         </div>
-      </div>
 
-      <div className="tt-composer">
-        <input
-          className="tt-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={status === "ready" ? (lang === "de" ? "Schreiben..." : "Type...") : "Loading..."}
-          disabled={status !== "ready" || busy}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") send();
-          }}
-        />
-        <button className="tt-btn" onClick={send} disabled={!canSend}>
-          {busy ? "…" : lang === "de" ? "Senden" : "Send"}
-        </button>
+        <div className="tt-divider" />
+
+        <div className="tt-composer">
+          <textarea
+            ref={inputRef}
+            className="tt-textarea"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={status === "ready" ? (lang === "de" ? "Schreibe hier…" : "Type here…") : lang === "de" ? "Wird geladen…" : "Loading…"}
+            disabled={status !== "ready" || busy}
+            rows={1}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            aria-label={lang === "de" ? "Nachricht" : "Message"}
+          />
+
+          <button className="tt-btn" onClick={send} disabled={!canSend}>
+            {busy ? "…" : lang === "de" ? "Senden" : "Send"}
+          </button>
+        </div>
       </div>
 
       {leadMode && (
-        <div className="tt-card tt-lead">
+        <div className="tt-lead">
           <h3>{lang === "de" ? "Kontakt" : "Contact"}</h3>
-          {leadPrompt ? <div style={{ fontSize: 13, color: "var(--tt-muted)", marginBottom: 10 }}>{leadPrompt}</div> : null}
+          {leadPrompt ? <div style={{ fontSize: 13, color: "var(--tt-muted)", marginBottom: 10, lineHeight: 1.35 }}>{leadPrompt}</div> : null}
 
           <div className="tt-grid">
             <input className="tt-input" value={leadName} onChange={(e) => setLeadName(e.target.value)} placeholder={lang === "de" ? "Name (optional)" : "Name (optional)"} />
             <input className="tt-input" value={leadEmail} onChange={(e) => setLeadEmail(e.target.value)} placeholder={lang === "de" ? "E-Mail (optional)" : "Email (optional)"} />
             <input className="tt-input" value={leadPhone} onChange={(e) => setLeadPhone(e.target.value)} placeholder={lang === "de" ? "Telefon (optional)" : "Phone (optional)"} />
 
-            <textarea className="tt-textarea" value={leadIntent} onChange={(e) => setLeadIntent(e.target.value)} placeholder={lang === "de" ? "Worum geht es? (optional)" : "What do you need? (optional)"} />
+            <textarea className="tt-textarea2" value={leadIntent} onChange={(e) => setLeadIntent(e.target.value)} placeholder={lang === "de" ? "Worum geht es? (optional)" : "What do you need? (optional)"} />
             <input className="tt-input" value={leadBudget} onChange={(e) => setLeadBudget(e.target.value)} placeholder={lang === "de" ? "Budget (optional)" : "Budget (optional)"} />
             <input className="tt-input" value={leadTimeline} onChange={(e) => setLeadTimeline(e.target.value)} placeholder={lang === "de" ? "Zeitrahmen (optional)" : "Timeline (optional)"} />
 
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 10 }}>
               <button className="tt-btn" onClick={submitLead} disabled={leadSubmitting}>
                 {leadSubmitting ? "…" : lang === "de" ? "Absenden" : "Submit"}
               </button>
@@ -572,9 +701,6 @@ export default function WidgetPage() {
           </div>
         </div>
       )}
-
-      {/* tiny footer accent line */}
-      <div style={{ marginTop: 10, height: 3, borderRadius: 999, background: "var(--tt-accent)", opacity: 0.9 }} />
     </div>
   );
 }
