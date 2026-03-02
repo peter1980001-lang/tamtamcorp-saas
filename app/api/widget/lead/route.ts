@@ -14,6 +14,12 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function bandFromScore(score: number): "cold" | "warm" | "hot" {
+  if (score >= 60) return "hot";
+  if (score >= 30) return "warm";
+  return "cold";
+}
+
 export async function POST(req: Request) {
   const token = getBearerToken(req);
   if (!token) return NextResponse.json({ error: "missing_token" }, { status: 401 });
@@ -43,7 +49,6 @@ export async function POST(req: Request) {
   if (!email && !phone) return NextResponse.json({ error: "email_or_phone_required" }, { status: 400 });
   if (email && !isValidEmail(email)) return NextResponse.json({ error: "invalid_email" }, { status: 400 });
 
-  // conversation must belong to company
   const { data: conv, error: convErr } = await supabaseServer
     .from("conversations")
     .select("id,company_id")
@@ -53,54 +58,74 @@ export async function POST(req: Request) {
   if (convErr) return NextResponse.json({ error: "db_conversation_failed", details: convErr.message }, { status: 500 });
   if (!conv || String(conv.company_id) !== company_id) return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
 
-  // simple scoring MVP
+  // Load existing lead (best-effort)
+  const { data: existing } = await supabaseServer
+    .from("company_leads")
+    .select("id,name,email,phone,score_total,lead_state,status,qualification_json,consents_json,tags,intent_score,score_band")
+    .eq("company_id", company_id)
+    .eq("conversation_id", conversation_id)
+    .maybeSingle();
+
+  // Simple enrichment scoring (never decrease)
   let score_total = 0;
-  if (email) score_total += 10;
-  if (phone) score_total += 10;
+  if (email || existing?.email) score_total += 25;
+  if (phone || existing?.phone) score_total += 25;
   if (intent && intent.length >= 10) score_total += 10;
   if (budget) score_total += 5;
   if (timeline) score_total += 5;
 
-  const score_band = score_total >= 25 ? "hot" : score_total >= 15 ? "warm" : "cold";
+  const prevScore = Number(existing?.score_total ?? 0);
+  const nextScore = Math.max(prevScore, score_total);
+  const score_band = bandFromScore(nextScore);
 
+  const prevQual = existing?.qualification_json && typeof existing.qualification_json === "object" ? existing.qualification_json : {};
   const qualification_json = {
-    intent,
-    budget,
-    timeline,
+    ...prevQual,
+    intent: intent ?? prevQual.intent ?? null,
+    budget: budget ?? prevQual.budget ?? null,
+    timeline: timeline ?? prevQual.timeline ?? null,
     captured_from: "widget",
   };
 
   const consents_json = {
+    ...(existing?.consents_json && typeof existing.consents_json === "object" ? existing.consents_json : {}),
     marketing: Boolean(body?.consent_marketing ?? false),
     privacy: Boolean(body?.consent_privacy ?? true),
   };
 
-  const insertRow: any = {
+  const row: any = {
     company_id,
     conversation_id,
     channel: "widget",
-    source: "widget",
-    lead_state: "new",
-    status: "new",
-    name,
-    email,
-    phone,
+    source: existing ? (existing as any).source ?? "widget" : "widget",
+
+    // keep existing if present
+    lead_state: existing ? existing.lead_state || "discovery" : "discovery",
+    status: existing ? existing.status || "new" : "new",
+
+    name: existing?.name || name || null,
+    email: existing?.email || email || null,
+    phone: existing?.phone || phone || null,
+
     qualification_json,
     consents_json,
-    intent_score: score_total,
-    score_total,
+
+    intent_score: Math.max(Number(existing?.intent_score ?? 0), intent ? 10 : 0),
+    score_total: nextScore,
     score_band,
-    tags: [],
+
+    tags: existing?.tags ?? [],
     last_touch_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 
   const { data, error } = await supabaseServer
     .from("company_leads")
-    .insert(insertRow)
+    .upsert(row, { onConflict: "company_id,conversation_id" })
     .select("*")
     .maybeSingle();
 
-  if (error) return NextResponse.json({ error: "lead_insert_failed", details: error.message }, { status: 500 });
+  if (error) return NextResponse.json({ error: "lead_upsert_failed", details: error.message }, { status: 500 });
 
   return NextResponse.json({ ok: true, lead: data });
 }

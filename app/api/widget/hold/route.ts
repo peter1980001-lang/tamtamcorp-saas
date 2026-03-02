@@ -1,17 +1,21 @@
-// app/api/widget/hold/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import crypto from "crypto";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
-import { getBookingEntitlement } from "@/lib/bookingEntitlement";
+import { getExternalBusyBlocks } from "@/lib/integrations/calendarBusy";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
   const m = h.match(/^Bearer\s+(.+)$/i);
   return m ? m[1] : null;
+}
+
+function clampInt(v: any, min: number, max: number, fallback: number) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
 function asIso(d: Date) {
@@ -20,6 +24,91 @@ function asIso(d: Date) {
 
 function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
+}
+
+function zonedTimeToUtc(
+  params: { year: number; month: number; day: number; hour: number; minute: number },
+  timeZone: string
+) {
+  const approxUtc = new Date(Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0));
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  const parts = dtf.formatToParts(approxUtc);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+
+  const asIfLocal = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  const intended = Date.UTC(params.year, params.month - 1, params.day, params.hour, params.minute, 0);
+
+  const diffMs = asIfLocal - intended;
+  return new Date(approxUtc.getTime() - diffMs);
+}
+
+function getTzParts(d: Date, timeZone: string) {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const parts = dtf.formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+
+  const year = Number(get("year"));
+  const month = Number(get("month"));
+  const day = Number(get("day"));
+  const hour = Number(get("hour"));
+  const minute = Number(get("minute"));
+
+  const wd = get("weekday");
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const weekday = map[wd] ?? 0;
+
+  return { year, month, day, hour, minute, weekday };
+}
+
+function addDaysLocal(date: { year: number; month: number; day: number }, days: number) {
+  const anchor = new Date(Date.UTC(date.year, date.month - 1, date.day, 12, 0, 0));
+  anchor.setUTCDate(anchor.getUTCDate() + days);
+  return { year: anchor.getUTCFullYear(), month: anchor.getUTCMonth() + 1, day: anchor.getUTCDate() };
+}
+
+type Settings = {
+  timezone: string;
+  booking_duration_minutes: number;
+  buffer_before_minutes: number;
+  buffer_after_minutes: number;
+  min_notice_minutes: number;
+  max_days_ahead: number;
+};
+
+async function loadSettings(company_id: string): Promise<Settings> {
+  const { data } = await supabaseServer
+    .from("company_calendar_settings")
+    .select("timezone, booking_duration_minutes, buffer_before_minutes, buffer_after_minutes, min_notice_minutes, max_days_ahead")
+    .eq("company_id", company_id)
+    .maybeSingle();
+
+  return {
+    timezone: String(data?.timezone || "UTC"),
+    booking_duration_minutes: clampInt(data?.booking_duration_minutes, 5, 480, 30),
+    buffer_before_minutes: clampInt(data?.buffer_before_minutes, 0, 240, 0),
+    buffer_after_minutes: clampInt(data?.buffer_after_minutes, 0, 240, 0),
+    min_notice_minutes: clampInt(data?.min_notice_minutes, 0, 43200, 60),
+    max_days_ahead: clampInt(data?.max_days_ahead, 1, 365, 30),
+  };
 }
 
 export async function POST(req: Request) {
@@ -36,59 +125,73 @@ export async function POST(req: Request) {
   const company_id = String(payload.company_id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company" }, { status: 401 });
 
-  // Existing billing gate (keeps your current paywall logic intact)
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
 
-  // ✅ NEW: Booking entitlement gate (Pro or trial active)
-  const ent = await getBookingEntitlement(company_id);
-  if (!ent.can_hold) {
-    return NextResponse.json(
-      { error: "booking_locked", message: ent.reason, trial_ends_at: ent.current_period_end, plan_key: ent.plan_key, status: ent.status },
-      { status: 402 }
-    );
-  }
-
   const body = await req.json().catch(() => null);
 
-  const start_at = String(body?.start_at || "").trim();
-  const end_at = String(body?.end_at || "").trim();
+  const duration_minutes = clampInt(body?.duration_minutes, 5, 240, 0);
+  const step_minutes = clampInt(body?.step_minutes, 5, 60, 15);
+  const limit = clampInt(body?.limit, 1, 50, 12);
 
-  const conversation_id = String(body?.conversation_id || "").trim();
-  const company_lead_id = String(body?.company_lead_id || "").trim(); // preferred
-  const meta = body?.meta ?? {};
+  const settings = await loadSettings(company_id);
+  const tz = settings.timezone;
 
-  if (!start_at || !end_at) return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
-
-  const start = new Date(start_at);
-  const end = new Date(end_at);
-  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !(end > start)) {
-    return NextResponse.json({ error: "invalid_time" }, { status: 400 });
-  }
+  const duration = duration_minutes > 0 ? duration_minutes : settings.booking_duration_minutes;
 
   const now = new Date();
-  const expires = new Date(now.getTime() + 10 * 60_000);
+  const minStart = new Date(now.getTime() + settings.min_notice_minutes * 60_000);
+  const maxEnd = new Date(now.getTime() + settings.max_days_ahead * 24 * 60 * 60_000);
 
-  // (Optional) validate conversation belongs to company if provided (same pattern as widget/messages)
-  if (conversation_id) {
-    const { data: conv } = await supabaseServer
-      .from("conversations")
-      .select("id,company_id")
-      .eq("id", conversation_id)
-      .maybeSingle();
-    if (!conv || String((conv as any).company_id) !== company_id) {
-      return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
-    }
+  const { data: rules, error: rErr } = await supabaseServer
+    .from("company_availability_rules")
+    .select("weekday,start_time,end_time,is_active")
+    .eq("company_id", company_id)
+    .eq("is_active", true);
+
+  if (rErr) return NextResponse.json({ error: "rules_load_failed" }, { status: 500 });
+  const activeRules = (rules || []) as Array<{ weekday: number; start_time: string; end_time: string; is_active: boolean }>;
+
+  const localNow = getTzParts(now, tz);
+  const localStartDate = { year: localNow.year, month: localNow.month, day: localNow.day };
+  const localEndDate = addDaysLocal(localStartDate, settings.max_days_ahead);
+
+  const startIso = `${String(localStartDate.year).padStart(4, "0")}-${String(localStartDate.month).padStart(2, "0")}-${String(
+    localStartDate.day
+  ).padStart(2, "0")}`;
+  const endIso = `${String(localEndDate.year).padStart(4, "0")}-${String(localEndDate.month).padStart(2, "0")}-${String(localEndDate.day).padStart(
+    2,
+    "0"
+  )}`;
+
+  const { data: exceptions, error: eErr } = await supabaseServer
+    .from("company_availability_exceptions")
+    .select("day,is_closed,start_time,end_time")
+    .eq("company_id", company_id)
+    .gte("day", startIso)
+    .lte("day", endIso);
+
+  if (eErr) return NextResponse.json({ error: "exceptions_load_failed" }, { status: 500 });
+
+  const exceptionByDay = new Map<string, { is_closed: boolean; start_time: string | null; end_time: string | null }>();
+  for (const ex of exceptions || []) {
+    exceptionByDay.set(String((ex as any).day), {
+      is_closed: Boolean((ex as any).is_closed),
+      start_time: (ex as any).start_time ?? null,
+      end_time: (ex as any).end_time ?? null,
+    });
   }
 
-  // Conflict check against appointments + active holds
+  const rangeStartIso = asIso(new Date(minStart.getTime() - 24 * 60 * 60_000));
+  const rangeEndIso = asIso(maxEnd);
+
   const { data: appts, error: aErr } = await supabaseServer
     .from("company_appointments")
     .select("start_at,end_at,status")
     .eq("company_id", company_id)
     .neq("status", "cancelled")
-    .lte("start_at", asIso(end))
-    .gte("end_at", asIso(start));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (aErr) return NextResponse.json({ error: "appointments_load_failed" }, { status: 500 });
 
@@ -97,42 +200,107 @@ export async function POST(req: Request) {
     .select("start_at,end_at,expires_at")
     .eq("company_id", company_id)
     .gt("expires_at", asIso(now))
-    .lte("start_at", asIso(end))
-    .gte("end_at", asIso(start));
+    .gte("start_at", rangeStartIso)
+    .lte("start_at", rangeEndIso);
 
   if (hErr) return NextResponse.json({ error: "holds_load_failed" }, { status: 500 });
+
+  const busy: Array<{ start: Date; end: Date }> = [];
+
+  const expandBefore = settings.buffer_before_minutes * 60_000;
+  const expandAfter = settings.buffer_after_minutes * 60_000;
 
   for (const a of appts || []) {
     const s = new Date(String((a as any).start_at));
     const e = new Date(String((a as any).end_at));
-    if (intervalsOverlap(start, end, s, e)) return NextResponse.json({ error: "slot_taken" }, { status: 409 });
-  }
-  for (const h of holds || []) {
-    const s = new Date(String((h as any).start_at));
-    const e = new Date(String((h as any).end_at));
-    if (intervalsOverlap(start, end, s, e)) return NextResponse.json({ error: "slot_held" }, { status: 409 });
+    busy.push({ start: new Date(s.getTime() - expandBefore), end: new Date(e.getTime() + expandAfter) });
   }
 
-  const hold_token = crypto.randomBytes(24).toString("hex");
+  for (const ho of holds || []) {
+    const s = new Date(String((ho as any).start_at));
+    const e = new Date(String((ho as any).end_at));
+    busy.push({ start: new Date(s.getTime() - expandBefore), end: new Date(e.getTime() + expandAfter) });
+  }
 
-  const { error: iErr } = await supabaseServer.from("company_appointment_holds").insert({
-    company_id,
-    hold_token,
-    start_at: asIso(start),
-    end_at: asIso(end),
-    expires_at: asIso(expires),
-    conversation_id: conversation_id || null,
-    company_lead_id: company_lead_id || null,
-    meta,
-  });
+  const ext = await getExternalBusyBlocks(company_id, rangeStartIso, rangeEndIso);
+  for (const b of ext.blocks) {
+    busy.push({
+      start: new Date(b.start.getTime() - expandBefore),
+      end: new Date(b.end.getTime() + expandAfter),
+    });
+  }
 
-  if (iErr) return NextResponse.json({ error: "hold_create_failed" }, { status: 500 });
+  const results: Array<{ start_at: string; end_at: string }> = [];
+
+  for (let dayOffset = 0; dayOffset <= settings.max_days_ahead && results.length < limit; dayOffset++) {
+    const d = addDaysLocal(localStartDate, dayOffset);
+    const dayStr = `${String(d.year).padStart(4, "0")}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
+
+    const noonUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: 12, minute: 0 }, tz);
+    const wd = getTzParts(noonUtc, tz).weekday;
+
+    const ex = exceptionByDay.get(dayStr);
+
+    let windows: Array<{ startH: number; startM: number; endH: number; endM: number }> = [];
+
+    if (ex) {
+      if (ex.is_closed) {
+        windows = [];
+      } else {
+        const [sh, sm] = String(ex.start_time).split(":").map((x) => Number(x));
+        const [eh, em] = String(ex.end_time).split(":").map((x) => Number(x));
+        windows = [{ startH: sh, startM: sm, endH: eh, endM: em }];
+      }
+    } else {
+      const dayRules = activeRules.filter((r) => Number(r.weekday) === wd);
+      for (const r of dayRules) {
+        const [sh, sm] = String(r.start_time).split(":").map((x) => Number(x));
+        const [eh, em] = String(r.end_time).split(":").map((x) => Number(x));
+        windows.push({ startH: sh, startM: sm, endH: eh, endM: em });
+      }
+    }
+
+    if (!windows.length) continue;
+
+    for (const w of windows) {
+      const windowStartUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.startH, minute: w.startM }, tz);
+      const windowEndUtc = zonedTimeToUtc({ year: d.year, month: d.month, day: d.day, hour: w.endH, minute: w.endM }, tz);
+
+      const latestStart = new Date(windowEndUtc.getTime() - duration * 60_000);
+
+      for (
+        let cur = new Date(windowStartUtc.getTime());
+        cur <= latestStart && results.length < limit;
+        cur = new Date(cur.getTime() + step_minutes * 60_000)
+      ) {
+        const slotStart = cur;
+        const slotEnd = new Date(cur.getTime() + duration * 60_000);
+
+        if (slotStart < minStart) continue;
+        if (slotEnd > maxEnd) continue;
+
+        let ok = true;
+        for (const b of busy) {
+          if (intervalsOverlap(slotStart, slotEnd, b.start, b.end)) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) continue;
+
+        results.push({ start_at: asIso(slotStart), end_at: asIso(slotEnd) });
+      }
+    }
+  }
 
   return NextResponse.json({
     ok: true,
-    hold_token,
-    expires_at: asIso(expires),
-    start_at: asIso(start),
-    end_at: asIso(end),
+    company_id,
+    timezone: tz,
+    duration_minutes: duration,
+    step_minutes,
+    slots: results,
+    external_busy_warning: ext.warning,
+    external_busy_sources: ext.sources,
   });
 }

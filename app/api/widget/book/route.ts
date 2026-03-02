@@ -1,4 +1,3 @@
-// app/api/widget/book/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -36,11 +35,9 @@ export async function POST(req: Request) {
   const company_id = String(payload.company_id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company" }, { status: 401 });
 
-  // Existing billing gate
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
 
-  // Booking entitlement gate (Pro or active trial)
   const ent = await getBookingEntitlement(company_id);
   if (!ent.can_book) {
     return NextResponse.json(
@@ -66,7 +63,6 @@ export async function POST(req: Request) {
   const meta = body?.meta ?? {};
   const now = new Date();
 
-  // Fetch hold
   const { data: hold, error: hErr } = await supabaseServer
     .from("company_appointment_holds")
     .select("*")
@@ -86,12 +82,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "hold_invalid_time" }, { status: 500 });
   }
 
-  // Conversation: prefer body, fallback to hold
   const conversation_id =
     conversation_id_in ||
     (String((hold as any).conversation_id || "").trim() || null);
 
-  // Validate conversation belongs to company (if present)
   if (conversation_id) {
     const { data: conv } = await supabaseServer
       .from("conversations")
@@ -104,17 +98,15 @@ export async function POST(req: Request) {
     }
   }
 
-  // ✅ Lead-first: always resolve or create a company_lead_id (NO NULLS anymore)
   const lead = await findOrCreateCompanyLead({
     company_id,
-    conversation_id, // if null, leadMerge will create a conversation
+    conversation_id,
     name: contact_name,
     email: contact_email,
     phone: contact_phone,
     source: "widget_booking",
   });
 
-  // Final conflict check (appointments + active holds excluding current hold)
   const { data: appts, error: aErr } = await supabaseServer
     .from("company_appointments")
     .select("start_at,end_at,status")
@@ -147,7 +139,6 @@ export async function POST(req: Request) {
     if (intervalsOverlap(start, end, s, e)) return NextResponse.json({ error: "slot_held" }, { status: 409 });
   }
 
-  // Consume hold (single-use)
   const { data: deleted, error: dErr } = await supabaseServer
     .from("company_appointment_holds")
     .delete()
@@ -160,7 +151,6 @@ export async function POST(req: Request) {
   if (dErr) return NextResponse.json({ error: "hold_consume_failed" }, { status: 500 });
   if (!deleted) return NextResponse.json({ error: "hold_already_used" }, { status: 409 });
 
-  // Create appointment
   const insertPayload: any = {
     company_id,
     company_lead_id: String((lead as any).id),

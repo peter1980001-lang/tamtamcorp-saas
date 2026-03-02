@@ -1,4 +1,3 @@
-// app/api/widget/conversation/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -21,7 +20,6 @@ function isPayingStatus(status: string) {
 }
 
 async function enforceBillingGate(companyId: string) {
-  // 1) load billing row
   const { data: billing, error: bErr } = await supabaseServer
     .from("company_billing")
     .select("status,plan_key,stripe_price_id,current_period_end")
@@ -34,16 +32,9 @@ async function enforceBillingGate(companyId: string) {
   const status = String(billing.status || "none");
   const cpe = billing.current_period_end ? String(billing.current_period_end) : null;
 
-  if (!isPayingStatus(status)) {
-    return { ok: false as const, status: 402, error: "payment_required" };
-  }
+  if (!isPayingStatus(status)) return { ok: false as const, status: 402, error: "payment_required" };
+  if (cpe && cpe < nowIso()) return { ok: false as const, status: 402, error: "trial_expired" };
 
-  if (cpe && cpe < nowIso()) {
-    // Trial/period ended
-    return { ok: false as const, status: 402, error: "trial_expired" };
-  }
-
-  // 2) plan entitlements: chat feature must be enabled
   let plan: any = null;
 
   if (billing.plan_key) {
@@ -64,17 +55,13 @@ async function enforceBillingGate(companyId: string) {
     plan = p ?? null;
   }
 
-  if (!plan || !plan.is_active) {
-    return { ok: false as const, status: 402, error: "invalid_or_inactive_plan" };
-  }
+  if (!plan || !plan.is_active) return { ok: false as const, status: 402, error: "invalid_or_inactive_plan" };
 
   const ent = plan.entitlements_json || {};
   const features = ent.features || {};
   const chatEnabled = !!features.chat;
 
-  if (!chatEnabled) {
-    return { ok: false as const, status: 402, error: "feature_disabled" };
-  }
+  if (!chatEnabled) return { ok: false as const, status: 402, error: "feature_disabled" };
 
   return { ok: true as const, plan_key: String(plan.plan_key || billing.plan_key || "") };
 }
@@ -93,16 +80,11 @@ export async function POST(req: Request) {
   const company_id = String(payload.company_id || "").trim();
   if (!company_id) return NextResponse.json({ error: "missing_company" }, { status: 401 });
 
-  // ✅ Monetization Lock (Hard Gate)
   const gate = await enforceBillingGate(company_id);
   if (!gate.ok) {
-    return NextResponse.json(
-      { error: gate.error, ...(gate.details ? { details: gate.details } : {}) },
-      { status: gate.status }
-    );
+    return NextResponse.json({ error: gate.error, ...(gate.details ? { details: gate.details } : {}) }, { status: gate.status });
   }
 
-  // Create conversation
   const { data, error } = await supabaseServer
     .from("conversations")
     .insert({

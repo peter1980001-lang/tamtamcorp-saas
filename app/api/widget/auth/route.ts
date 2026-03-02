@@ -10,8 +10,8 @@ function normalizeHost(input: string) {
   if (!s) return "";
   return s
     .replace(/^https?:\/\//i, "")
-    .replace(/\/.*$/, "") // keep only host[:port]
-    .replace(/:\d+$/, "") // drop port
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
     .toLowerCase();
 }
 
@@ -31,7 +31,6 @@ function getHostFromHeaders(req: Request) {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
-  // ✅ accept either public_key or legacy client param
   const public_key = String(body?.public_key || body?.client || "").trim();
   if (!public_key.startsWith("pk_")) {
     return NextResponse.json({ error: "invalid_public_key" }, { status: 400 });
@@ -47,7 +46,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown_key" }, { status: 404 });
   }
 
-  // Owner bypass (admin test convenience)
   let isOwner = false;
   try {
     const auth = await requireOwner();
@@ -57,12 +55,10 @@ export async function POST(req: Request) {
   }
 
   if (!isOwner) {
-    // ✅ IMPORTANT: prefer explicit "site" sent from loader/iframe (parent site)
-    // This is required because iframe same-origin requests won't carry parent origin reliably.
     const siteHost = normalizeHost(body?.site || "");
     const headerHost = getHostFromHeaders(req);
-
     const host = siteHost || headerHost;
+
     if (!host) {
       return NextResponse.json({ error: "missing_origin" }, { status: 400 });
     }
@@ -80,11 +76,13 @@ export async function POST(req: Request) {
     }
   }
 
-  const token = jwt.sign(
-    { company_id: keyRow.company_id, public_key },
-    process.env.WIDGET_JWT_SECRET!,
-    { expiresIn: "20m" }
-  );
+  if (!process.env.WIDGET_JWT_SECRET) {
+    return NextResponse.json({ error: "missing_widget_jwt_secret" }, { status: 500 });
+  }
+
+  const token = jwt.sign({ company_id: keyRow.company_id, public_key }, process.env.WIDGET_JWT_SECRET!, {
+    expiresIn: "20m",
+  });
 
   return NextResponse.json({ token, company_id: keyRow.company_id });
 }

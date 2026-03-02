@@ -1,70 +1,88 @@
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { requireOwner } from "@/lib/adminGuard";
 
-function getBearerToken(req: Request) {
-  const h = req.headers.get("authorization") || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
+function normalizeHost(input: string) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  return s
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "")
+    .toLowerCase();
 }
 
-type WidgetClaims = {
-  company_id: string;
-  public_key: string;
-  iat?: number;
-  exp?: number;
-};
+function getHostFromHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const referer = req.headers.get("referer") || "";
 
-const WIDGET_JWT_SECRET = process.env.WIDGET_JWT_SECRET || process.env.JWT_SECRET || "";
+  const h1 = normalizeHost(origin);
+  if (h1) return h1;
 
-export async function GET(req: Request) {
+  const h2 = normalizeHost(referer);
+  if (h2) return h2;
+
+  return "";
+}
+
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => null);
+
+  const public_key = String(body?.public_key || body?.client || "").trim();
+  if (!public_key.startsWith("pk_")) {
+    return NextResponse.json({ error: "invalid_public_key" }, { status: 400 });
+  }
+
+  const { data: keyRow, error } = await supabaseServer
+    .from("company_keys")
+    .select("company_id, allowed_domains")
+    .eq("public_key", public_key)
+    .maybeSingle();
+
+  if (error || !keyRow) {
+    return NextResponse.json({ error: "unknown_key" }, { status: 404 });
+  }
+
+  let isOwner = false;
   try {
-    const token = getBearerToken(req);
-    if (!token) return NextResponse.json({ error: "missing_bearer" }, { status: 401 });
+    const auth = await requireOwner();
+    isOwner = !!auth?.ok;
+  } catch {
+    isOwner = false;
+  }
 
-    if (!WIDGET_JWT_SECRET) return NextResponse.json({ error: "missing_widget_jwt_secret" }, { status: 500 });
+  if (!isOwner) {
+    const siteHost = normalizeHost(body?.site || "");
+    const headerHost = getHostFromHeaders(req);
+    const host = siteHost || headerHost;
 
-    let claims: WidgetClaims;
-    try {
-      claims = jwt.verify(token, WIDGET_JWT_SECRET) as any;
-    } catch {
-      return NextResponse.json({ error: "invalid_token" }, { status: 401 });
+    if (!host) {
+      return NextResponse.json({ error: "missing_origin" }, { status: 400 });
     }
 
-    const companyId = String(claims.company_id || "").trim();
-    if (!companyId) return NextResponse.json({ error: "missing_company_id" }, { status: 401 });
+    const allowed = (keyRow.allowed_domains || [])
+      .map((d: any) => String(d || "").trim().toLowerCase())
+      .filter(Boolean);
 
-    const { data: settings, error: sErr } = await supabaseServer
-      .from("company_settings")
-      .select("branding_json")
-      .eq("company_id", companyId)
-      .maybeSingle();
+    if (allowed.length === 0) {
+      return NextResponse.json({ error: "domain_not_configured", host }, { status: 403 });
+    }
 
-    if (sErr) return NextResponse.json({ error: sErr.message }, { status: 500 });
-
-    const branding = (settings?.branding_json as any) || {};
-
-    // normalize: allow common keys
-    const primary = String(branding.primary || branding.primary_color || "").trim();
-    const secondary = String(branding.secondary || branding.secondary_color || "").trim();
-    const accent = String(branding.accent || branding.accent_color || "").trim();
-    const logo_url = branding.logo_url ? String(branding.logo_url) : null;
-    const company_name = branding.company_name ? String(branding.company_name) : null;
-    const greeting = branding.greeting ? String(branding.greeting) : null;
-
-    return NextResponse.json({
-      ok: true,
-      company_id: companyId,
-      branding: {
-        primary: primary || null,
-        secondary: secondary || null,
-        accent: accent || null,
-        logo_url,
-        company_name,
-        greeting,
-      },
-    });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "unknown" }, { status: 500 });
+    if (!allowed.includes(host)) {
+      return NextResponse.json({ error: "domain_not_allowed", host }, { status: 403 });
+    }
   }
+
+  if (!process.env.WIDGET_JWT_SECRET) {
+    return NextResponse.json({ error: "missing_widget_jwt_secret" }, { status: 500 });
+  }
+
+  const token = jwt.sign({ company_id: keyRow.company_id, public_key }, process.env.WIDGET_JWT_SECRET!, {
+    expiresIn: "20m",
+  });
+
+  return NextResponse.json({ token, company_id: keyRow.company_id });
 }

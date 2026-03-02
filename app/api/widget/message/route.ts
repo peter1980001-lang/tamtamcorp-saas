@@ -1,4 +1,3 @@
-// app/api/widget/message/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -18,11 +17,9 @@ function getBearerToken(req: Request) {
 /** -------------------- Intent / signals -------------------- */
 function detectIntent(text: string): "pricing" | "faq" | "contact" | null {
   const t = text.toLowerCase();
-
   if (/(price|pricing|cost|quote|offer|proposal|plan|package|preis|preise|kosten|angebot|paket|abo)/i.test(t)) return "pricing";
   if (/(faq|question|questions|frage|fragen|how does|wie funktioniert)/i.test(t)) return "faq";
   if (/(contact|call|appointment|termin|kontakt|anruf|reach|demo|meeting|book|schedule)/i.test(t)) return "contact";
-
   return null;
 }
 
@@ -81,8 +78,7 @@ async function loadFunnelConfig(company_id: string): Promise<FunnelConfig> {
     .eq("company_id", company_id)
     .maybeSingle();
 
-  // sensible defaults if missing
-  const cfg: FunnelConfig = {
+  return {
     enabled: data?.enabled ?? true,
     objection_handling: data?.objection_handling ?? true,
     require_qualification: data?.require_qualification ?? true,
@@ -98,8 +94,7 @@ async function loadFunnelConfig(company_id: string): Promise<FunnelConfig> {
     default_cta: data?.default_cta ?? null,
 
     qualification_fields:
-      data?.qualification_fields ??
-      {
+      data?.qualification_fields ?? {
         industry: true,
         goal: true,
         timeline: true,
@@ -108,13 +103,10 @@ async function loadFunnelConfig(company_id: string): Promise<FunnelConfig> {
       },
 
     retrieval_overrides:
-      data?.retrieval_overrides ??
-      {
+      data?.retrieval_overrides ?? {
         pricing: { enabled: true, match_count: 12, force_sections: ["pricing", "plans"] },
       },
   };
-
-  return cfg;
 }
 
 /** -------------------- Funnel state engine -------------------- */
@@ -128,7 +120,6 @@ function nextFunnelState(params: { message: string; prev?: FunnelState | null })
   if (detectProceed(message)) return "closing";
   if (detectCommercialIntent(message)) return "pricing_interest";
 
-  // sticky behavior
   if (prev === "pricing_interest" || prev === "objection_price") return "qualification";
   if (prev === "qualification") return "qualification";
 
@@ -284,7 +275,6 @@ function buildContext(rows: any[]) {
     .join("\n\n---\n\n");
 }
 
-// Pricing override: pull more rows and filter for pricing-like chunks (best-effort)
 async function fetchForcedPricingContext(company_id: string, match_count = 12) {
   const { data, error } = await supabaseServer
     .from("knowledge_chunks")
@@ -339,21 +329,15 @@ function computeScore(params: {
 }) {
   let score = 0;
 
-  // commercial creates lead baseline
   if (params.commercial) score += 25;
-
-  // intent
   score += intentScore(params.intent);
 
-  // buying signals
   if (/(demo|call|appointment|termin|book|schedule|meeting|beratung)/i.test(params.message)) score += 20;
   if (/(budget|€|aed|dirham|euro|usd)/i.test(params.message)) score += 10;
   if (/(asap|urgent|sofort|heute|this week|tomorrow|morgen)/i.test(params.message)) score += 10;
 
-  // objection to price = high interest signal
   if (params.state === "objection_price") score += 10;
 
-  // contact info => HOT
   if (params.hasEmail) score += 25;
   if (params.hasPhone) score += 25;
 
@@ -400,7 +384,6 @@ async function upsertCompanyLead(params: {
   const phone = extractPhone(params.message);
   const hasContact = !!email || !!phone;
 
-  // Load existing lead for this conversation
   const { data: existing } = await supabaseServer
     .from("company_leads")
     .select("id,name,email,phone,score_total,score_band,status,lead_state,qualification_json,consents_json,tags,intent_score")
@@ -409,7 +392,7 @@ async function upsertCompanyLead(params: {
     .maybeSingle();
 
   const shouldCreate = params.commercial || hasContact;
-  if (!existing && !shouldCreate) return; // do nothing
+  if (!existing && !shouldCreate) return;
 
   const prevScore = Number(existing?.score_total ?? 0);
   const nextScore = Math.max(
@@ -429,8 +412,7 @@ async function upsertCompanyLead(params: {
   const mergedEmail = existing?.email || email || null;
   const mergedPhone = existing?.phone || phone || null;
 
-  const prevQual =
-    existing?.qualification_json && typeof existing.qualification_json === "object" ? existing.qualification_json : {};
+  const prevQual = existing?.qualification_json && typeof existing.qualification_json === "object" ? existing.qualification_json : {};
   const nextQual = {
     ...prevQual,
     last_user_message: params.message,
@@ -466,7 +448,6 @@ async function upsertCompanyLead(params: {
     lead_preview,
   };
 
-  // Needs unique index on (company_id, conversation_id)
   await supabaseServer.from("company_leads").upsert(row, { onConflict: "company_id,conversation_id" });
 }
 
@@ -500,7 +481,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  const { data: conv } = await supabaseServer.from("conversations").select("id,company_id").eq("id", conversation_id).maybeSingle();
+  const { data: conv } = await supabaseServer
+    .from("conversations")
+    .select("id,company_id")
+    .eq("id", conversation_id)
+    .maybeSingle();
+
   if (!conv || String(conv.company_id) !== company_id) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
@@ -508,7 +494,6 @@ export async function POST(req: Request) {
   const bill = await checkBillingGate(company_id);
   if (!bill.ok) return NextResponse.json({ error: bill.code }, { status: 402 });
 
-  // Persist user message
   await supabaseServer.from("messages").insert({
     conversation_id,
     role: "user",
@@ -518,20 +503,38 @@ export async function POST(req: Request) {
   const intent = detectIntent(message);
   const commercial = detectCommercialIntent(message);
   const contactShared = detectContactSharing(message);
-  const needLead = commercial || contactShared;
 
-  // Load funnel config (white-label)
   const funnelConfig = await loadFunnelConfig(company_id);
 
-  // Determine funnel state (you can later load prev from existing lead if you want true stickiness)
-  const prevState: FunnelState | null = null;
+  // ✅ real sticky state from lead (best-effort)
+  let prevState: FunnelState | null = null;
+  try {
+    const { data: existingLead } = await supabaseServer
+      .from("company_leads")
+      .select("qualification_json")
+      .eq("company_id", company_id)
+      .eq("conversation_id", conversation_id)
+      .maybeSingle();
+
+    const ps = (existingLead as any)?.qualification_json?.funnel_state;
+    if (ps && typeof ps === "string") prevState = ps as FunnelState;
+  } catch {
+    // ignore
+  }
+
   const state = nextFunnelState({ message, prev: prevState });
 
   const strategicQuestion = funnelConfig.default_cta?.trim()
     ? funnelConfig.default_cta.trim()
     : oneStrategicQuestion(state, funnelConfig.qualification_fields);
 
-  // Lead creation/enrichment (commercial creates, contact => hot by scoring)
+  // ✅ B: lead capture only when contact_capture/closing OR user already shared contact
+  const needLeadCapture =
+    contactShared ||
+    state === "contact_capture" ||
+    state === "closing";
+
+  // Lead creation/enrichment
   try {
     if (funnelConfig.enabled) {
       await upsertCompanyLead({
@@ -581,7 +584,6 @@ export async function POST(req: Request) {
     // swallow
   }
 
-  // Build sales prompt (enterprise)
   const companyName = await loadCompanyName(company_id);
 
   const systemPrompt = buildSalesSystemPrompt({
@@ -592,7 +594,6 @@ export async function POST(req: Request) {
     knowledgeContext: context || "(empty)",
   });
 
-  // OpenAI response
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.2,
@@ -604,7 +605,6 @@ export async function POST(req: Request) {
 
   const reply = String(completion.choices?.[0]?.message?.content || "").trim();
 
-  // Persist assistant message
   await supabaseServer.from("messages").insert({
     conversation_id,
     role: "assistant",
@@ -613,8 +613,9 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     reply,
-    need_lead_capture: needLead,
+    need_lead_capture: needLeadCapture,
+    lead_prompt: strategicQuestion, // ✅ UI expects this
     sources,
-    funnel_state: state, // useful for debugging
+    funnel_state: state,
   });
 }
