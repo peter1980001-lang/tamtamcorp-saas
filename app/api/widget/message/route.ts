@@ -587,11 +587,11 @@ export async function POST(req: Request) {
     ? funnelConfig.default_cta.trim()
     : oneStrategicQuestion(state, funnelConfig, knownQualification);
 
-  const needLeadCapture =
-    action === "capture_contact" ||
-    action === "handoff" ||
-    (contactShared && (action === "reply" || action === "capture_contact"));
-
+const needLeadCapture =
+  action === "capture_contact" ||
+  action === "handoff" ||
+  (contactShared && action === "reply");
+  
   try {
     if (funnelConfig.enabled) {
       await upsertCompanyLead({
