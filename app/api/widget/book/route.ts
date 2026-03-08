@@ -6,6 +6,7 @@ import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
 import { getBookingEntitlement } from "@/lib/bookingEntitlement";
 import { findOrCreateCompanyLead, updateLeadBookingSignals } from "@/lib/leadMerge";
+import { getExternalBusyBlocks } from "@/lib/integrations/calendarBusy";
 
 function getBearerToken(req: Request) {
   const h = req.headers.get("authorization") || "";
@@ -139,6 +140,13 @@ export async function POST(req: Request) {
     if (intervalsOverlap(start, end, s, e)) return NextResponse.json({ error: "slot_held" }, { status: 409 });
   }
 
+  const ext = await getExternalBusyBlocks(company_id, asIso(start), asIso(end));
+  for (const b of ext.blocks) {
+    if (intervalsOverlap(start, end, b.start, b.end)) {
+      return NextResponse.json({ error: "slot_taken_external" }, { status: 409 });
+    }
+  }
+
   const { data: deleted, error: dErr } = await supabaseServer
     .from("company_appointment_holds")
     .delete()
@@ -172,6 +180,7 @@ export async function POST(req: Request) {
     meta: {
       ...meta,
       hold_meta: (hold as any).meta ?? {},
+      external_busy_sources: ext.sources ?? [],
     },
   };
 

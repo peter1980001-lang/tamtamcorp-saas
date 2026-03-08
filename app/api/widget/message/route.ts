@@ -5,6 +5,22 @@ import jwt from "jsonwebtoken";
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { checkBillingGate } from "@/lib/billingGate";
+import {
+  decideAction,
+  detectBookingIntent,
+  detectCommercial,
+  detectContact,
+  detectFrustration,
+  detectHumanHandoffRequest,
+  detectPriceObjection,
+  nextFunnelState,
+  oneStrategicQuestion,
+  type AssistantMode,
+  type ClosingStyle,
+  type FunnelState,
+  type PrimaryGoal,
+  type QuestionStyle,
+} from "@/lib/funnelEngine";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -14,31 +30,11 @@ function getBearerToken(req: Request) {
   return m ? m[1] : null;
 }
 
-/** -------------------- Intent / signals -------------------- */
 function detectIntent(text: string): "pricing" | "faq" | "contact" | null {
-  const t = text.toLowerCase();
-  if (/(price|pricing|cost|quote|offer|proposal|plan|package|preis|preise|kosten|angebot|paket|abo)/i.test(t)) return "pricing";
-  if (/(faq|question|questions|frage|fragen|how does|wie funktioniert)/i.test(t)) return "faq";
-  if (/(contact|call|appointment|termin|kontakt|anruf|reach|demo|meeting|book|schedule)/i.test(t)) return "contact";
+  if (/(price|pricing|cost|quote|offer|proposal|plan|package|preis|preise|kosten|angebot|paket|abo)/i.test(text)) return "pricing";
+  if (/(faq|question|questions|frage|fragen|how does|wie funktioniert)/i.test(text)) return "faq";
+  if (/(contact|call|appointment|termin|kontakt|anruf|reach|demo|meeting|book|schedule)/i.test(text)) return "contact";
   return null;
-}
-
-function detectCommercialIntent(text: string): boolean {
-  return /(price|pricing|cost|quote|offer|demo|trial|subscribe|plan|package|preis|kosten|angebot|paket|abo)/i.test(text);
-}
-
-function detectContactSharing(text: string): boolean {
-  const email = /[^\s@]+@[^\s@]+\.[^\s@]+/.test(text);
-  const phone = /(\+?\d[\d\s().-]{7,}\d)/.test(text);
-  return email || phone;
-}
-
-function detectPriceObjection(text: string): boolean {
-  return /(too expensive|expensive|teuer|zu teuer|pricey|costly|overpriced)/i.test(text);
-}
-
-function detectProceed(text: string): boolean {
-  return /(how can we proceed|next step|what now|let's proceed|start|book|schedule|call|demo|meeting|weiter|wie geht es weiter)/i.test(text);
 }
 
 function extractEmail(text: string): string | null {
@@ -51,7 +47,6 @@ function extractPhone(text: string): string | null {
   return m ? m[1].replace(/\s+/g, " ").trim() : null;
 }
 
-/** -------------------- Funnel config (white-label) -------------------- */
 type FunnelConfig = {
   enabled: boolean;
   objection_handling: boolean;
@@ -62,13 +57,21 @@ type FunnelConfig = {
 
   tone: "consultative" | "direct" | "luxury" | "formal" | "playful";
   response_length: "concise" | "medium" | "detailed";
-  language: string; // auto | en | de | ar ...
+  language: string;
 
   cta_style: "one-question" | "strong-close" | "soft-close";
   default_cta: string | null;
 
   qualification_fields: any;
   retrieval_overrides: any;
+
+  assistant_mode: AssistantMode;
+  primary_goal: PrimaryGoal;
+  question_style: QuestionStyle;
+  closing_style: ClosingStyle;
+  booking_priority: boolean;
+  human_handoff_enabled: boolean;
+  human_handoff_triggers: any;
 };
 
 async function loadFunnelConfig(company_id: string): Promise<FunnelConfig> {
@@ -106,61 +109,23 @@ async function loadFunnelConfig(company_id: string): Promise<FunnelConfig> {
       data?.retrieval_overrides ?? {
         pricing: { enabled: true, match_count: 12, force_sections: ["pricing", "plans"] },
       },
+
+    assistant_mode: (data?.assistant_mode as any) ?? "sales",
+    primary_goal: (data?.primary_goal as any) ?? "capture_leads",
+    question_style: (data?.question_style as any) ?? "guided",
+    closing_style: (data?.closing_style as any) ?? "soft_close",
+    booking_priority: data?.booking_priority ?? false,
+    human_handoff_enabled: data?.human_handoff_enabled ?? true,
+    human_handoff_triggers:
+      data?.human_handoff_triggers ??
+      ({
+        owner_request: true,
+        frustrated_user: true,
+        repeated_failure: true,
+      } as any),
   };
 }
 
-/** -------------------- Funnel state engine -------------------- */
-type FunnelState = "awareness" | "pricing_interest" | "objection_price" | "qualification" | "contact_capture" | "closing";
-
-function nextFunnelState(params: { message: string; prev?: FunnelState | null }): FunnelState {
-  const { message, prev } = params;
-
-  if (detectContactSharing(message)) return "contact_capture";
-  if (detectPriceObjection(message)) return "objection_price";
-  if (detectProceed(message)) return "closing";
-  if (detectCommercialIntent(message)) return "pricing_interest";
-
-  if (prev === "pricing_interest" || prev === "objection_price") return "qualification";
-  if (prev === "qualification") return "qualification";
-
-  return "awareness";
-}
-
-function oneStrategicQuestion(state: FunnelState, fields: any): string {
-  const wantIndustry = fields?.industry !== false;
-  const wantGoal = fields?.goal !== false;
-  const wantTimeline = fields?.timeline !== false;
-  const wantBudget = fields?.budget !== false;
-
-  if (state === "awareness") {
-    if (wantIndustry) return "What industry are you in?";
-    if (wantGoal) return "What outcome are you aiming for—more leads, bookings, or support automation?";
-    return "What is the main goal you want to achieve with the AI assistant?";
-  }
-
-  if (state === "pricing_interest") {
-    if (wantTimeline) return "When do you want to go live—this week, this month, or later?";
-    return "Roughly how many conversations per month do you expect?";
-  }
-
-  if (state === "objection_price") {
-    if (wantBudget) return "What monthly budget range would feel comfortable so I can recommend the best plan?";
-    return "What’s your expected number of conversations per month?";
-  }
-
-  if (state === "qualification") {
-    if (wantGoal) return "What would a ‘perfect lead’ look like for you (industry, budget, location, urgency)?";
-    return "Do you want the bot to focus more on qualification or immediate appointment booking?";
-  }
-
-  if (state === "contact_capture") {
-    return "Would you like a quick demo call, or should we set it up directly on your website first?";
-  }
-
-  return "Would you like to start with a quick demo or a setup checklist?";
-}
-
-/** -------------------- Prompt builder -------------------- */
 function toneGuidelines(tone: FunnelConfig["tone"]) {
   if (tone === "luxury") return "Tone: premium, confident, concise. No hype. Elegant wording.";
   if (tone === "formal") return "Tone: formal, corporate, precise.";
@@ -170,62 +135,96 @@ function toneGuidelines(tone: FunnelConfig["tone"]) {
 }
 
 function lengthGuidelines(len: FunnelConfig["response_length"]) {
-  if (len === "detailed") return "Length: detailed but structured (headings/bullets).";
-  if (len === "medium") return "Length: medium. Short paragraphs, some bullets.";
+  if (len === "detailed") return "Length: detailed but structured.";
+  if (len === "medium") return "Length: medium. Short paragraphs.";
   return "Length: concise. Max ~6–10 lines unless necessary.";
 }
 
-function buildSalesSystemPrompt(params: {
+function buildSystemPrompt(params: {
   companyName: string;
   config: FunnelConfig;
   state: FunnelState;
-  strategicQuestion: string;
+  strategicQuestion: string | null;
   knowledgeContext: string;
+  action: "reply" | "show_slots" | "capture_contact" | "handoff";
+  knownQualification: Record<string, any> | null;
 }) {
-  const { companyName, config, state, strategicQuestion, knowledgeContext } = params;
+  const { companyName, config, state, strategicQuestion, knowledgeContext, action, knownQualification } = params;
+
+  const lang = config.language && config.language !== "auto" ? `Language: ${config.language}` : "Language: match the user's language.";
+  const known = knownQualification && Object.keys(knownQualification).length
+    ? `Known facts already collected:\n${JSON.stringify(knownQualification, null, 2)}`
+    : "Known facts already collected:\n{}";
+
+  const modeLine = `Assistant mode: ${config.assistant_mode}. Primary goal: ${config.primary_goal}. Question style: ${config.question_style}. Closing style: ${config.closing_style}.`;
+  const actionLine =
+    action === "show_slots"
+      ? "The UI can show appointment slots right after your reply. Briefly acknowledge the booking request and avoid extra qualification."
+      : action === "capture_contact"
+      ? "The UI can open a contact form after your reply. Ask for the best contact details only if still missing."
+      : action === "handoff"
+      ? "The UI can help capture contact details for a human follow-up. Apologize briefly, stay calm, and do not keep qualifying."
+      : "Answer naturally and only ask a follow-up if it truly helps.";
 
   const rules: string[] = [
-    "Never say: 'knowledge context does not provide'.",
-    "If info is missing: ask a clarifying question or offer a next step.",
-    "Ask exactly ONE strategic follow-up question at the end.",
-    "Always keep the user moving toward qualification and contact capture.",
-    "Be confident, professional, and conversion-oriented (not pushy).",
+    "Use the conversation history. Never ask again for information the user already provided.",
+    "Answer the user's latest question directly before moving the conversation forward.",
+    "Ask at most ONE follow-up question, and only if it is truly helpful.",
+    "If the next step is obvious, do not force another question.",
+    "Do not mention internal systems, funnel states, or knowledge context.",
+    "If info is missing, either ask one useful clarifying question or offer the next step.",
+    actionLine,
   ];
 
+  if (config.assistant_mode === "local_service" || config.primary_goal === "book_appointments") {
+    rules.push("Do not ask B2B qualification questions like industry unless explicitly relevant and enabled.");
+    rules.push("Prioritize appointment coordination, design details, timing, and practical next steps.");
+  }
+
   if (config.show_pricing) {
-    rules.push("If user asks about pricing: present ALL available plans in one compact block and recommend one based on their answers.");
+    rules.push("If the user asks about pricing, answer with a compact, useful pricing answer based on the knowledge context.");
     if (config.objection_handling) {
-      rules.push("If user says it's expensive: validate, offer a lower tier, then ask a qualification question (traffic/budget/timeline).");
+      rules.push("If the user objects to price, validate briefly and offer a reasonable next step.");
     }
   }
 
-  const lang = config.language && config.language !== "auto" ? `Language: ${config.language}` : "Language: match the user's language.";
+  if (action === "show_slots") {
+    rules.push("Do not end with a generic sales CTA. Keep it short so the slot UI can take over.");
+  }
+
+  let endingInstruction = "Do not force a closing question.";
+  if (strategicQuestion && action === "reply") {
+    endingInstruction = `If you ask a follow-up question, it must be exactly this question:\n"${strategicQuestion}"`;
+  } else if (strategicQuestion && action === "capture_contact") {
+    endingInstruction = `If you ask for the next step, you may use this exact question:\n"${strategicQuestion}"`;
+  }
 
   return `
-You are ${companyName}'s high-conversion AI Sales Concierge.
+You are ${companyName}'s AI assistant.
 
 Goal:
-1) Understand intent and funnel stage (${state})
-2) Answer accurately using KNOWLEDGE CONTEXT
-3) Qualify the visitor (one key question)
-4) Move toward contact capture (email/phone) or booking
+1) Understand the user's intent and current stage (${state})
+2) Answer accurately using the knowledge context
+3) Move the conversation forward in the most natural way for this business
+4) Avoid repetition and preserve trust
 
 ${lang}
 ${toneGuidelines(config.tone)}
 ${lengthGuidelines(config.response_length)}
+${modeLine}
 
 Rules:
 - ${rules.join("\n- ")}
 
-End your answer with exactly one question:
-"${strategicQuestion}"
+${known}
+
+${endingInstruction}
 
 KNOWLEDGE CONTEXT:
 ${knowledgeContext || "(empty)"}
 `.trim();
 }
 
-/** -------------------- Knowledge retrieval -------------------- */
 async function embedQuery(text: string): Promise<number[]> {
   const r = await openai.embeddings.create({
     model: "text-embedding-3-small",
@@ -311,7 +310,22 @@ async function fetchForcedPricingContext(company_id: string, match_count = 12) {
   return { ok: true as const, rows: picked };
 }
 
-/** -------------------- Lead scoring + upsert (company_leads) -------------------- */
+async function loadChatHistory(conversation_id: string, limit = 18) {
+  const { data } = await supabaseServer
+    .from("messages")
+    .select("role,content,created_at")
+    .eq("conversation_id", conversation_id)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  return (data ?? [])
+    .filter((m: any) => m?.content && (m.role === "user" || m.role === "assistant"))
+    .map((m: any) => ({
+      role: m.role as "user" | "assistant",
+      content: String(m.content).trim(),
+    }));
+}
+
 function intentScore(intent: string | null): number {
   if (intent === "pricing") return 10;
   if (intent === "contact") return 8;
@@ -372,6 +386,25 @@ function buildLeadPreview(input: {
   return `${bits.join(" · ")} — ${snippet}`;
 }
 
+function extractLeadSignals(text: string) {
+  const t = text.toLowerCase();
+
+  const timeline =
+    /(tomorrow|morgen)/i.test(t) ? "tomorrow" :
+    /(today|heute)/i.test(t) ? "today" :
+    /(this week|diese woche)/i.test(t) ? "this_week" :
+    /(asap|as soon as possible|urgent|sofort)/i.test(t) ? "asap" :
+    null;
+
+  const location =
+    /(dubai|uae|abu dhabi|abudhabi|sharjah|ajman|rak|ras al khaimah)/i.test(t) ? "uae" : null;
+
+  const industryMatch = t.match(/\b(oil|real estate|construction|tattoo|beauty|clinic|gym|salon|agency|saas)\b/i);
+  const industry = industryMatch ? industryMatch[1].toLowerCase() : null;
+
+  return { timeline, location, industry };
+}
+
 async function upsertCompanyLead(params: {
   company_id: string;
   conversation_id: string;
@@ -379,10 +412,12 @@ async function upsertCompanyLead(params: {
   intent: string | null;
   commercial: boolean;
   state: FunnelState;
+  action: "reply" | "show_slots" | "capture_contact" | "handoff";
 }) {
   const email = extractEmail(params.message);
   const phone = extractPhone(params.message);
   const hasContact = !!email || !!phone;
+  const leadSignals = extractLeadSignals(params.message);
 
   const { data: existing } = await supabaseServer
     .from("company_leads")
@@ -391,8 +426,16 @@ async function upsertCompanyLead(params: {
     .eq("conversation_id", params.conversation_id)
     .maybeSingle();
 
-  const shouldCreate = params.commercial || hasContact;
-  if (!existing && !shouldCreate) return;
+  const shouldCreate =
+    !!existing ||
+    params.commercial ||
+    hasContact ||
+    params.intent === "contact" ||
+    params.state === "closing" ||
+    params.action === "show_slots" ||
+    params.action === "handoff";
+
+  if (!shouldCreate) return;
 
   const prevScore = Number(existing?.score_total ?? 0);
   const nextScore = Math.max(
@@ -418,6 +461,11 @@ async function upsertCompanyLead(params: {
     last_user_message: params.message,
     last_intent: params.intent,
     funnel_state: params.state,
+    ...(leadSignals.timeline ? { timeline: prevQual.timeline ?? leadSignals.timeline } : {}),
+    ...(leadSignals.location ? { location: prevQual.location ?? leadSignals.location } : {}),
+    ...(leadSignals.industry ? { industry: prevQual.industry ?? leadSignals.industry } : {}),
+    booking_requested: prevQual.booking_requested || params.action === "show_slots",
+    human_handoff_requested: prevQual.human_handoff_requested || params.action === "handoff",
   };
 
   const lead_preview = buildLeadPreview({
@@ -451,14 +499,12 @@ async function upsertCompanyLead(params: {
   await supabaseServer.from("company_leads").upsert(row, { onConflict: "company_id,conversation_id" });
 }
 
-/** -------------------- Company name helper -------------------- */
 async function loadCompanyName(company_id: string): Promise<string> {
   const { data } = await supabaseServer.from("companies").select("name").eq("id", company_id).maybeSingle();
   const name = String((data as any)?.name || "").trim();
   return name || "Nova";
 }
 
-/** -------------------- Main handler -------------------- */
 export async function POST(req: Request) {
   const token = getBearerToken(req);
   if (!token) return NextResponse.json({ error: "missing_token" }, { status: 401 });
@@ -487,7 +533,7 @@ export async function POST(req: Request) {
     .eq("id", conversation_id)
     .maybeSingle();
 
-  if (!conv || String(conv.company_id) !== company_id) {
+  if (!conv || String((conv as any).company_id) !== company_id) {
     return NextResponse.json({ error: "invalid_conversation" }, { status: 403 });
   }
 
@@ -501,13 +547,14 @@ export async function POST(req: Request) {
   });
 
   const intent = detectIntent(message);
-  const commercial = detectCommercialIntent(message);
-  const contactShared = detectContactSharing(message);
+  const commercial = detectCommercial(message);
+  const contactShared = detectContact(message);
 
   const funnelConfig = await loadFunnelConfig(company_id);
 
-  // ✅ real sticky state from lead (best-effort)
   let prevState: FunnelState | null = null;
+  let knownQualification: Record<string, any> | null = null;
+
   try {
     const { data: existingLead } = await supabaseServer
       .from("company_leads")
@@ -516,25 +563,35 @@ export async function POST(req: Request) {
       .eq("conversation_id", conversation_id)
       .maybeSingle();
 
-    const ps = (existingLead as any)?.qualification_json?.funnel_state;
+    const qual = ((existingLead as any)?.qualification_json ?? null) as Record<string, any> | null;
+    knownQualification = qual;
+    const ps = qual?.funnel_state;
     if (ps && typeof ps === "string") prevState = ps as FunnelState;
   } catch {
     // ignore
   }
 
-  const state = nextFunnelState({ message, prev: prevState });
+  const state = nextFunnelState({
+    message,
+    prev: prevState,
+    config: funnelConfig,
+  });
+
+  const action = decideAction({
+    message,
+    state,
+    config: funnelConfig,
+  });
 
   const strategicQuestion = funnelConfig.default_cta?.trim()
     ? funnelConfig.default_cta.trim()
-    : oneStrategicQuestion(state, funnelConfig.qualification_fields);
+    : oneStrategicQuestion(state, funnelConfig, knownQualification);
 
-  // ✅ B: lead capture only when contact_capture/closing OR user already shared contact
   const needLeadCapture =
-    contactShared ||
-    state === "contact_capture" ||
-    state === "closing";
+    action === "capture_contact" ||
+    action === "handoff" ||
+    (contactShared && (action === "reply" || action === "capture_contact"));
 
-  // Lead creation/enrichment
   try {
     if (funnelConfig.enabled) {
       await upsertCompanyLead({
@@ -544,13 +601,13 @@ export async function POST(req: Request) {
         intent,
         commercial,
         state,
+        action,
       });
     }
   } catch {
     // never block chat
   }
 
-  // Knowledge retrieval
   let context = "";
   let sources: any[] = [];
 
@@ -585,25 +642,35 @@ export async function POST(req: Request) {
   }
 
   const companyName = await loadCompanyName(company_id);
-
-  const systemPrompt = buildSalesSystemPrompt({
+  const systemPrompt = buildSystemPrompt({
     companyName,
     config: funnelConfig,
     state,
     strategicQuestion,
     knowledgeContext: context || "(empty)",
+    action,
+    knownQualification,
   });
+
+  const historyMsgs = await loadChatHistory(conversation_id, 18);
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.2,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: message },
-    ],
+    messages: [{ role: "system", content: systemPrompt }, ...historyMsgs],
   });
 
-  const reply = String(completion.choices?.[0]?.message?.content || "").trim();
+  let reply = String(completion.choices?.[0]?.message?.content || "").trim();
+
+  if (!reply) {
+    if (action === "show_slots") {
+      reply = "Absolutely — I can help with that. Here are the next available appointment options.";
+    } else if (action === "handoff") {
+      reply = "Of course — I’m sorry for the frustration. I’ll help you get this to a real person.";
+    } else {
+      reply = "Absolutely — how can I help?";
+    }
+  }
 
   await supabaseServer.from("messages").insert({
     conversation_id,
@@ -613,9 +680,12 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     reply,
+    action,
     need_lead_capture: needLeadCapture,
-    lead_prompt: strategicQuestion, // ✅ UI expects this
+    lead_prompt: strategicQuestion || null,
     sources,
     funnel_state: state,
+    booking_requested: action === "show_slots" || detectBookingIntent(message),
+    human_handoff: action === "handoff" || detectHumanHandoffRequest(message) || detectFrustration(message),
   });
 }

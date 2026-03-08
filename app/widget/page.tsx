@@ -15,6 +15,8 @@ type Branding = {
   greeting?: string | null;
 };
 
+type Slot = { start_at: string; end_at: string };
+
 function hostOnly(input: string) {
   return String(input || "")
     .trim()
@@ -47,7 +49,6 @@ function safePublicLogoUrl(url: any) {
 function applyBrandingCSS(branding: Branding) {
   const root = document.documentElement;
 
-  // ✅ NO YELLOW DEFAULT
   const defaults = {
     primary: "#111111",
     secondary: "#ffffff",
@@ -61,11 +62,25 @@ function applyBrandingCSS(branding: Branding) {
   root.style.setProperty("--tt-primary", primary);
   root.style.setProperty("--tt-secondary", secondary);
   root.style.setProperty("--tt-accent", accent);
-
   root.style.setProperty("--tt-bg", "transparent");
   root.style.setProperty("--tt-fg", primary);
-
   root.style.setProperty("--tt-muted", "rgba(17,17,17,0.58)");
+}
+
+function formatSlot(iso: string, timeZone: string) {
+  const d = new Date(iso);
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone,
+    }).format(d);
+  } catch {
+    return d.toLocaleString();
+  }
 }
 
 export default function WidgetPage() {
@@ -90,7 +105,6 @@ export default function WidgetPage() {
     greeting: null,
   });
 
-  // lead capture
   const [leadMode, setLeadMode] = useState(false);
   const [leadPrompt, setLeadPrompt] = useState<string>("");
   const [leadName, setLeadName] = useState("");
@@ -100,6 +114,18 @@ export default function WidgetPage() {
   const [leadBudget, setLeadBudget] = useState("");
   const [leadTimeline, setLeadTimeline] = useState("");
   const [leadSubmitting, setLeadSubmitting] = useState(false);
+
+  const [bookingMode, setBookingMode] = useState(false);
+  const [slotLoading, setSlotLoading] = useState(false);
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [slotTimezone, setSlotTimezone] = useState("UTC");
+  const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
+  const [holdToken, setHoldToken] = useState("");
+  const [holdExpiresAt, setHoldExpiresAt] = useState("");
+  const [bookingName, setBookingName] = useState("");
+  const [bookingEmail, setBookingEmail] = useState("");
+  const [bookingPhone, setBookingPhone] = useState("");
+  const [bookingSubmitting, setBookingSubmitting] = useState(false);
 
   const boxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -143,7 +169,6 @@ export default function WidgetPage() {
         const t = String(authJson?.token || "");
         setToken(t);
 
-        // bootstrap theming
         try {
           const b = await fetch("/api/widget/bootstrap", {
             method: "GET",
@@ -189,7 +214,177 @@ export default function WidgetPage() {
   useEffect(() => {
     if (!boxRef.current) return;
     boxRef.current.scrollTop = boxRef.current.scrollHeight;
-  }, [messages, leadMode, busy]);
+  }, [messages, leadMode, busy, bookingMode, slots, selectedSlot]);
+
+  async function loadSlots() {
+    if (!token) return;
+    setSlotLoading(true);
+    setBookingMode(true);
+    setSlots([]);
+    setSelectedSlot(null);
+    setHoldToken("");
+    setHoldExpiresAt("");
+
+    try {
+      const res = await fetch("/api/widget/availability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ limit: 8 }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: lang === "de" ? "Ich konnte gerade keine freien Termine laden." : "I couldn't load available slots right now.",
+          },
+        ]);
+        setBookingMode(false);
+        return;
+      }
+
+      setSlotTimezone(String(json?.timezone || "UTC"));
+      setSlots(Array.isArray(json?.slots) ? json.slots : []);
+      if (!json?.slots?.length) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: lang === "de" ? "Aktuell sehe ich keine freien Termine im angefragten Zeitraum." : "I don't see any open slots in the requested range right now.",
+          },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: lang === "de" ? "Fehler beim Laden der Termine." : "Error while loading slots.",
+        },
+      ]);
+      setBookingMode(false);
+    } finally {
+      setSlotLoading(false);
+    }
+  }
+
+  async function holdSlot(slot: Slot) {
+    if (!token || !conversationId) return;
+
+    try {
+      const res = await fetch("/api/widget/hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          start_at: slot.start_at,
+          end_at: slot.end_at,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text:
+              lang === "de"
+                ? "Dieser Termin ist gerade nicht mehr verfügbar. Ich lade neue Optionen."
+                : "That slot is no longer available. I'll load fresh options.",
+          },
+        ]);
+        await loadSlots();
+        return;
+      }
+
+      setSelectedSlot(slot);
+      setHoldToken(String(json?.hold_token || ""));
+      setHoldExpiresAt(String(json?.expires_at || ""));
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: lang === "de" ? "Fehler beim Reservieren des Termins." : "Error while reserving the slot.",
+        },
+      ]);
+    }
+  }
+
+  async function confirmBooking() {
+    if (!token || !conversationId || !holdToken || bookingSubmitting) return;
+
+    const name = bookingName.trim();
+    const email = bookingEmail.trim().toLowerCase();
+    const phone = bookingPhone.trim();
+
+    if (!email && !phone) {
+      alert(lang === "de" ? "Bitte gib E-Mail oder Telefonnummer an." : "Please provide at least email or phone.");
+      return;
+    }
+    if (email && !isValidEmail(email)) {
+      alert(lang === "de" ? "Bitte gib eine gültige E-Mail ein." : "Please enter a valid email.");
+      return;
+    }
+
+    setBookingSubmitting(true);
+
+    try {
+      const res = await fetch("/api/widget/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          hold_token: holdToken,
+          conversation_id: conversationId,
+          contact_name: name || null,
+          contact_email: email || null,
+          contact_phone: phone || null,
+          title: "Widget appointment",
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text:
+              lang === "de"
+                ? `Termin konnte nicht bestätigt werden: ${json?.error || res.status}`
+                : `Could not confirm the appointment: ${json?.error || res.status}`,
+          },
+        ]);
+        return;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text:
+            lang === "de"
+              ? "Perfekt — dein Termin wurde bestätigt. Wir melden uns bei Bedarf mit weiteren Details."
+              : "Perfect — your appointment is confirmed. We’ll follow up with any needed details.",
+        },
+      ]);
+
+      setBookingMode(false);
+      setSlots([]);
+      setSelectedSlot(null);
+      setHoldToken("");
+      setHoldExpiresAt("");
+      setBookingName("");
+      setBookingEmail("");
+      setBookingPhone("");
+    } finally {
+      setBookingSubmitting(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }
 
   async function send() {
     if (!canSend) return;
@@ -218,7 +413,11 @@ export default function WidgetPage() {
       const hdrLang = String(res.headers.get("x-tamtam-lang") || "").toLowerCase();
       if (hdrLang === "de" || hdrLang === "en") setLang(hdrLang as any);
 
-      if (json?.need_lead_capture) {
+      const action = String(json?.action || "reply");
+      if (action === "show_slots") {
+        setLeadMode(false);
+        await loadSlots();
+      } else if (action === "capture_contact" || action === "handoff" || json?.need_lead_capture) {
         setLeadPrompt(String(json?.lead_prompt || ""));
         setLeadMode(true);
       }
@@ -359,7 +558,6 @@ export default function WidgetPage() {
   overflow: hidden;
 }
 
-/* header */
 .tt-header{
   display:flex;
   align-items:center;
@@ -496,12 +694,40 @@ export default function WidgetPage() {
   color:#111;
 }
 
-/* lead bits */
 .tt-lead{ margin-top:12px; padding:14px; border-radius:22px; }
 .tt-grid{ display:grid; gap:8px; }
 .tt-leadPrompt{ font-size:13px; color: var(--tt-muted); margin-bottom:10px; line-height:1.35; }
-.tt-rowBtns{ display:flex; gap:10px; }
+.tt-rowBtns{ display:flex; gap:10px; flex-wrap: wrap; }
 .tt-help{ font-size:12px; color: var(--tt-muted); margin-top:8px; }
+
+.tt-slots{
+  margin-top:12px;
+  padding:14px;
+  border-radius:22px;
+}
+.tt-slotGrid{
+  display:grid;
+  gap:8px;
+  margin-top:12px;
+}
+.tt-slotBtn{
+  width:100%;
+  text-align:left;
+  padding:10px 12px;
+  border-radius:16px;
+  border:1px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.70);
+  cursor:pointer;
+  font-weight:700;
+}
+.tt-slotBtn.active{
+  background:#111;
+  color:#fff;
+}
+.tt-mini{
+  font-size:12px;
+  color: var(--tt-muted);
+}
       `}</style>
 
       <div className="tt-card tt-shell">
@@ -599,6 +825,88 @@ export default function WidgetPage() {
           </button>
         </div>
       </div>
+
+      {bookingMode && (
+        <div className="tt-card tt-slots">
+          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 900 }}>
+            {lang === "de" ? "Termine" : "Appointments"}
+          </h3>
+
+          {!selectedSlot ? (
+            <>
+              <div className="tt-mini">
+                {slotLoading
+                  ? lang === "de"
+                    ? "Lade freie Termine…"
+                    : "Loading available slots…"
+                  : lang === "de"
+                  ? "Wähle einen freien Termin aus."
+                  : "Choose an available slot."}
+              </div>
+
+              <div className="tt-slotGrid">
+                {slots.map((slot) => (
+                  <button
+                    key={slot.start_at}
+                    type="button"
+                    className="tt-slotBtn"
+                    onClick={() => holdSlot(slot)}
+                    disabled={slotLoading}
+                  >
+                    {formatSlot(slot.start_at, slotTimezone)}
+                  </button>
+                ))}
+              </div>
+
+              {!slotLoading && slots.length === 0 ? (
+                <div className="tt-help">
+                  {lang === "de" ? "Keine freien Termine gefunden." : "No open slots found."}
+                </div>
+              ) : null}
+
+              <div className="tt-rowBtns" style={{ marginTop: 12 }}>
+                <button className="tt-btn secondary" onClick={() => setBookingMode(false)}>
+                  {lang === "de" ? "Schließen" : "Close"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="tt-leadPrompt">
+                {lang === "de"
+                  ? `Reserviert bis ${holdExpiresAt ? new Date(holdExpiresAt).toLocaleTimeString() : ""}: ${formatSlot(selectedSlot.start_at, slotTimezone)}`
+                  : `Reserved until ${holdExpiresAt ? new Date(holdExpiresAt).toLocaleTimeString() : ""}: ${formatSlot(selectedSlot.start_at, slotTimezone)}`}
+              </div>
+
+              <div className="tt-grid">
+                <input className="tt-input" value={bookingName} onChange={(e) => setBookingName(e.target.value)} placeholder={lang === "de" ? "Name (optional)" : "Name (optional)"} />
+                <input className="tt-input" value={bookingEmail} onChange={(e) => setBookingEmail(e.target.value)} placeholder={lang === "de" ? "E-Mail (optional)" : "Email (optional)"} />
+                <input className="tt-input" value={bookingPhone} onChange={(e) => setBookingPhone(e.target.value)} placeholder={lang === "de" ? "Telefon (optional)" : "Phone (optional)"} />
+
+                <div className="tt-rowBtns">
+                  <button className="tt-btn" onClick={confirmBooking} disabled={bookingSubmitting}>
+                    {bookingSubmitting ? "…" : lang === "de" ? "Termin bestätigen" : "Confirm appointment"}
+                  </button>
+
+                  <button
+                    className="tt-btn secondary"
+                    onClick={() => {
+                      setSelectedSlot(null);
+                      setHoldToken("");
+                      setHoldExpiresAt("");
+                    }}
+                    disabled={bookingSubmitting}
+                  >
+                    {lang === "de" ? "Anderen Slot wählen" : "Choose another slot"}
+                  </button>
+                </div>
+
+                <div className="tt-help">{lang === "de" ? "Mindestens E-Mail oder Telefon angeben." : "Provide at least email or phone."}</div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {leadMode && (
         <div className="tt-card tt-lead">
