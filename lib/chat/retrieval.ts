@@ -1,6 +1,10 @@
 import OpenAI from "openai";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { captureError } from "@/lib/logger";
 import type { ChatMessage } from "./types";
+
+const SUMMARY_THRESHOLD = 14; // summarize when history exceeds this many messages
+const SUMMARY_TAIL = 6;       // keep this many recent messages verbatim after summarizing
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -116,4 +120,53 @@ export function buildRagQuery(historyMsgs: ChatMessage[], currentMessage: string
     .map((m) => m.content)
     .join(" ");
   return (recentUserContext + " " + currentMessage).trim().slice(0, 1000);
+}
+
+/**
+ * When a conversation exceeds SUMMARY_THRESHOLD messages, summarize the older
+ * half into a single system message so the prompt stays focused and cheap.
+ * Returns the messages array to pass to OpenAI — either unchanged (short threads)
+ * or [summary-system-msg, ...recent-tail].
+ */
+export async function compressHistory(
+  msgs: ChatMessage[],
+  openai: OpenAI
+): Promise<ChatMessage[]> {
+  if (msgs.length <= SUMMARY_THRESHOLD) return msgs;
+
+  const toSummarize = msgs.slice(0, msgs.length - SUMMARY_TAIL);
+  const tail = msgs.slice(msgs.length - SUMMARY_TAIL);
+
+  const transcript = toSummarize
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+    .join("\n");
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      max_tokens: 300,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Summarize the following chat transcript in 3–5 bullet points. Focus on: what the user wants, what they've already shared (name, email, phone, preferences), and where the conversation left off. Be factual and concise.",
+        },
+        { role: "user", content: transcript },
+      ],
+    });
+
+    const summary = res.choices[0]?.message?.content?.trim() ?? "";
+    if (!summary) return msgs;
+
+    // Inject summary as a system message before the recent tail
+    return [
+      { role: "assistant", content: `[Earlier conversation summary]\n${summary}` } as unknown as ChatMessage,
+      ...tail,
+    ];
+  } catch (err) {
+    captureError(err, { context: "compress_history" });
+    // Fall back to just the tail to stay within limits
+    return tail;
+  }
 }

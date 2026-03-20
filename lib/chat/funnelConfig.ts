@@ -46,5 +46,7 @@ export async function loadFunnelConfig(company_id: string): Promise<FunnelConfig
       frustrated_user: true,
       repeated_failure: true,
     },
+    model: String(data?.model || "gpt-4o-mini"),
+    temperature: typeof data?.temperature === "number" ? Math.max(0, Math.min(1, data.temperature)) : 0.2,
   };
 }

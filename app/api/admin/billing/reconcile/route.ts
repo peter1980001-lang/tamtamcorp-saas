@@ -49,7 +49,7 @@ async function reconcileTrials() {
     return { ok: true as const, scanned: 0, expired: 0, updated: 0, company_ids: [] as string[] };
   }
 
-  const companyIds = expired.map((r: any) => String(r.company_id));
+  const companyIds = expired.map((r: { company_id: unknown }) => String(r.company_id));
 
   const { error: uErr } = await supabaseServer
     .from("company_billing")

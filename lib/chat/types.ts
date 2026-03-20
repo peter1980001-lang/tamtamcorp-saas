@@ -27,6 +27,8 @@ export type FunnelConfig = {
   booking_priority: boolean;
   human_handoff_enabled: boolean;
   human_handoff_triggers: Record<string, unknown>;
+  model: string;
+  temperature: number;
 };
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };

@@ -1,5 +1,6 @@
 {
   "crons": [
-    { "path": "/api/admin/billing/reconcile", "schedule": "0 3 * * *" }
+    { "path": "/api/admin/billing/reconcile", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/knowledge-refresh", "schedule": "0 2 * * 0" }
   ]
 }

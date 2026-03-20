@@ -4,7 +4,7 @@ export type BillingDecision =
   | { ok: true; plan_key: string; limits: { per_minute: number; per_day: number } }
   | { ok: false; code: "payment_required"; message: string };
 
-function toInt(v: any, fallback: number) {
+function toInt(v: unknown, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.floor(n) : fallback;
 }

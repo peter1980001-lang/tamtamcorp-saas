@@ -18,7 +18,7 @@ export type ClosingStyle = "booking_first" | "contact_first" | "soft_close" | "s
 
 export type FunnelConfigLite = {
   require_qualification?: boolean | null;
-  qualification_fields?: any;
+  qualification_fields?: Record<string, unknown>;
 
   assistant_mode?: AssistantMode | string | null;
   primary_goal?: PrimaryGoal | string | null;
@@ -27,7 +27,7 @@ export type FunnelConfigLite = {
   booking_priority?: boolean | null;
 
   human_handoff_enabled?: boolean | null;
-  human_handoff_triggers?: any;
+  human_handoff_triggers?: Record<string, unknown>;
 };
 
 export function detectPriceObjection(text: string) {
@@ -39,7 +39,7 @@ export function detectProceed(text: string) {
 }
 
 export function detectCommercial(text: string) {
-  return /(price|pricing|cost|quote|offer|proposal|trial|subscribe|plan|package|preis|kosten|angebot|paket|abo)/i.test(text);
+  return /(price|pricing|cost|quote|offer|proposal|trial|subscribe|plan|package|preis|kostet?|angebot|paket|\babo\b)/i.test(text);
 }
 
 export function detectContact(text: string) {
@@ -139,7 +139,7 @@ export function decideAction(params: {
 export function oneStrategicQuestion(
   state: FunnelState,
   config?: FunnelConfigLite | null,
-  known?: Record<string, any> | null
+  known?: Record<string, unknown> | null
 ): string | null {
   const fields = config?.qualification_fields || {};
   const assistantMode = String(config?.assistant_mode || "sales");

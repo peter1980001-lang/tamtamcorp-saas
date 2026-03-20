@@ -1,4 +1,5 @@
 import { supabaseServer } from "@/lib/supabaseServer";
+import { notifyHotLead } from "@/lib/notifications";
 import type { DecidedAction, FunnelState } from "./types";
 
 export function extractEmail(text: string): string | null {
@@ -156,12 +157,36 @@ export async function upsertCompanyLead(params: {
     message: params.message,
   });
 
+  const prevBand = existing?.score_band ?? "cold";
+
+  // Map funnel state → lead_state pipeline stage (only advance, never go backwards)
+  const funnelToLeadState: Record<string, string> = {
+    awareness: "discovery",
+    pricing_interest: "qualified",
+    objection_price: "qualified",
+    qualification: "qualified",
+    contact_capture: "committed",
+    closing: "committed",
+  };
+  const nextLeadStateFromFunnel = funnelToLeadState[params.state] ?? "discovery";
+  const leadStatePriority: Record<string, number> = {
+    discovery: 0,
+    qualified: 1,
+    committed: 2,
+    closed: 3,
+  };
+  const prevLeadState = existing?.lead_state || "discovery";
+  const nextLeadState =
+    (leadStatePriority[nextLeadStateFromFunnel] ?? 0) > (leadStatePriority[prevLeadState] ?? 0)
+      ? nextLeadStateFromFunnel
+      : prevLeadState;
+
   await supabaseServer.from("company_leads").upsert(
     {
       company_id: params.company_id,
       conversation_id: params.conversation_id,
       channel: "widget",
-      lead_state: existing?.lead_state || "discovery",
+      lead_state: nextLeadState,
       status: existing?.status || "new",
       name: existing?.name || null,
       email: mergedEmail,
@@ -177,4 +202,18 @@ export async function upsertCompanyLead(params: {
     },
     { onConflict: "company_id,conversation_id" }
   );
+
+  // Fire hot lead notification the first time a lead reaches "hot"
+  if (nextBand === "hot" && prevBand !== "hot") {
+    notifyHotLead({
+      company_id: params.company_id,
+      conversation_id: params.conversation_id,
+      score_band: nextBand,
+      name: existing?.name || null,
+      email: mergedEmail,
+      phone: mergedPhone,
+      intent: params.intent,
+      last_message: params.message,
+    }).catch(() => {});
+  }
 }

@@ -392,7 +392,9 @@ export default function WidgetPage() {
     const text = input.trim();
     setInput("");
     setBusy(true);
-    setMessages((prev) => [...prev, { role: "user", text }]);
+
+    // Add user message + empty assistant placeholder immediately
+    setMessages((prev) => [...prev, { role: "user", text }, { role: "assistant", text: "" }]);
 
     try {
       const res = await fetch("/api/widget/message", {
@@ -401,34 +403,81 @@ export default function WidgetPage() {
         body: JSON.stringify({ conversation_id: conversationId, message: text }),
       });
 
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        setMessages((prev) => [...prev, { role: "assistant", text: `Error: ${json?.error || res.status}` }]);
+      if (!res.ok || !res.body) {
+        const json = await res.json().catch(() => null);
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          { role: "assistant", text: `Error: ${json?.error || res.status}` },
+        ]);
         return;
       }
 
-      const reply = String(json?.reply || "");
-      setMessages((prev) => [...prev, { role: "assistant", text: reply }]);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let seenDone = false;
 
-      const hdrLang = String(res.headers.get("x-tamtam-lang") || "").toLowerCase();
-      if (hdrLang === "de" || hdrLang === "en") setLang(hdrLang as any);
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      const action = String(json?.action || "reply");
-      if (action === "show_slots") {
-        setLeadMode(false);
-        await loadSlots();
-      } else if (action === "capture_contact" || action === "handoff" || json?.need_lead_capture) {
-        setLeadPrompt(String(json?.lead_prompt || ""));
-        setLeadMode(true);
+        buf += decoder.decode(value, { stream: true });
+
+        // SSE events are delimited by double newlines
+        const events = buf.split("\n\n");
+        buf = events.pop() ?? "";
+
+        for (const event of events) {
+          const lines = event.split("\n");
+          for (const line of lines) {
+            if (line === "event: done") {
+              seenDone = true;
+            } else if (line.startsWith("data: ")) {
+              const raw = line.slice(6);
+              if (seenDone) {
+                // Final metadata event
+                try {
+                  const meta = JSON.parse(raw);
+                  const act = String(meta.action || "reply");
+                  if (act === "show_slots") {
+                    setLeadMode(false);
+                    loadSlots();
+                  } else if (act === "capture_contact" || act === "handoff" || meta.need_lead_capture) {
+                    setLeadPrompt(String(meta.lead_prompt || ""));
+                    setLeadMode(true);
+                  }
+                } catch {}
+                break outer;
+              } else {
+                // Streaming text chunk — JSON-encoded to preserve newlines safely
+                try {
+                  const chunk: string = JSON.parse(raw);
+                  setMessages((prev) => {
+                    const copy = [...prev];
+                    const last = copy[copy.length - 1];
+                    if (last?.role === "assistant") {
+                      copy[copy.length - 1] = { role: "assistant", text: last.text + chunk };
+                    }
+                    return copy;
+                  });
+                } catch {}
+              }
+            }
+          }
+        }
       }
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: lang === "de" ? "Netzwerkfehler. Bitte erneut versuchen." : "Network error. Please try again.",
-        },
-      ]);
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        // Replace empty placeholder with error, or leave partial reply as-is
+        if (last?.role === "assistant" && !last.text) {
+          return [
+            ...prev.slice(0, -1),
+            { role: "assistant", text: lang === "de" ? "Netzwerkfehler. Bitte erneut versuchen." : "Network error. Please try again." },
+          ];
+        }
+        return prev;
+      });
     } finally {
       setBusy(false);
       setTimeout(() => inputRef.current?.focus(), 50);
@@ -757,36 +806,40 @@ export default function WidgetPage() {
           {messages.map((m, idx) => (
             <div key={idx} className={`tt-row ${m.role}`}>
               <div className={`tt-bubble ${m.role}`}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    a: ({ node: _node, ...props }: any) => (
-                      <a
-                        {...props}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: "#111", textDecoration: "underline", fontWeight: 700 }}
-                      />
-                    ),
-                    ul: ({ node: _node, ...props }: any) => <ul {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
-                    ol: ({ node: _node, ...props }: any) => <ol {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
-                    li: ({ node: _node, ...props }: any) => <li {...props} style={{ margin: "4px 0" }} />,
-                    code: ({ node: _node, ...props }: any) => (
-                      <code
-                        {...props}
-                        style={{
-                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                          fontSize: 13,
-                          background: "rgba(17,17,17,0.06)",
-                          padding: "2px 6px",
-                          borderRadius: 8,
-                        }}
-                      />
-                    ),
-                  }}
-                >
-                  {m.text}
-                </ReactMarkdown>
+                {m.role === "assistant" && m.text === "" ? (
+                  <span style={{ opacity: 0.45, letterSpacing: 2 }}>● ● ●</span>
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ node: _node, ...props }: any) => (
+                        <a
+                          {...props}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: "#111", textDecoration: "underline", fontWeight: 700 }}
+                        />
+                      ),
+                      ul: ({ node: _node, ...props }: any) => <ul {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
+                      ol: ({ node: _node, ...props }: any) => <ol {...props} style={{ paddingLeft: 18, margin: "8px 0" }} />,
+                      li: ({ node: _node, ...props }: any) => <li {...props} style={{ margin: "4px 0" }} />,
+                      code: ({ node: _node, ...props }: any) => (
+                        <code
+                          {...props}
+                          style={{
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                            fontSize: 13,
+                            background: "rgba(17,17,17,0.06)",
+                            padding: "2px 6px",
+                            borderRadius: 8,
+                          }}
+                        />
+                      ),
+                    }}
+                  >
+                    {m.text}
+                  </ReactMarkdown>
+                )}
               </div>
             </div>
           ))}

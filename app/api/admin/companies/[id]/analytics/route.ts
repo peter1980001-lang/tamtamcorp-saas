@@ -35,10 +35,11 @@ function pctChange(current: number, previous: number) {
   return ((current - previous) / previous) * 100;
 }
 
-function isQualified(q: any) {
-  if (!q) return false;
-  if (q.qualified === true) return true;
-  const s = String(q.status || q.stage || "").toLowerCase();
+function isQualified(q: unknown) {
+  if (!q || typeof q !== "object") return false;
+  const obj = q as Record<string, unknown>;
+  if (obj.qualified === true) return true;
+  const s = String(obj.status || obj.stage || "").toLowerCase();
   return s === "qualified" || s === "hot" || s === "won";
 }
 
@@ -134,6 +135,21 @@ export async function GET(
   }).length;
 
   // -----------------------
+  // Lead band + funnel state breakdown (30d)
+  // -----------------------
+  const bandCount: Record<string, number> = { cold: 0, warm: 0, hot: 0 };
+  const funnelCount: Record<string, number> = {};
+
+  for (const l of leads30Arr) {
+    const q = (l as any).qualification_json;
+    const band = String(q?.score_band || "cold");
+    bandCount[band] = (bandCount[band] || 0) + 1;
+
+    const fs = String(q?.funnel_state || "awareness");
+    funnelCount[fs] = (funnelCount[fs] || 0) + 1;
+  }
+
+  // -----------------------
   // 14-day series
   // -----------------------
   const days = daysRangeUTC(14);
@@ -177,5 +193,7 @@ export async function GET(
       qualified_7d_pct_change: pctChange(qualified7, qualifiedPrev7),
     },
     series_14d,
+    lead_bands: bandCount,
+    funnel_states: funnelCount,
   });
 }

@@ -31,6 +31,8 @@ export type AnalyticsResponse = {
     qualified_7d_pct_change: number;
   };
   series_14d: SeriesPoint[];
+  lead_bands: Record<string, number>;
+  funnel_states: Record<string, number>;
 };
 
 function fmtNum(n: number) {
@@ -187,6 +189,50 @@ export default function UsageDashboard(props: { companyId: string; setToast?: (s
               value={fmtRate(data.kpis.qualified_per_lead_30d_pct)}
               subtitle={`Lead/Chat (30d): ${fmtRate(data.kpis.lead_per_chat_30d_pct)}`}
             />
+          </div>
+
+          {/* Lead pipeline breakdown */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Card title="Lead score bands (30d)" subtitle="Distribution of cold / warm / hot leads.">
+              {(["hot", "warm", "cold"] as const).map((band) => {
+                const count = data.lead_bands?.[band] ?? 0;
+                const total = Object.values(data.lead_bands ?? {}).reduce((a, b) => a + b, 0);
+                const pct = total > 0 ? (count / total) * 100 : 0;
+                const color = band === "hot" ? "#e53e3e" : band === "warm" ? "#dd6b20" : "#718096";
+                return (
+                  <div key={band} style={{ marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3 }}>
+                      <span style={{ textTransform: "capitalize", fontWeight: 600 }}>{band}</span>
+                      <span style={{ color: "#555" }}>{count} ({pct.toFixed(0)}%)</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "#f0f0f0" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </Card>
+
+            <Card title="Funnel stage distribution (30d)" subtitle="Where leads are in the funnel.">
+              {Object.entries(data.funnel_states ?? {})
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 6)
+                .map(([state, count]) => {
+                  const total = Object.values(data.funnel_states ?? {}).reduce((a, b) => a + b, 0);
+                  const pct = total > 0 ? (count / total) * 100 : 0;
+                  return (
+                    <div key={state} style={{ marginBottom: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3 }}>
+                        <span style={{ fontWeight: 600 }}>{state.replace(/_/g, " ")}</span>
+                        <span style={{ color: "#555" }}>{count} ({pct.toFixed(0)}%)</span>
+                      </div>
+                      <div style={{ height: 6, borderRadius: 3, background: "#f0f0f0" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: "#3182ce" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </Card>
           </div>
 
           <Card title="Daily breakdown (14d)" subtitle={`Updated: ${new Date(data.generated_at).toLocaleString()}`}>

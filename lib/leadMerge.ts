@@ -1,6 +1,7 @@
 // lib/leadMerge.ts
 import crypto from "crypto";
 import { supabaseServer } from "@/lib/supabaseServer";
+import { captureError } from "@/lib/logger";
 
 type FindOrCreateParams = {
   company_id: string;
@@ -130,7 +131,7 @@ export async function findOrCreateCompanyLead(params: FindOrCreateParams) {
 export async function updateLeadBookingSignals(lead_id: string) {
   try {
     await supabaseServer.rpc("increment_lead_booking_count", { p_lead_id: lead_id });
-  } catch {
-    // ignore (optional)
+  } catch (err) {
+    captureError(err, { context: "increment_lead_booking_count", lead_id });
   }
 }

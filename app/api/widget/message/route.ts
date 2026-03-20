@@ -16,9 +16,11 @@ import {
   oneStrategicQuestion,
 } from "@/lib/funnelEngine";
 import { loadFunnelConfig } from "@/lib/chat/funnelConfig";
+import { captureError } from "@/lib/logger";
 import {
   buildContext,
   buildRagQuery,
+  compressHistory,
   embedQuery,
   fetchForcedPricingContext,
   loadChatHistory,
@@ -26,6 +28,7 @@ import {
 } from "@/lib/chat/retrieval";
 import { upsertCompanyLead } from "@/lib/chat/lead";
 import { buildSystemPrompt } from "@/lib/chat/prompt";
+import { notifyHumanHandoff } from "@/lib/notifications";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
@@ -120,8 +123,8 @@ export async function POST(req: Request) {
     knownQualification = qual;
     const ps = qual?.funnel_state;
     if (ps && typeof ps === "string") prevState = ps as import("@/lib/funnelEngine").FunnelState;
-  } catch {
-    // non-fatal
+  } catch (err) {
+    captureError(err, { context: "funnel_state_load", company_id, conversation_id });
   }
 
   const state = nextFunnelState({ message, prev: prevState, config: funnelConfig });
@@ -171,11 +174,11 @@ export async function POST(req: Request) {
         context = buildContext(match.rows);
       }
     }
-  } catch {
-    // RAG failure is non-fatal; reply proceeds without context
+  } catch (err) {
+    captureError(err, { context: "rag_retrieval", company_id, conversation_id });
   }
 
-  // --- Build prompt + call LLM ---
+  // --- Build prompt + stream LLM ---
   const companyName = await loadCompanyName(company_id);
   const systemPrompt = buildSystemPrompt({
     companyName,
@@ -187,35 +190,92 @@ export async function POST(req: Request) {
     knownQualification,
   });
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    messages: [{ role: "system", content: systemPrompt }, ...historyMsgs],
+  // Summarize old messages when thread is long to keep the prompt tight
+  const compressedHistory = await compressHistory(historyMsgs, openai);
+
+  const llmStream = await openai.chat.completions.create({
+    model: funnelConfig.model,
+    temperature: funnelConfig.temperature,
+    messages: [{ role: "system", content: systemPrompt }, ...compressedHistory],
+    stream: true,
   });
 
-  let reply = String(completion.choices?.[0]?.message?.content || "").trim();
+  const encoder = new TextEncoder();
 
-  if (!reply) {
-    if (action === "show_slots") {
-      reply = "Absolutely — I can help with that. Here are the next available appointment options.";
-    } else if (action === "handoff") {
-      reply = "Of course — I'm sorry for the frustration. I'll help you get this to a real person.";
-    } else {
-      reply = "Absolutely — how can I help?";
-    }
-  }
+  const isHumanHandoff = action === "handoff" || detectHumanHandoffRequest(message) || detectFrustration(message);
 
-  // --- Store assistant reply ---
-  await supabaseServer.from("messages").insert({ conversation_id, role: "assistant", content: reply });
-
-  return NextResponse.json({
-    reply,
+  const meta = {
     action,
     need_lead_capture: needLeadCapture,
     lead_prompt: strategicQuestion || null,
-    sources,
     funnel_state: state,
+    sources,
     booking_requested: action === "show_slots" || detectBookingIntent(message),
-    human_handoff: action === "handoff" || detectHumanHandoffRequest(message) || detectFrustration(message),
+    human_handoff: isHumanHandoff,
+  };
+
+  // Fire handoff notification non-blocking
+  if (isHumanHandoff && funnelConfig.human_handoff_enabled) {
+    const trigger =
+      action === "handoff"
+        ? detectHumanHandoffRequest(message)
+          ? "owner_request"
+          : "frustrated_user"
+        : detectFrustration(message)
+        ? "frustrated_user"
+        : "unknown";
+    notifyHumanHandoff({ company_id, conversation_id, trigger, last_message: message }).catch(() => {});
+  }
+
+  const readable = new ReadableStream({
+    async start(controller) {
+      let fullText = "";
+
+      try {
+        for await (const chunk of llmStream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (delta) {
+            fullText += delta;
+            // JSON-encode delta so newlines inside the text don't break SSE framing
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(delta)}\n\n`));
+          }
+        }
+      } catch (err) {
+        captureError(err, { context: "llm_stream", company_id, conversation_id });
+        // emit what accumulated so far
+      }
+
+      // Fallback if LLM returned nothing
+      if (!fullText) {
+        const fallback =
+          action === "show_slots"
+            ? "Absolutely — here are the next available appointment options."
+            : action === "handoff"
+            ? "Of course — I'm sorry for the frustration. I'll help you get this to a real person."
+            : "How can I help?";
+        fullText = fallback;
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(fallback)}\n\n`));
+      }
+
+      // Store completed assistant message
+      await supabaseServer.from("messages").insert({
+        conversation_id,
+        role: "assistant",
+        content: fullText,
+      });
+
+      // Final metadata event — client reads this to trigger actions
+      controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify(meta)}\n\n`));
+      controller.close();
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
 }

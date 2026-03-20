@@ -26,7 +26,7 @@ export async function POST(_req: NextRequest) {
   }
 
   // Update expired -> expired
-  const companyIds = expired.map((r: any) => r.company_id);
+  const companyIds = expired.map((r: { company_id: unknown }) => r.company_id);
 
   const { error: uErr } = await supabaseServer
     .from("company_billing")

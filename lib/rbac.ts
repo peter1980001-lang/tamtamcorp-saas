@@ -33,7 +33,7 @@ export async function requireOwnerOrAdmin(): Promise<RBACResult> {
 
   if (error) return { ok: false, status: 401, error: "forbidden" };
 
-  const company_ids = (data ?? []).map((x: any) => String(x.company_id));
+  const company_ids = (data ?? []).map((x: { company_id: unknown }) => String(x.company_id));
   if (company_ids.length === 0) return { ok: false, status: 401, error: "forbidden" };
 
   return { ok: true, role: "admin", company_ids };
