@@ -9,7 +9,11 @@
     return;
   }
 
-  var host = script.getAttribute("data-host") || "https://tamtamcorp-saas-pcwl.vercel.app";
+  var host = String(script.getAttribute("data-host") || "").trim();
+  if (!host) {
+    console.error("[TamTam Widget] Missing data-host attribute");
+    return;
+  }
   var position = script.getAttribute("data-position") || "right";
   var zIndex = script.getAttribute("data-z") || "2147483000";
 
