@@ -171,7 +171,7 @@ export default function WidgetPage() {
 
         try {
           const b = await fetch("/api/widget/bootstrap", {
-            method: "GET",
+            method: "POST",
             headers: { Authorization: `Bearer ${t}` },
           });
           const bJson = await b.json().catch(() => null);
