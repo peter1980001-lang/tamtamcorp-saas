@@ -4,7 +4,25 @@
       "Bash(npm install:*)",
       "Bash(npx tsc:*)",
       "Bash(npx vitest:*)",
-      "Bash(grep -E \"\\\\.\\(tsx|ts|css\\)$\")"
+      "Bash(grep -E \"\\\\.\\(tsx|ts|css\\)$\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(mkdir -p /c/Users/ibrah/Documents/aquacity-presentation)",
+      "Bash(npm create:*)",
+      "Bash(find /c/Users/ibrah -name *AquaCity* -o -name *aquacity* -o -name *MAK*)",
+      "Bash(find /c/Users/ibrah -name AquaCity*.pptx -o -name HRV*AquaCity*.pptx)",
+      "Bash(find /c/Users/ibrah/AppData/Local/Packages -name *AquaCity* -o -name *aquacity*)",
+      "Bash(node -e \":*)",
+      "Bash(PPTX_PATH=\"C:\\\\Users\\\\ibrah\\\\OneDrive\\\\Desktop\\\\Werbung Dubai\\\\MAK Grupa\\\\HRV AquaCity_Varazdin_Lake_Destination_Development_Vision_MAK_Grupa.pptx\")",
+      "Bash(unzip -o source.pptx \"ppt/slides/_rels/*.rels\" -d unpacked-rels)",
+      "Bash(grep -l \"media\" /c/Users/ibrah/Documents/aquacity-presentation/unpacked-rels/ppt/slides/_rels/*.rels)",
+      "Bash(unzip -o source.pptx \"ppt/slides/_rels/*.rels\" -d unpacked-rels2)",
+      "Bash(mkdir -p public/images)",
+      "Bash(npm run:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''exports'''', {}\\), indent=2\\)\\)\")",
+      "Bash(curl -s http://localhost:5173/)",
+      "Bash(grep -v \"^/c/Users/ibrah/Documents/aquacity-presentation$\")",
+      "mcp__21st-dev-magic__21st_magic_component_inspiration"
     ]
   }
 }
