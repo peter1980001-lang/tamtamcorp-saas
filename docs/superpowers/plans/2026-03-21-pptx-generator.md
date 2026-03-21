@@ -422,10 +422,6 @@ Expected: FAIL with "Cannot find module '../lib/claude'"
 import Anthropic from '@anthropic-ai/sdk'
 import type { BrandingConfig, PresentationSchema, UploadedImage } from './types'
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error('ANTHROPIC_API_KEY environment variable is not set')
-}
-
 const client = new Anthropic()
 
 interface GenerateSlidesParams {
@@ -516,6 +512,9 @@ async function callClaude(
 }
 
 export async function generateSlides(params: GenerateSlidesParams): Promise<PresentationSchema> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY environment variable is not set')
+  }
   const systemPrompt = buildSystemPrompt(params.branding)
   const userContent = buildUserContent(params)
 
@@ -853,7 +852,7 @@ export async function buildPptx(
 ```bash
 npm test -- __tests__/buildPptx.test.ts
 ```
-Expected: PASS (3 tests)
+Expected: PASS (4 tests)
 
 - [ ] **Step 5: Run all tests**
 
