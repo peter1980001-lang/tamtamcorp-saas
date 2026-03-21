@@ -22,7 +22,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''exports'''', {}\\), indent=2\\)\\)\")",
       "Bash(curl -s http://localhost:5173/)",
       "Bash(grep -v \"^/c/Users/ibrah/Documents/aquacity-presentation$\")",
-      "mcp__21st-dev-magic__21st_magic_component_inspiration"
+      "mcp__21st-dev-magic__21st_magic_component_inspiration",
+      "Bash(git push:*)",
+      "Bash(gh auth:*)"
     ]
   }
 }
