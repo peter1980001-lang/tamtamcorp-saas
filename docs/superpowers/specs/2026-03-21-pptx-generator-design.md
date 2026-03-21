@@ -10,29 +10,51 @@
 
 A web app that takes text, images, or existing `.pptx` files as input and generates a professionally designed, downloadable `.pptx` presentation. The AI (Claude API) designs the structure and content automatically — always different, always high quality. A consistent company branding is applied to every cover slide.
 
+**Deployment target:** Self-hosted Node.js (not serverless/Vercel). Filesystem writes for branding are valid.
+
 ---
 
 ## Architecture & Data Flow
 
 ```
-User-Input (Text / Images / .pptx)
+User submits single FormData POST (text + images + optional .pptx)
         ↓
   /api/generate (Next.js Route Handler)
+    ├── if .pptx uploaded: extract text inline (officeparser)
+    ├── images: read as Buffer, kept in-memory for this request
+    ├── call Claude API (text + image Buffers as base64 vision blocks)
+    ├── Claude returns structured JSON (slides array)
+    ├── pptxgenjs builds .pptx (images embedded from in-memory Buffers)
+    └── Response: JSON { slides: [...metadata], file: base64-encoded .pptx }
         ↓
-  /api/extract (if .pptx uploaded → extract text)
-        ↓
-  Claude API (claude-sonnet-4-6) → structured JSON (slides array)
-        ↓
-  pptxgenjs → .pptx Buffer
-        ↓
-  HTTP Response → file download
+  Frontend receives JSON, shows slide title list, offers download
 ```
 
 **Key decisions:**
-- Stateless: no database, no stored presentations
-- Single company: no auth, no multi-tenancy
-- Branding stored as `config/branding.json` + logo in `public/branding/`
-- Generated files returned directly as binary response, not persisted
+- Single combined request: extract + generate + build all happen in one POST
+- Images are passed as base64 vision content blocks to Claude (full vision, not just filenames)
+- Images stay in-memory for the duration of the request — no temp file storage needed
+- Response is JSON (not raw binary) so the frontend can show metadata AND trigger download
+- Branding stored as `config/branding.json` + logo in `public/branding/logo` (absolute path resolved at runtime)
+- No database, no session storage, no persisted presentations
+
+---
+
+## File Size Limits
+
+| Upload type | Limit |
+|---|---|
+| Single image | 5 MB (JPEG, PNG, GIF, WebP only — return 400 for other types) |
+| Total images per request | 20 MB |
+| Uploaded `.pptx` | 20 MB |
+
+**Next.js 15 App Router body size configuration** (Pages Router `export const config` is silently ignored in App Router):
+```js
+// next.config.ts
+experimental: {
+  serverActions: { bodySizeLimit: '25mb' }
+}
+```
 
 ---
 
@@ -44,25 +66,71 @@ Three sections:
 
 1. **Input Section**
    - Textarea: topic / content as freetext
-   - Image upload: multiple images (used as context for Claude)
-   - `.pptx` upload: existing presentation to extract and perfect
-   - Optional field: desired slide count (e.g. 8–12)
+   - Image upload: multiple images (sent to Claude as vision input)
+   - `.pptx` upload: existing presentation (text extracted inline)
+   - Optional field: desired slide count (default: auto, min: 4, max: 20)
    - Button: "Präsentation generieren"
 
 2. **Status Section** (shown during generation)
-   - Loading animation
-   - Progressive status messages: "Struktur wird geplant...", "Folien werden gebaut..."
+   - Simple spinner + single message: "Präsentation wird generiert..."
+   - No progressive status messages (single request, no streaming)
 
-3. **Download Section** (shown after generation)
-   - "Download .pptx" button
-   - Summary: list of generated slide titles
+3. **Result Section** (shown after generation)
+   - List of generated slide titles (from response JSON metadata)
+   - "Download .pptx" button (triggers download from base64 response)
 
 ### `/branding` — One-time Setup
 
 - Logo upload
-- Primary color picker
+- Primary color picker (hex)
 - Company name input
-- Save → writes to `config/branding.json`, saves logo to `public/branding/logo`
+- Save → `POST /api/branding` → writes `config/branding.json`, saves logo to `public/branding/logo.[ext]`
+- On mount: `GET /api/branding` → loads existing values into form
+
+---
+
+## API Routes
+
+### `POST /api/generate`
+
+**Request:** `multipart/form-data`
+- `text` (string) — freetext input
+- `slideCount` (string, optional) — requested number of slides
+- `images[]` (File[], optional) — uploaded images
+- `presentation` (File, optional) — existing `.pptx`
+
+**Response:** `application/json`
+```json
+{
+  "slides": [
+    { "type": "cover", "title": "Main Title" },
+    { "type": "content", "title": "Slide Title" },
+    { "type": "closing", "title": "Thank You" }
+  ],
+  "file": "<base64-encoded .pptx>"
+}
+```
+
+### `GET /api/branding`
+
+**Response:** `application/json`
+```json
+{
+  "name": "Acme GmbH",
+  "color": "#003366",
+  "logoPath": "/branding/logo.png"
+}
+```
+Returns empty defaults if no branding configured yet.
+
+### `POST /api/branding`
+
+**Request:** `multipart/form-data`
+- `name` (string)
+- `color` (string, hex)
+- `logo` (File, optional)
+
+**Response:** `{ "ok": true }`
 
 ---
 
@@ -87,7 +155,9 @@ Three sections:
       "layout": "title-bullets | title-text | two-columns | image-right",
       "title": "Slide Title",
       "content": ["Bullet 1", "Bullet 2"],
-      "image_hint": "optional: which uploaded image to place here"
+      "left": ["Left col 1", "Left col 2"],
+      "right": ["Right col 1", "Right col 2"],
+      "imageIndex": 0
     },
     {
       "type": "closing",
@@ -98,8 +168,22 @@ Three sections:
 }
 ```
 
-**Slide types:** `cover`, `agenda`, `content`, `closing`
-**Content layouts:** `title-bullets`, `title-text`, `two-columns`, `image-right`
+**Layout-specific fields:**
+- `title-bullets` / `title-text`: uses `content` array
+- `two-columns`: uses `left` array + `right` array (ignores `content`)
+- `image-right`: uses `content` array + `imageIndex` (0-based index into uploaded images array; omit if no images)
+
+**Branding.json schema:**
+```json
+{
+  "name": "Company Name",
+  "color": "#003366",
+  "logoPath": "public/branding/logo.png"
+}
+```
+`logoPath` is stored as a filesystem-relative path from project root (e.g. `public/branding/logo.png`).
+- `buildPptx.ts` uses `path.resolve(process.cwd(), branding.logoPath)` to get the absolute path for embedding.
+- `GET /api/branding` strips the `public/` prefix before returning, so the browser receives a public URL: `/branding/logo.png`.
 
 ---
 
@@ -108,16 +192,28 @@ Three sections:
 **System prompt:**
 - Role: "Elite Presentation Designer"
 - Branding context: company name, primary color
-- Rules: max 6 bullets per slide, concise titles, vary layouts across slides, always start with cover, always end with closing
-- Output: valid JSON only, no prose
+- Rules:
+  - Always start with `cover` slide, always end with `closing` slide
+  - Max 6 bullets per slide
+  - Concise, impactful titles
+  - Vary layouts across slides — no two consecutive slides with the same layout
+  - Only use `image-right` layout if images were provided in the request
+  - If `slideCount` is provided, hit that count exactly (including cover + closing)
+  - Return valid JSON only — no prose, no markdown code fences
 
 **User prompt:**
-- Raw input text
+- Freetext input
 - Extracted text from uploaded `.pptx` (if any)
-- Image descriptions (filenames + any extracted metadata)
-- Requested slide count (if provided)
+- Uploaded images sent as base64 vision content blocks via Anthropic SDK's `image` content type
+- Requested slide count (if provided, otherwise "choose appropriate count between 6 and 12")
 
-**Error recovery:** If Claude returns invalid JSON, retry once with a corrected prompt that includes the error and asks for valid JSON only.
+**Retry logic for invalid JSON:**
+If `JSON.parse()` fails on Claude's response, retry once with this prompt appended to the original user message:
+```
+Your previous response was not valid JSON. The parse error was: {error.message}
+Please return only the JSON object, with no surrounding text, no markdown fences, and no explanation.
+```
+If retry also fails, throw an error and return HTTP 500 to the client.
 
 ---
 
@@ -139,20 +235,18 @@ Three sections:
 ```
 pptx-generator/
 ├── app/
-│   ├── page.tsx                  ← Main page (input + status + download)
+│   ├── page.tsx                  ← Main page (input + status + result)
 │   ├── branding/
 │   │   └── page.tsx              ← Branding setup
 │   └── api/
 │       ├── generate/
-│       │   └── route.ts          ← Claude call + pptxgenjs
-│       ├── branding/
-│       │   └── route.ts          ← Read/write branding config
-│       └── extract/
-│           └── route.ts          ← Extract text from uploaded .pptx
+│       │   └── route.ts          ← Extract + Claude + pptxgenjs (combined)
+│       └── branding/
+│           └── route.ts          ← GET + POST branding config
 ├── lib/
-│   ├── claude.ts                 ← Claude API call + JSON parsing
+│   ├── claude.ts                 ← Claude API call + JSON parsing + retry
 │   ├── buildPptx.ts              ← pptxgenjs slide builder
-│   └── extractPptx.ts            ← .pptx text extractor
+│   └── extractPptx.ts            ← .pptx text extractor (officeparser wrapper)
 ├── config/
 │   └── branding.json             ← { name, color, logoPath }
 └── public/
@@ -165,10 +259,12 @@ pptx-generator/
 
 | Scenario | Handling |
 |---|---|
-| Claude returns invalid JSON | Retry once with corrected prompt |
-| Upload too large | Clear error message, reject with 413 |
-| Generation fails | User sees error message, can retry |
-| No branding configured | Fallback to neutral gray + placeholder |
+| Claude returns invalid JSON | Retry once with corrected prompt; 500 if retry fails |
+| Upload exceeds size limit | 413 with message |
+| Generation fails | 500 with message, user can retry |
+| No branding configured | Fallback: neutral dark blue (#1a1a2e), no logo, no company name |
+| `.pptx` extraction fails | Continue with freetext only, log warning |
+| `imageIndex` out of bounds | Skip image embedding for that slide, continue |
 
 ---
 
@@ -177,5 +273,6 @@ pptx-generator/
 - User accounts / authentication
 - Presentation history / storage
 - Real-time collaborative editing
-- Browser-based slide preview/editor
+- Browser-based visual slide preview
 - Multiple company brandings
+- Streaming / progressive generation updates
