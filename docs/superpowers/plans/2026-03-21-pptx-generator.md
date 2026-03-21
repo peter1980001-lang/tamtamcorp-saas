@@ -547,7 +547,7 @@ export async function generateSlides(params: GenerateSlidesParams): Promise<Pres
 ```bash
 npm test -- __tests__/claude.test.ts
 ```
-Expected: PASS (4 tests)
+Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
 
