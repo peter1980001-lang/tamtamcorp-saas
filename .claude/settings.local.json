@@ -24,7 +24,17 @@
       "Bash(grep -v \"^/c/Users/ibrah/Documents/aquacity-presentation$\")",
       "mcp__21st-dev-magic__21st_magic_component_inspiration",
       "Bash(git push:*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(grep -r pixel /c/Users/ibrah/Documents/tamtam-bot --include=*.ts --include=*.tsx -l -i)",
+      "Bash(grep -r pixel /c/Users/ibrah/Documents/tamtam-bot --include=*.ts --include=*.tsx -i -l)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(code /c/Users/ibrah/Documents/aquacity-presentation)",
+      "Bash(cmd /c \"code C:\\\\Users\\\\ibrah\\\\Documents\\\\aquacity-presentation\")",
+      "Bash(node -e \"const o = require\\(''''officeparser''''\\); console.log\\(typeof o.parseOfficeAsync\\)\")",
+      "Bash(node -e \"const o = require\\(''''officeparser''''\\); console.log\\(Object.keys\\(o\\)\\)\")",
+      "Bash(node -e \"const pkg = require\\(''C:/Users/ibrah/Documents/react-generator/package.json''\\); console.log\\(''type:'', pkg.type\\);\")",
+      "Bash(npm test:*)"
     ]
   }
 }
