@@ -30,7 +30,7 @@ Redesign of tamtamcorp.tech as a new standalone React project. The goal is a stu
 | Dark Section BG | `#0A0A0A` | Human + AI section only |
 
 ### Typography
-- **Font:** Inter (Google Fonts)
+- **Font:** Inter (Google Fonts) — loaded via `<link>` preconnect in `index.html` with `font-display: swap`
 - **Hero Headline:** 72px / font-weight 800 / tight letter-spacing (-0.03em)
 - **Section Titles:** 48px / font-weight 700
 - **Subheadings:** 24px / font-weight 600
@@ -94,7 +94,7 @@ tamtamcorp-website/
 
 ### 1. Navbar
 - Sticky, transparent → blur-backdrop after scroll
-- Logo: "Tam Tam Corp" wordmark, left-aligned
+- Logo: "Tam Tam Corp" text-only wordmark (no image asset), font-weight 700, left-aligned. "Tam Tam" in `#0A0A0A`, "Corp" in `#F59E0B` (amber)
 - Links: Services, Process, About, Team, Contact
 - CTA: "Start a Conversation" — filled amber button, right-aligned
 - Mobile: hamburger menu
@@ -102,9 +102,11 @@ tamtamcorp-website/
 ### 2. Hero Section
 - Full viewport height
 - Headline (2-3 lines, 72px, weight 800):
-  > "Founder-led AI Automation **&** Systems Consulting"
-  - The "&" or "Founder-led" in Amber
-- Subtext (max 2 sentences from original site)
+  > "**Founder-led** AI Automation & Systems Consulting"
+  - "Founder-led" is the amber-highlighted word (exact, locked)
+- Subtext (verbatim from site):
+  > "Tam Tam Corp helps businesses implement AI automation, WhatsApp bots, and internal systems with direct founder involvement — designed and built personally, not delegated."
+  > "Implementation-focused, not advisory-only. One accountable point of responsibility from design to deployment."
 - Two CTAs: "Start a Conversation" (black, filled) + "See How We Work" (outlined)
 - Trust badges row: "UAE Based & Licensed · Founder-led · Hands-on Implementation"
 - Staggered entrance animation on load
@@ -123,12 +125,12 @@ tamtamcorp-website/
 
 ### 4. Founder Statement
 - Asymmetric 2-column layout
-- Left: large pull-quote / statement text about founder-led approach
+- Left: large pull-quote (verbatim from site, amber left-border accent):
+  > "Systems are designed and implemented personally by the founder, not delegated to a team you never meet. Decisions come from execution knowledge — the person consulting is the same person who has built, deployed, and maintained similar systems in production. This matters when things get complex. No game of telephone. No layers between the problem and the solution. One accountable point of responsibility from idea to execution."
 - Right: 3 benefit points with icons:
-  - Direct communication (no layers)
-  - Clear responsibility (one accountable mind)
-  - Faster execution (no internal approvals)
-- Optional: subtle amber left-border accent on pull-quote
+  - **Direct communication** — No layers. No forwarding. You work with the person who understands and builds your system.
+  - **Clear responsibility** — One accountable mind from the first idea to the final delivery. No excuses, no gaps.
+  - **Faster execution** — Decisions happen quickly because there are no internal approvals or handovers to slow things down.
 
 ### 5. Human + AI Section
 - Only dark section on the page (`#0A0A0A` bg, white text)
@@ -139,21 +141,36 @@ tamtamcorp-website/
 
 ### 6. Good Fit / Not a Fit
 - Two-column layout
-- Left column (✓ green checkmarks): 4 good-fit scenarios
-- Right column (✗ gray X): 4 not-a-fit scenarios
+- Left column (✓ amber checkmarks — "Good fit"):
+  1. Founders & SMEs needing hands-on implementation
+  2. Operations-heavy businesses that need reliable systems
+  3. Companies requiring direct accountability from design to deployment
+  4. Businesses seeking long-term system partners with technical depth
+- Right column (✗ gray X — "Not a fit"):
+  1. Projects requiring large development teams or agency scale
+  2. Low-budget, high-volume production work
+  3. "Set it and forget it" buyers expecting zero maintenance
+  4. Clients seeking advisory-only consulting without implementation
 - Clean, honest, builds trust through transparency
 
 ### 7. How We Work — 4 Steps
-- Horizontal stepper (desktop) / vertical (mobile)
+- Horizontal stepper (desktop > 1024px) / 2×2 grid (tablet 768px–1024px) / vertical list (mobile < 768px)
 - Numbered 01–04 in amber
-- Connecting line between steps
-- Steps: Understand → Design → Build & Integrate → Iterate & Maintain
+- Connecting line between steps (desktop only)
+- Steps (verbatim from site):
+  - **01 — Understand the real problem:** "We dig into what's actually slowing you down, not what you think the solution should be."
+  - **02 — Design the system:** "We map out automation logic, integrations, and workflows that fit your operations."
+  - **03 — Build & integrate:** "We implement the system, connect it to your existing tools, and ensure it runs reliably."
+  - **04 — Iterate and maintain:** "We refine based on real usage and provide ongoing support as your needs evolve."
 
 ### 8. CTA Section
 - Amber background (`#F59E0B`) — only time amber is used as bg
 - White text
-- Short headline + 1-line subtext
-- Two buttons: "Start a Conversation" (black) + "Chat with AI Agent" (outlined white)
+- Headline (verbatim): "Ready to Automate?"
+- Subtext (verbatim): "Chat with our AI agent now or schedule a call with our team. Discover which automation solutions will transform your business."
+- Two buttons:
+  - "Start a Conversation" (black, filled) — links to `/StartConversation`
+  - "Chat with AI Agent" (outlined white) — links to `/#chat` (scroll to widget placeholder; live chat integration is out of scope for Phase 1, button renders as stub anchor)
 - High-contrast moment, visually memorable
 
 ### 9. Footer
@@ -178,6 +195,10 @@ All copy taken verbatim from the tamtamcorp.tech crawl (March 2026):
 - Tel/WhatsApp: +971 58 873 7467
 
 ---
+
+## AI.bo Branding Convention
+- "AI.bo" is a proper noun rendered in amber (`#F59E0B`), font-weight 600, wherever it appears inline
+- Never plain unstyled text
 
 ## Responsive Breakpoints
 - Mobile: < 768px
