@@ -13,6 +13,7 @@ type Branding = {
   logo_url?: string | null;
   company_name?: string | null;
   greeting?: string | null;
+  widget_theme?: "light" | "dark" | null;
 };
 
 type Slot = { start_at: string; end_at: string };
@@ -48,23 +49,24 @@ function safePublicLogoUrl(url: any) {
 
 function applyBrandingCSS(branding: Branding) {
   const root = document.documentElement;
+  const isDark = branding.widget_theme === "dark";
 
-  const defaults = {
-    primary: "#111111",
-    secondary: "#ffffff",
-    accent: "#111111",
-  };
+  const primary = safeCssColor(branding.primary) || "#111111";
+  const accent  = safeCssColor(branding.accent)  || primary;
 
-  const primary = safeCssColor(branding.primary) || defaults.primary;
-  const secondary = safeCssColor(branding.secondary) || defaults.secondary;
-  const accent = safeCssColor(branding.accent) || defaults.accent;
-
+  // Core brand
   root.style.setProperty("--tt-primary", primary);
-  root.style.setProperty("--tt-secondary", secondary);
-  root.style.setProperty("--tt-accent", accent);
-  root.style.setProperty("--tt-bg", "transparent");
-  root.style.setProperty("--tt-fg", primary);
-  root.style.setProperty("--tt-muted", "rgba(17,17,17,0.58)");
+  root.style.setProperty("--tt-accent",  accent);
+
+  // Theme-dependent values
+  root.style.setProperty("--tt-bg",           isDark ? "#0F0F0F" : "#FFFFFF");
+  root.style.setProperty("--tt-header-border",isDark ? "#1E1E1E" : "#F0F0F0");
+  root.style.setProperty("--tt-msg-bg",       isDark ? "#1A1A1A" : "#F4F4F5");
+  root.style.setProperty("--tt-msg-text",     isDark ? "#FFFFFF" : "#0F172A");
+  root.style.setProperty("--tt-input-bg",     isDark ? "#111111" : "#F8F8F8");
+  root.style.setProperty("--tt-input-border", isDark ? "#2A2A2A" : "#E4E4E7");
+  root.style.setProperty("--tt-muted",        isDark ? "rgba(255,255,255,0.45)" : "rgba(15,23,42,0.45)");
+  root.style.setProperty("--tt-placeholder",  isDark ? "rgba(255,255,255,0.3)"  : "rgba(15,23,42,0.3)");
 }
 
 function formatSlot(iso: string, timeZone: string) {
@@ -139,12 +141,15 @@ export default function WidgetPage() {
     const url = new URL(window.location.href);
     const pk = String(url.searchParams.get("public_key") || "").trim();
     const s = String(url.searchParams.get("site") || window.location.origin).trim();
+    const vn = String(url.searchParams.get("visitor_name") || "").trim();
 
     setPublicKey(pk);
     setSite(s);
+    if (vn) setLeadName(vn);
 
     applyBrandingCSS({});
-    setMessages([{ role: "assistant", text: "Hi! How can I help?" }]);
+    const greeting = vn ? `Welcome back, ${vn}! How can I help you today?` : "Hi! How can I help?";
+    setMessages([{ role: "assistant", text: greeting }]);
   }, []);
 
   useEffect(() => {
@@ -177,15 +182,28 @@ export default function WidgetPage() {
           const bJson = await b.json().catch(() => null);
           if (b.ok) {
             const br = (bJson?.branding || {}) as Branding;
-            const normalized = { ...br, logo_url: safePublicLogoUrl(br.logo_url) };
-            setBranding(normalized);
-            applyBrandingCSS(normalized);
+            const rawTheme = String((br as any).widget_theme || "light");
+            const typedBr: Branding = {
+              ...br,
+              widget_theme: rawTheme === "dark" ? "dark" : "light",
+              logo_url: safePublicLogoUrl(br.logo_url),
+            };
+            setBranding(typedBr);
+            applyBrandingCSS(typedBr);
 
-            const greet = String(normalized?.greeting || "").trim();
-            const name = String(normalized?.company_name || "").trim();
+            const greet = String(typedBr?.greeting || "").trim();
+            const companyName = String(typedBr?.company_name || "").trim();
+            const url = new URL(window.location.href);
+            const visitorName = String(url.searchParams.get("visitor_name") || "").trim();
 
-            if (greet) setMessages([{ role: "assistant", text: greet }]);
-            else if (name) setMessages([{ role: "assistant", text: `Hi! Welcome to ${name}. How can I help?` }]);
+            if (visitorName) {
+              const base = greet || (companyName ? `Welcome to ${companyName}!` : "Welcome back!");
+              setMessages([{ role: "assistant", text: `${base} Great to see you again, ${visitorName}. How can I help?` }]);
+            } else if (greet) {
+              setMessages([{ role: "assistant", text: greet }]);
+            } else if (companyName) {
+              setMessages([{ role: "assistant", text: `Hi! Welcome to ${companyName}. How can I help?` }]);
+            }
           }
         } catch {}
 
@@ -530,6 +548,11 @@ export default function WidgetPage() {
         { role: "assistant", text: lang === "de" ? "Danke! Wir melden uns zeitnah bei dir." : "Thanks! We’ll get back to you shortly." },
       ]);
 
+      // Persist name for returning visitor greeting
+      if (name) {
+        try { localStorage.setItem("tt_visitor_name", name); } catch (e) {}
+      }
+
       setLeadMode(false);
       setLeadPrompt("");
       setLeadName("");
@@ -569,246 +592,439 @@ export default function WidgetPage() {
   }, [status, lang]);
 
   return (
-    <div
-      className="tt-page"
-      style={{
-        fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial",
-        padding: 14,
-        maxWidth: 420,
-        background: "transparent",
-        color: "var(--tt-fg)",
-      }}
-    >
+    <div className="tt-page">
       <style>{`
-:root{
-  --tt-primary:#111;
-  --tt-secondary:#fff;
-  --tt-accent:#111;
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
 
-  --tt-bg: transparent;
-  --tt-fg: var(--tt-primary);
-
-  --tt-border: rgba(255,255,255,0.42);
-  --tt-border-soft: rgba(0,0,0,0.06);
-
-  --tt-muted: rgba(17,17,17,0.58);
-
-  --tt-glass: rgba(255,255,255,0.52);
-  --tt-glass-strong: rgba(255,255,255,0.62);
+:root {
+  --tt-primary: #111111;
+  --tt-accent: #111111;
+  --tt-bg: #FFFFFF;
+  --tt-header-border: #F0F0F0;
+  --tt-msg-bg: #F4F4F5;
+  --tt-msg-text: #0F172A;
+  --tt-input-bg: #F8F8F8;
+  --tt-input-border: #E4E4E7;
+  --tt-muted: rgba(15,23,42,0.45);
+  --tt-placeholder: rgba(15,23,42,0.3);
 }
 
-.tt-card{
-  border: 1px solid var(--tt-border);
-  border-radius: 26px;
-  background: var(--tt-glass);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.75);
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+.tt-page {
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  background: var(--tt-bg);
+  color: var(--tt-msg-text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
-.tt-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  padding: 14px 14px 12px 14px;
-  background: rgba(255,255,255,0.26);
-  border-bottom: 1px solid var(--tt-border-soft);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+/* ── Header ─────────────────────────────────── */
+.tt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--tt-header-border);
+  flex-shrink: 0;
+  background: var(--tt-bg);
 }
 
-.tt-brand{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  min-width:0;
+.tt-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
-.tt-logo{
-  width:30px;height:30px;border-radius:12px;
-  border:1px solid rgba(0,0,0,0.08);
-  object-fit:cover;
-  background: rgba(255,255,255,0.75);
-  flex:0 0 auto;
-}
-.tt-logoFallback{
-  width:30px;height:30px;border-radius:12px;
-  border:1px solid rgba(0,0,0,0.08);
-  background: rgba(255,255,255,0.75);
-  display:flex;align-items:center;justify-content:center;
-  font-weight:900;font-size:12px;color:#111;
-  flex:0 0 auto;
+.tt-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--tt-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
-.tt-titleWrap{ min-width:0; display:flex; flex-direction:column; gap:2px; }
-.tt-title{ font-weight:900; font-size:14px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
-.tt-sub{ font-size:12px; color: var(--tt-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px; }
+.tt-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
-.tt-badge{
-  font-size:12px;
-  padding:6px 10px;
-  border-radius:999px;
-  border:1px solid rgba(0,0,0,0.08);
+.tt-titleWrap {
+  min-width: 0;
+}
+
+.tt-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--tt-msg-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.tt-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
   color: var(--tt-muted);
-  background: rgba(255,255,255,0.60);
-  display:flex;
-  align-items:center;
-  gap:8px;
+  font-weight: 500;
 }
 
-.tt-dot{
-  width:8px;height:8px;border-radius:999px;
-  background:#111;
-  box-shadow: 0 0 0 3px rgba(0,0,0,0.08);
+.tt-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #22C55E;
+  flex-shrink: 0;
 }
 
-.tt-shell{ height: 100%; display:flex; flex-direction:column; }
-.tt-chat{ flex:1; min-height:0; overflow:auto; padding:16px; background: transparent; }
+.tt-dot--error { background: #EF4444; }
 
-.tt-row{ display:flex; margin-bottom:10px; }
-.tt-row.user{ justify-content:flex-end; }
-.tt-row.assistant{ justify-content:flex-start; }
-
-.tt-bubble{
-  max-width:82%;
-  padding:10px 12px;
-  border-radius:18px;
-  white-space:pre-wrap;
-  line-height:1.38;
-  font-size:14px;
-  border:1px solid transparent;
-}
-.tt-bubble.user{
-  background:#111;
-  color:#fff;
-  border-color: rgba(255,255,255,0.12);
-  border-radius:18px 18px 8px 18px;
-}
-.tt-bubble.assistant{
-  background: rgba(255,255,255,0.70);
-  border:1px solid rgba(0,0,0,0.06);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color:#111;
-  border-radius:18px 18px 18px 8px;
+/* ── Chat messages ───────────────────────────── */
+.tt-chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scroll-behavior: smooth;
 }
 
-.tt-divider{ height:1px; background: rgba(0,0,0,0.06); }
+.tt-chat::-webkit-scrollbar { width: 0; }
 
-.tt-composer{
-  display:flex;
-  gap:10px;
-  padding:12px;
-  background: rgba(255,255,255,0.26);
-  border-top:1px solid rgba(0,0,0,0.06);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+.tt-row {
+  display: flex;
+  max-width: 100%;
 }
 
-.tt-input, .tt-textarea{
-  flex:1;
-  padding:10px 12px;
-  border-radius:16px;
-  border:1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.62);
-  color:#111;
-  outline:none;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-.tt-textarea{ min-height:42px; resize:none; line-height:1.3; }
-
-.tt-input:focus, .tt-textarea:focus{
-  border-color: rgba(0,0,0,0.18);
-  box-shadow: 0 0 0 2px rgba(0,0,0,0.08);
+.tt-row--user {
+  justify-content: flex-end;
 }
 
-.tt-btn{
-  padding:10px 14px;
-  border-radius:16px;
-  border:1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.62);
-  color:#111;
-  cursor:pointer;
-  font-weight:800;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-.tt-btn:disabled{ opacity:0.55; cursor:not-allowed; }
-.tt-btn.secondary{
-  border:1px solid rgba(0,0,0,0.08);
-  background: rgba(255,255,255,0.45);
-  color:#111;
+.tt-row--assistant {
+  justify-content: flex-start;
 }
 
-.tt-lead{ margin-top:12px; padding:14px; border-radius:22px; }
-.tt-grid{ display:grid; gap:8px; }
-.tt-leadPrompt{ font-size:13px; color: var(--tt-muted); margin-bottom:10px; line-height:1.35; }
-.tt-rowBtns{ display:flex; gap:10px; flex-wrap: wrap; }
-.tt-help{ font-size:12px; color: var(--tt-muted); margin-top:8px; }
+.tt-bubble {
+  max-width: 82%;
+  padding: 10px 13px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  word-break: break-word;
+}
 
-.tt-slots{
-  margin-top:12px;
-  padding:14px;
-  border-radius:22px;
+.tt-bubble--assistant {
+  background: var(--tt-msg-bg);
+  color: var(--tt-msg-text);
+  border-radius: 4px 16px 16px 16px;
 }
-.tt-slotGrid{
-  display:grid;
-  gap:8px;
-  margin-top:12px;
+
+.tt-bubble--user {
+  background: var(--tt-primary);
+  color: #fff;
+  border-radius: 16px 4px 16px 16px;
 }
-.tt-slotBtn{
-  width:100%;
-  text-align:left;
-  padding:10px 12px;
-  border-radius:16px;
-  border:1px solid rgba(0,0,0,0.08);
-  background: rgba(255,255,255,0.70);
-  cursor:pointer;
-  font-weight:700;
+
+/* markdown inside bubbles */
+.tt-bubble p { margin: 0 0 6px; }
+.tt-bubble p:last-child { margin-bottom: 0; }
+.tt-bubble ul, .tt-bubble ol { padding-left: 18px; margin: 4px 0; }
+.tt-bubble li { margin: 2px 0; }
+.tt-bubble strong { font-weight: 700; }
+.tt-bubble a { color: inherit; text-decoration: underline; }
+.tt-bubble code {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  background: rgba(0,0,0,0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
 }
-.tt-slotBtn.active{
-  background:#111;
-  color:#fff;
+
+/* ── Typing indicator ────────────────────────── */
+.tt-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
 }
-.tt-mini{
-  font-size:12px;
+
+.tt-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--tt-muted);
+  animation: tt-bounce 1.2s ease-in-out infinite;
+}
+
+.tt-typing span:nth-child(2) { animation-delay: 0.2s; }
+.tt-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes tt-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30%            { transform: translateY(-5px); }
+}
+
+/* ── Composer ────────────────────────────────── */
+.tt-divider {
+  height: 1px;
+  background: var(--tt-header-border);
+  flex-shrink: 0;
+}
+
+.tt-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--tt-bg);
+  flex-shrink: 0;
+}
+
+.tt-textarea {
+  flex: 1;
+  background: var(--tt-input-bg);
+  border: 1px solid var(--tt-input-border);
+  border-radius: 14px;
+  padding: 10px 13px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--tt-msg-text);
+  resize: none;
+  outline: none;
+  min-height: 42px;
+  max-height: 120px;
+  line-height: 1.5;
+  transition: border-color 150ms;
+}
+
+.tt-textarea::placeholder { color: var(--tt-placeholder); }
+.tt-textarea:focus { border-color: var(--tt-primary); }
+
+.tt-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: var(--tt-primary);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 120ms;
+}
+
+.tt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.tt-btn:not(:disabled):hover { opacity: 0.85; }
+
+.tt-btn svg { width: 16px; height: 16px; }
+
+/* ── Lead form ───────────────────────────────── */
+.tt-lead {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.tt-leadHeader {
+  padding: 14px 16px 10px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--tt-msg-text);
+  border-bottom: 1px solid var(--tt-header-border);
+}
+
+.tt-leadPrompt {
+  padding: 10px 16px;
+  font-size: 13px;
   color: var(--tt-muted);
+  line-height: 1.5;
+}
+
+.tt-leadBody {
+  padding: 0 16px 14px;
+  display: grid;
+  gap: 10px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tt-leadBody::-webkit-scrollbar { width: 0; }
+
+.tt-field {
+  display: grid;
+  gap: 5px;
+}
+
+.tt-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tt-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tt-input {
+  width: 100%;
+  background: var(--tt-input-bg);
+  border: 1px solid var(--tt-input-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--tt-msg-text);
+  outline: none;
+  transition: border-color 150ms;
+}
+
+.tt-input:focus { border-color: var(--tt-primary); }
+.tt-input::placeholder { color: var(--tt-placeholder); }
+
+.tt-leadActions {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 14px;
+  flex-shrink: 0;
+}
+
+.tt-leadSubmit {
+  flex: 1;
+  background: var(--tt-primary);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 11px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 120ms;
+}
+
+.tt-leadSubmit:disabled { opacity: 0.5; cursor: not-allowed; }
+.tt-leadSubmit:not(:disabled):hover { opacity: 0.85; }
+
+.tt-leadCancel {
+  background: var(--tt-input-bg);
+  color: var(--tt-muted);
+  border: 1px solid var(--tt-input-border);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ── Booking slots ───────────────────────────── */
+.tt-slots {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tt-slotsHeader {
+  padding: 14px 16px 10px;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--tt-msg-text);
+  border-bottom: 1px solid var(--tt-header-border);
+}
+
+.tt-slotsBody {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tt-slotsBody::-webkit-scrollbar { width: 0; }
+
+.tt-slotGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.tt-slotBtn {
+  background: var(--tt-input-bg);
+  border: 1px solid var(--tt-input-border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--tt-msg-text);
+  cursor: pointer;
+  text-align: center;
+  line-height: 1.4;
+  transition: border-color 150ms, background 150ms;
+  font-weight: 500;
+}
+
+.tt-slotBtn:hover {
+  border-color: var(--tt-primary);
+  background: var(--tt-msg-bg);
+}
+
+/* ── Misc ─────────────────────────────────────── */
+.tt-powered {
+  text-align: center;
+  padding: 6px;
+  font-size: 10.5px;
+  color: var(--tt-muted);
+  opacity: 0.5;
+}
+
+@media (max-width: 400px) {
+  .tt-bubble { max-width: 90%; }
+  .tt-slotGrid { grid-template-columns: 1fr; }
 }
       `}</style>
 
-      <div className="tt-card tt-shell">
-        <div className="tt-header">
+      <div className="tt-header">
           <div className="tt-brand">
-            {branding.logo_url ? (
-              <img className="tt-logo" src={String(branding.logo_url)} alt="logo" />
-            ) : (
-              <div className="tt-logoFallback" aria-hidden="true">
-                {initials}
-              </div>
-            )}
-
+            <div className="tt-avatar">
+              {branding.logo_url
+                ? <img src={branding.logo_url} alt={title} />
+                : initials}
+            </div>
             <div className="tt-titleWrap">
               <div className="tt-title">{title}</div>
-              <div className="tt-sub">{lang === "de" ? "Schnelle Hilfe & Anfrage" : "Quick help & inquiry"}</div>
             </div>
           </div>
-
-          <div className="tt-badge" title={status}>
-            <span className="tt-dot" aria-hidden="true" />
-            <span>{statusLabel}</span>
+          <div className="tt-badge">
+            <div className={`tt-dot${status.startsWith("auth_error") || status.startsWith("boot_error") ? " tt-dot--error" : ""}`} />
+            {statusLabel}
           </div>
         </div>
 
         <div ref={boxRef} className="tt-chat">
           {messages.map((m, idx) => (
-            <div key={idx} className={`tt-row ${m.role}`}>
-              <div className={`tt-bubble ${m.role}`}>
-                {m.role === "assistant" && m.text === "" ? (
-                  <span style={{ opacity: 0.45, letterSpacing: 2 }}>● ● ●</span>
-                ) : (
+            m.role === "assistant" && m.text === "" ? (
+              <div key={idx} className="tt-row tt-row--assistant">
+                <div className="tt-bubble tt-bubble--assistant">
+                  <div className="tt-typing">
+                    <span /><span /><span />
+                  </div>
+                </div>
+              </div>
+            ) : (
+            <div key={idx} className={`tt-row tt-row--${m.role}`}>
+              <div className={`tt-bubble tt-bubble--${m.role}`}>
+                {(
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -842,7 +1058,7 @@ export default function WidgetPage() {
                 )}
               </div>
             </div>
-          ))}
+          )))}
         </div>
 
         <div className="tt-divider" />
@@ -873,21 +1089,23 @@ export default function WidgetPage() {
             aria-label={lang === "de" ? "Nachricht" : "Message"}
           />
 
-          <button className="tt-btn" onClick={send} disabled={!canSend}>
-            {busy ? "…" : lang === "de" ? "Senden" : "Send"}
+          <button className="tt-btn" onClick={send} disabled={!canSend} aria-label="Send">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </button>
         </div>
-      </div>
 
       {bookingMode && (
-        <div className="tt-card tt-slots">
-          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 900 }}>
+        <div className="tt-slots">
+          <div className="tt-slotsHeader">
             {lang === "de" ? "Termine" : "Appointments"}
-          </h3>
+          </div>
 
+          <div className="tt-slotsBody">
           {!selectedSlot ? (
             <>
-              <div className="tt-mini">
+              <div className="tt-leadPrompt">
                 {slotLoading
                   ? lang === "de"
                     ? "Lade freie Termine…"
@@ -912,13 +1130,13 @@ export default function WidgetPage() {
               </div>
 
               {!slotLoading && slots.length === 0 ? (
-                <div className="tt-help">
+                <div className="tt-leadPrompt">
                   {lang === "de" ? "Keine freien Termine gefunden." : "No open slots found."}
                 </div>
               ) : null}
 
-              <div className="tt-rowBtns" style={{ marginTop: 12 }}>
-                <button className="tt-btn secondary" onClick={() => setBookingMode(false)}>
+              <div className="tt-leadActions" style={{ marginTop: 12 }}>
+                <button className="tt-leadCancel" onClick={() => setBookingMode(false)}>
                   {lang === "de" ? "Schließen" : "Close"}
                 </button>
               </div>
@@ -931,62 +1149,75 @@ export default function WidgetPage() {
                   : `Reserved until ${holdExpiresAt ? new Date(holdExpiresAt).toLocaleTimeString() : ""}: ${formatSlot(selectedSlot.start_at, slotTimezone)}`}
               </div>
 
-              <div className="tt-grid">
+              <div className="tt-leadBody">
                 <input className="tt-input" value={bookingName} onChange={(e) => setBookingName(e.target.value)} placeholder={lang === "de" ? "Name (optional)" : "Name (optional)"} />
                 <input className="tt-input" value={bookingEmail} onChange={(e) => setBookingEmail(e.target.value)} placeholder={lang === "de" ? "E-Mail (optional)" : "Email (optional)"} />
                 <input className="tt-input" value={bookingPhone} onChange={(e) => setBookingPhone(e.target.value)} placeholder={lang === "de" ? "Telefon (optional)" : "Phone (optional)"} />
+              </div>
 
-                <div className="tt-rowBtns">
-                  <button className="tt-btn" onClick={confirmBooking} disabled={bookingSubmitting}>
-                    {bookingSubmitting ? "…" : lang === "de" ? "Termin bestätigen" : "Confirm appointment"}
-                  </button>
+              <div className="tt-leadActions">
+                <button className="tt-leadSubmit" onClick={confirmBooking} disabled={bookingSubmitting}>
+                  {bookingSubmitting ? "…" : lang === "de" ? "Termin bestätigen" : "Confirm appointment"}
+                </button>
 
-                  <button
-                    className="tt-btn secondary"
-                    onClick={() => {
-                      setSelectedSlot(null);
-                      setHoldToken("");
-                      setHoldExpiresAt("");
-                    }}
-                    disabled={bookingSubmitting}
-                  >
-                    {lang === "de" ? "Anderen Slot wählen" : "Choose another slot"}
-                  </button>
-                </div>
-
-                <div className="tt-help">{lang === "de" ? "Mindestens E-Mail oder Telefon angeben." : "Provide at least email or phone."}</div>
+                <button
+                  className="tt-leadCancel"
+                  onClick={() => {
+                    setSelectedSlot(null);
+                    setHoldToken("");
+                    setHoldExpiresAt("");
+                  }}
+                  disabled={bookingSubmitting}
+                >
+                  {lang === "de" ? "Anderen Slot wählen" : "Choose another slot"}
+                </button>
               </div>
             </>
           )}
+          </div>
         </div>
       )}
 
       {leadMode && (
-        <div className="tt-card tt-lead">
-          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, fontWeight: 900 }}>{lang === "de" ? "Kontakt" : "Contact"}</h3>
+        <div className="tt-lead">
+          <div className="tt-leadHeader">{lang === "de" ? "Kontakt" : "Contact"}</div>
 
           {leadPrompt ? <div className="tt-leadPrompt">{leadPrompt}</div> : null}
 
-          <div className="tt-grid">
-            <input className="tt-input" value={leadName} onChange={(e) => setLeadName(e.target.value)} placeholder={lang === "de" ? "Name (optional)" : "Name (optional)"} />
-            <input className="tt-input" value={leadEmail} onChange={(e) => setLeadEmail(e.target.value)} placeholder={lang === "de" ? "E-Mail (optional)" : "Email (optional)"} />
-            <input className="tt-input" value={leadPhone} onChange={(e) => setLeadPhone(e.target.value)} placeholder={lang === "de" ? "Telefon (optional)" : "Phone (optional)"} />
-
-            <textarea className="tt-textarea" value={leadIntent} onChange={(e) => setLeadIntent(e.target.value)} placeholder={lang === "de" ? "Worum geht es? (optional)" : "What do you need? (optional)"} />
-            <input className="tt-input" value={leadBudget} onChange={(e) => setLeadBudget(e.target.value)} placeholder={lang === "de" ? "Budget (optional)" : "Budget (optional)"} />
-            <input className="tt-input" value={leadTimeline} onChange={(e) => setLeadTimeline(e.target.value)} placeholder={lang === "de" ? "Zeitrahmen (optional)" : "Timeline (optional)"} />
-
-            <div className="tt-rowBtns">
-              <button className="tt-btn" onClick={submitLead} disabled={leadSubmitting}>
-                {leadSubmitting ? "…" : lang === "de" ? "Absenden" : "Submit"}
-              </button>
-
-              <button className="tt-btn secondary" onClick={() => setLeadMode(false)} disabled={leadSubmitting}>
-                {lang === "de" ? "Schließen" : "Close"}
-              </button>
+          <div className="tt-leadBody">
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "Name" : "Name"}</label>
+              <input className="tt-input" value={leadName} onChange={(e) => setLeadName(e.target.value)} placeholder={lang === "de" ? "Name (optional)" : "Name (optional)"} />
             </div>
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "E-Mail" : "Email"}</label>
+              <input className="tt-input" value={leadEmail} onChange={(e) => setLeadEmail(e.target.value)} placeholder={lang === "de" ? "E-Mail (optional)" : "Email (optional)"} />
+            </div>
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "Telefon" : "Phone"}</label>
+              <input className="tt-input" value={leadPhone} onChange={(e) => setLeadPhone(e.target.value)} placeholder={lang === "de" ? "Telefon (optional)" : "Phone (optional)"} />
+            </div>
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "Anliegen" : "Need"}</label>
+              <textarea className="tt-textarea" value={leadIntent} onChange={(e) => setLeadIntent(e.target.value)} placeholder={lang === "de" ? "Worum geht es? (optional)" : "What do you need? (optional)"} />
+            </div>
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "Budget" : "Budget"}</label>
+              <input className="tt-input" value={leadBudget} onChange={(e) => setLeadBudget(e.target.value)} placeholder={lang === "de" ? "Budget (optional)" : "Budget (optional)"} />
+            </div>
+            <div className="tt-field">
+              <label className="tt-label">{lang === "de" ? "Zeitrahmen" : "Timeline"}</label>
+              <input className="tt-input" value={leadTimeline} onChange={(e) => setLeadTimeline(e.target.value)} placeholder={lang === "de" ? "Zeitrahmen (optional)" : "Timeline (optional)"} />
+            </div>
+          </div>
 
-            <div className="tt-help">{lang === "de" ? "Mindestens E-Mail oder Telefon angeben." : "Provide at least email or phone."}</div>
+          <div className="tt-leadActions">
+            <button className="tt-leadSubmit" onClick={submitLead} disabled={leadSubmitting}>
+              {leadSubmitting ? (lang === "de" ? "Wird gesendet…" : "Sending…") : (lang === "de" ? "Absenden" : "Submit")}
+            </button>
+            <button className="tt-leadCancel" onClick={() => setLeadMode(false)}>
+              {lang === "de" ? "Abbrechen" : "Cancel"}
+            </button>
           </div>
         </div>
       )}
