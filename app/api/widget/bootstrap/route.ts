@@ -80,9 +80,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "missing_widget_jwt_secret" }, { status: 500 });
   }
 
+  // Fetch company branding data
+  const { data: settings } = await supabaseServer
+    .from("company_settings")
+    .select("branding_json")
+    .eq("company_id", keyRow.company_id)
+    .maybeSingle();
+
+  const branding_json = settings?.branding_json || {};
+
+  // Extract branding fields, supporting both old format (direct props) and new format (nested in brand_colors)
+  const branding = {
+    company_name: branding_json?.company_name || null,
+    greeting: branding_json?.greeting || null,
+    logo_url: branding_json?.logo_url || null,
+    primary: branding_json?.brand_colors?.primary || branding_json?.primary || null,
+    accent: branding_json?.brand_colors?.accent || branding_json?.accent || null,
+    widget_theme: branding_json?.widget_theme || "light",
+  };
+
   const token = jwt.sign({ company_id: keyRow.company_id, public_key }, process.env.WIDGET_JWT_SECRET!, {
     expiresIn: "20m",
   });
 
-  return NextResponse.json({ token, company_id: keyRow.company_id });
+  return NextResponse.json({ token, company_id: keyRow.company_id, branding });
 }
