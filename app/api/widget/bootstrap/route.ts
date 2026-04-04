@@ -90,6 +90,7 @@ export async function POST(req: Request) {
   const branding_json = settings?.branding_json || {};
 
   // Extract branding fields, supporting both old format (direct props) and new format (nested in brand_colors)
+  const rawQualifierOptions = branding_json?.qualifier_options;
   const branding = {
     company_name: branding_json?.company_name || null,
     greeting: branding_json?.greeting || null,
@@ -97,6 +98,9 @@ export async function POST(req: Request) {
     primary: branding_json?.brand_colors?.primary || branding_json?.primary || null,
     accent: branding_json?.brand_colors?.accent || branding_json?.accent || null,
     widget_theme: branding_json?.widget_theme || "light",
+    qualifier_options: Array.isArray(rawQualifierOptions)
+      ? rawQualifierOptions.filter((s: any) => typeof s === "string" && s.trim()).slice(0, 4)
+      : [],
   };
 
   const token = jwt.sign({ company_id: keyRow.company_id, public_key }, process.env.WIDGET_JWT_SECRET!, {
