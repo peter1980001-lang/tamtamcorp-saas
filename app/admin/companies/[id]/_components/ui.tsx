@@ -4,74 +4,168 @@ import React from "react";
 import type { Tab } from "./types";
 
 export const UI = {
-  bg: "#F6F7FB",
+  // Layout
+  bg: "#F8FAFC",
   surface: "#FFFFFF",
-  surface2: "#FBFBFC",
-  border: "#E6E8EF",
-  borderSoft: "#EEF0F6",
-  text: "#0B1220",
-  text2: "#4B5563",
-  text3: "#9CA3AF",
-  accent: "#2563EB",
-  accentSoft: "#EEF2FF",
-  danger: "#DC2626",
-  success: "#16A34A",
-  radius: 12,
-  radiusLg: 18,
-  shadow: "0 1px 0 rgba(16,24,40,0.03), 0 8px 24px rgba(16,24,40,0.06)",
+  surface2: "#F1F5F9",
+
+  // Borders
+  border: "#E2E8F0",
+  borderSoft: "#F1F5F9",
+
+  // Text
+  text: "#0F172A",
+  text2: "#475569",
+  text3: "#94A3B8",
+
+  // Brand
+  accent: "#0F172A",
+  accentHover: "#1E293B",
+  accentSoft: "#F1F5F9",
+  accentText: "#FFFFFF",
+
+  // States
+  danger: "#EF4444",
+  dangerSoft: "#FEF2F2",
+  success: "#22C55E",
+  successSoft: "#F0FDF4",
+  warning: "#F59E0B",
+
+  // Elevation
+  shadow: "0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.04)",
+  shadowMd: "0 4px 6px rgba(0,0,0,0.04), 0 10px 24px rgba(0,0,0,0.06)",
+
+  // Shape
+  radius: 10,
+  radiusLg: 14,
+  radiusXl: 18,
 };
 
-export function Badge({ text, tone }: { text: string; tone?: "neutral" | "success" | "danger" | "info" }) {
+export function Badge({
+  text,
+  tone,
+}: {
+  text: string;
+  tone?: "neutral" | "success" | "danger" | "info" | "warning";
+}) {
   const t = tone || "neutral";
   const map: Record<string, React.CSSProperties> = {
-    neutral: { background: "#F3F4F6", border: "1px solid #E5E7EB", color: "#374151" },
-    success: { background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46" },
-    danger: { background: "#FEF2F2", border: "1px solid #FECACA", color: "#991B1B" },
-    info: { background: "#EEF2FF", border: "1px solid #C7D2FE", color: "#1D4ED8" },
+    neutral: { background: UI.surface2, border: `1px solid ${UI.border}`, color: UI.text2 },
+    success: { background: UI.successSoft, border: "1px solid #BBF7D0", color: "#15803D" },
+    danger:  { background: UI.dangerSoft,  border: "1px solid #FECACA", color: "#B91C1C" },
+    info:    { background: "#EFF6FF",       border: "1px solid #BFDBFE", color: "#1D4ED8" },
+    warning: { background: "#FFFBEB",       border: "1px solid #FDE68A", color: "#92400E" },
   };
-  return <span style={{ padding: "6px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 900, ...map[t] }}>{text}</span>;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "3px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        letterSpacing: "0.01em",
+        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        ...map[t],
+      }}
+    >
+      {text}
+    </span>
+  );
 }
 
 export function Divider() {
-  return <div style={{ height: 1, background: UI.borderSoft, margin: "14px 0" }} />;
+  return <div style={{ height: 1, background: UI.border, margin: "16px 0" }} />;
 }
 
-export function Card(props: { title?: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }) {
+export function Card(props: {
+  title?: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  right?: React.ReactNode;
+}) {
   return (
-    <div style={{ background: UI.surface, border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
+    <div
+      style={{
+        background: UI.surface,
+        border: `1px solid ${UI.border}`,
+        borderRadius: UI.radiusXl,
+        boxShadow: UI.shadow,
+        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+      }}
+    >
       {props.title || props.right ? (
-        <div style={{ padding: "18px 18px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div
+          style={{
+            padding: "18px 20px 0",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+          }}
+        >
           <div style={{ minWidth: 0 }}>
-            {props.title ? <div style={{ fontWeight: 1000, fontSize: 14.5, color: UI.text }}>{props.title}</div> : null}
-            {props.subtitle ? <div style={{ marginTop: 6, fontSize: 12.8, color: UI.text2, lineHeight: 1.45 }}>{props.subtitle}</div> : null}
+            {props.title ? (
+              <div style={{ fontWeight: 700, fontSize: 14, color: UI.text, letterSpacing: "-0.01em" }}>
+                {props.title}
+              </div>
+            ) : null}
+            {props.subtitle ? (
+              <div style={{ marginTop: 4, fontSize: 13, color: UI.text2, lineHeight: 1.5 }}>
+                {props.subtitle}
+              </div>
+            ) : null}
           </div>
-          {props.right ? <div style={{ flex: "0 0 auto" }}>{props.right}</div> : null}
+          {props.right ? <div style={{ flexShrink: 0 }}>{props.right}</div> : null}
         </div>
       ) : null}
-      <div style={{ padding: props.title || props.right ? "14px 18px 18px" : 18 }}>{props.children}</div>
+      <div style={{ padding: props.title || props.right ? "14px 20px 20px" : 20 }}>
+        {props.children}
+      </div>
     </div>
   );
 }
 
-export function Button(props: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; variant?: "primary" | "secondary" | "danger" }) {
+export function Button(props: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  variant?: "primary" | "secondary" | "danger" | "ghost";
+  size?: "sm" | "md";
+  type?: "button" | "submit";
+}) {
   const v = props.variant || "secondary";
+  const size = props.size || "md";
+
   const styleMap: Record<string, React.CSSProperties> = {
-    primary: { background: UI.accent, border: `1px solid ${UI.accent}`, color: "#fff" },
-    secondary: { background: "#fff", border: `1px solid ${UI.border}`, color: UI.text },
-    danger: { background: "#fff", border: "1px solid #FECACA", color: UI.danger },
+    primary:   { background: UI.accent,      border: `1px solid ${UI.accent}`,      color: UI.accentText },
+    secondary: { background: UI.surface,     border: `1px solid ${UI.border}`,      color: UI.text },
+    danger:    { background: UI.dangerSoft,  border: "1px solid #FECACA",           color: UI.danger },
+    ghost:     { background: "transparent",  border: "1px solid transparent",       color: UI.text2 },
   };
+
+  const sizeMap: Record<string, React.CSSProperties> = {
+    sm: { padding: "6px 12px", fontSize: 12, borderRadius: UI.radius },
+    md: { padding: "9px 16px", fontSize: 13, borderRadius: UI.radius },
+  };
+
   return (
     <button
-      type="button"
+      type={props.type || "button"}
       onClick={props.onClick}
       disabled={props.disabled}
       style={{
-        padding: "10px 12px",
-        borderRadius: UI.radius,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontWeight: 600,
+        fontFamily: "var(--font-jakarta, ui-sans-serif)",
         cursor: props.disabled ? "not-allowed" : "pointer",
-        fontSize: 13.5,
-        fontWeight: 950,
-        opacity: props.disabled ? 0.6 : 1,
+        opacity: props.disabled ? 0.55 : 1,
+        transition: "opacity 120ms, background 120ms",
+        whiteSpace: "nowrap",
+        ...sizeMap[size],
         ...styleMap[v],
       }}
     >
@@ -80,40 +174,81 @@ export function Button(props: { children: React.ReactNode; onClick?: () => void;
   );
 }
 
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { label?: string }) {
+  const { label, ...rest } = props;
   return (
-    <input
-      {...props}
-      style={{
-        width: "100%",
-        padding: "11px 12px",
-        borderRadius: UI.radius,
-        border: `1px solid ${UI.border}`,
-        background: "#fff",
-        fontSize: 13.5,
-        outline: "none",
-        ...(props.style || {}),
-      }}
-    />
+    <div style={{ display: "grid", gap: 6 }}>
+      {label && (
+        <label style={{ fontSize: 12, fontWeight: 600, color: UI.text2, letterSpacing: "0.02em" }}>
+          {label.toUpperCase()}
+        </label>
+      )}
+      <input
+        {...rest}
+        style={{
+          width: "100%",
+          padding: "9px 12px",
+          borderRadius: UI.radius,
+          border: `1px solid ${UI.border}`,
+          background: UI.surface,
+          fontSize: 13,
+          color: UI.text,
+          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+          outline: "none",
+          transition: "border-color 150ms",
+          boxSizing: "border-box",
+          ...(rest.style || {}),
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = UI.accent;
+          rest.onFocus?.(e);
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = UI.border;
+          rest.onBlur?.(e);
+        }}
+      />
+    </div>
   );
 }
 
-export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label?: string }) {
+  const { label, ...rest } = props;
   return (
-    <textarea
-      {...props}
-      style={{
-        width: "100%",
-        padding: "11px 12px",
-        borderRadius: UI.radius,
-        border: `1px solid ${UI.border}`,
-        background: "#fff",
-        fontSize: 13.5,
-        outline: "none",
-        lineHeight: 1.5,
-        ...(props.style || {}),
-      }}
-    />
+    <div style={{ display: "grid", gap: 6 }}>
+      {label && (
+        <label style={{ fontSize: 12, fontWeight: 600, color: UI.text2, letterSpacing: "0.02em" }}>
+          {label.toUpperCase()}
+        </label>
+      )}
+      <textarea
+        {...rest}
+        style={{
+          width: "100%",
+          padding: "9px 12px",
+          borderRadius: UI.radius,
+          border: `1px solid ${UI.border}`,
+          background: UI.surface,
+          fontSize: 13,
+          color: UI.text,
+          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+          outline: "none",
+          lineHeight: 1.6,
+          resize: "vertical",
+          transition: "border-color 150ms",
+          boxSizing: "border-box",
+          ...(rest.style || {}),
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = UI.accent;
+          rest.onFocus?.(e);
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = UI.border;
+          rest.onBlur?.(e);
+        }}
+      />
+    </div>
   );
 }
 
@@ -123,13 +258,15 @@ export function CodeBox({ text }: { text: string }) {
       style={{
         margin: 0,
         whiteSpace: "pre-wrap",
-        fontSize: 12.5,
+        wordBreak: "break-all",
+        fontSize: 12,
         background: UI.surface2,
-        border: `1px solid ${UI.borderSoft}`,
-        padding: 12,
+        border: `1px solid ${UI.border}`,
+        padding: "12px 14px",
         borderRadius: UI.radius,
-        color: UI.text,
-        lineHeight: 1.5,
+        color: UI.text2,
+        lineHeight: 1.6,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       }}
     >
       {text}
@@ -137,23 +274,57 @@ export function CodeBox({ text }: { text: string }) {
   );
 }
 
-export function Modal(props: { title: string; children: React.ReactNode; onClose: () => void; right?: React.ReactNode }) {
+export function Modal(props: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  right?: React.ReactNode;
+}) {
   return (
-    <div onClick={props.onClose} style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.35)", display: "grid", placeItems: "center", padding: 18, zIndex: 1000 }}>
+    <div
+      onClick={props.onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.4)",
+        display: "grid",
+        placeItems: "center",
+        padding: 20,
+        zIndex: 1000,
+        backdropFilter: "blur(4px)",
+      }}
+    >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: "min(980px, 100%)", background: "#fff", border: `1px solid ${UI.border}`, borderRadius: 18, boxShadow: "0 20px 60px rgba(0,0,0,0.15)", overflow: "hidden" }}
+        style={{
+          width: "min(960px, 100%)",
+          background: UI.surface,
+          border: `1px solid ${UI.border}`,
+          borderRadius: UI.radiusXl,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+          overflow: "hidden",
+          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        }}
       >
-        <div style={{ padding: 16, borderBottom: `1px solid ${UI.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ fontWeight: 1000 }}>{props.title}</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div
+          style={{
+            padding: "14px 20px",
+            borderBottom: `1px solid ${UI.border}`,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 14, color: UI.text }}>{props.title}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {props.right}
-            <Button onClick={props.onClose} variant="secondary">
+            <Button onClick={props.onClose} variant="secondary" size="sm">
               Close
             </Button>
           </div>
         </div>
-        <div style={{ padding: 16 }}>{props.children}</div>
+        <div style={{ padding: 20, maxHeight: "80vh", overflowY: "auto" }}>{props.children}</div>
       </div>
     </div>
   );
@@ -169,8 +340,29 @@ export function TabsBar({
   onChange: (next: Tab) => void;
 }) {
   return (
-    <div style={{ position: "sticky", top: 0, zIndex: 20, paddingTop: 10, background: `linear-gradient(to bottom, ${UI.bg} 0%, rgba(246,247,251,0.85) 60%, rgba(246,247,251,0) 100%)` }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 8, border: `1px solid ${UI.border}`, background: UI.surface, borderRadius: UI.radiusLg, boxShadow: UI.shadow }}>
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 20,
+        paddingTop: 12,
+        paddingBottom: 4,
+        background: UI.bg,
+        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 4,
+          padding: 4,
+          border: `1px solid ${UI.border}`,
+          background: UI.surface,
+          borderRadius: UI.radiusLg,
+          boxShadow: UI.shadow,
+        }}
+      >
         {tabs.map((t) => {
           const isActive = active === t.key;
           return (
@@ -180,14 +372,16 @@ export function TabsBar({
               onClick={() => onChange(t.key)}
               title={t.hint || ""}
               style={{
-                padding: "10px 12px",
-                borderRadius: 999,
-                border: `1px solid ${isActive ? "#C7D2FE" : "transparent"}`,
-                background: isActive ? UI.accentSoft : "transparent",
-                color: isActive ? "#1D4ED8" : UI.text2,
+                padding: "8px 14px",
+                borderRadius: UI.radius,
+                border: "none",
+                background: isActive ? UI.accent : "transparent",
+                color: isActive ? UI.accentText : UI.text2,
                 fontSize: 13,
-                fontWeight: isActive ? 1000 : 850,
+                fontWeight: isActive ? 600 : 500,
                 cursor: "pointer",
+                transition: "background 150ms, color 150ms",
+                fontFamily: "var(--font-jakarta, ui-sans-serif)",
               }}
             >
               {t.label}
