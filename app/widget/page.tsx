@@ -107,6 +107,9 @@ export default function WidgetPage() {
     greeting: null,
   });
 
+  const [qualifierMode, setQualifierMode] = useState(false);
+  const [qualifierOptions, setQualifierOptions] = useState<string[]>([]);
+
   const [leadMode, setLeadMode] = useState(false);
   const [leadPrompt, setLeadPrompt] = useState<string>("");
   const [leadName, setLeadName] = useState("");
@@ -190,6 +193,15 @@ export default function WidgetPage() {
             };
             setBranding(typedBr);
             applyBrandingCSS(typedBr);
+
+            // Qualifier options
+            const opts = Array.isArray((bJson?.branding as any)?.qualifier_options)
+              ? (bJson.branding.qualifier_options as string[]).filter((s: string) => s?.trim())
+              : [];
+            if (opts.length > 0) {
+              setQualifierOptions(opts);
+              setQualifierMode(true);
+            }
 
             const greet = String(typedBr?.greeting || "").trim();
             const companyName = String(typedBr?.company_name || "").trim();
@@ -404,11 +416,11 @@ export default function WidgetPage() {
     }
   }
 
-  async function send() {
-    if (!canSend) return;
+  async function send(overrideText?: string) {
+    const text = (overrideText !== undefined ? overrideText : input).trim();
+    if (!text || !token || !conversationId || busy || status !== "ready") return;
 
-    const text = input.trim();
-    setInput("");
+    if (overrideText === undefined) setInput("");
     setBusy(true);
 
     // Add user message + empty assistant placeholder immediately
@@ -500,6 +512,11 @@ export default function WidgetPage() {
       setBusy(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
+  }
+
+  function selectQualifier(option: string) {
+    setQualifierMode(false);
+    send(option);
   }
 
   async function submitLead() {
@@ -992,6 +1009,64 @@ export default function WidgetPage() {
   .tt-bubble { max-width: 90%; }
   .tt-slotGrid { grid-template-columns: 1fr; }
 }
+
+/* ── Qualifier ───────────────────────────────── */
+.tt-qualifier {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 24px;
+  gap: 20px;
+}
+
+.tt-qualifierTitle {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--tt-msg-text);
+  text-align: center;
+  line-height: 1.55;
+  max-width: 260px;
+}
+
+.tt-qualifierBtns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.tt-qualifierBtn {
+  background: var(--tt-input-bg);
+  border: 1.5px solid var(--tt-input-border);
+  border-radius: 12px;
+  padding: 13px 16px;
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--tt-msg-text);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 150ms, background 150ms;
+}
+
+.tt-qualifierBtn:hover {
+  border-color: var(--tt-primary);
+  background: var(--tt-msg-bg);
+}
+
+.tt-qualifierSkip {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: var(--tt-muted);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 8px;
+}
+
+.tt-qualifierSkip:hover { color: var(--tt-msg-text); }
       `}</style>
 
       <div className="tt-header">
@@ -1011,6 +1086,24 @@ export default function WidgetPage() {
           </div>
         </div>
 
+        {qualifierMode ? (
+          <div className="tt-qualifier">
+            <div className="tt-qualifierTitle">
+              {lang === "de" ? "Womit kann ich helfen?" : "What can I help you with?"}
+            </div>
+            <div className="tt-qualifierBtns">
+              {qualifierOptions.map((opt) => (
+                <button key={opt} className="tt-qualifierBtn" onClick={() => selectQualifier(opt)}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+            <button className="tt-qualifierSkip" onClick={() => setQualifierMode(false)}>
+              {lang === "de" ? "Überspringen" : "Skip →"}
+            </button>
+          </div>
+        ) : (
+        <>
         <div ref={boxRef} className="tt-chat">
           {messages.map((m, idx) => (
             m.role === "assistant" && m.text === "" ? (
@@ -1089,12 +1182,14 @@ export default function WidgetPage() {
             aria-label={lang === "de" ? "Nachricht" : "Message"}
           />
 
-          <button className="tt-btn" onClick={send} disabled={!canSend} aria-label="Send">
+          <button className="tt-btn" onClick={() => send()} disabled={!canSend} aria-label="Send">
             <svg viewBox="0 0 24 24" fill="none">
               <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         </div>
+        </>
+        )}
 
       {bookingMode && (
         <div className="tt-slots">

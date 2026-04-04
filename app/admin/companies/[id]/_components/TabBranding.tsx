@@ -99,6 +99,11 @@ export default function TabBranding(props: {
   const [primary, setPrimary] = useState(pick(branding?.brand_colors, ["primary"]) || pick(branding, ["primary"]) || "#111111");
   const [accent, setAccent] = useState(pick(branding?.brand_colors, ["accent"]) || pick(branding, ["accent"]) || "#111111");
   const [theme, setTheme] = useState<"light" | "dark">((branding?.widget_theme as "light" | "dark") || "light");
+  const [qualifierOpts, setQualifierOpts] = useState<string[]>(
+    Array.isArray(branding?.qualifier_options)
+      ? [...branding.qualifier_options, "", "", "", ""].slice(0, 4)
+      : ["", "", "", ""]
+  );
 
   async function uploadLogo(file: File) {
     if (!companyId) return;
@@ -125,7 +130,12 @@ export default function TabBranding(props: {
     if (!companyId) return;
     setSaving(true);
     try {
-      const b = { ...(data?.settings?.branding_json || {}), brand_colors: { primary, accent }, widget_theme: theme };
+      const b = {
+        ...(data?.settings?.branding_json || {}),
+        brand_colors: { primary, accent },
+        widget_theme: theme,
+        qualifier_options: qualifierOpts.map((s) => s.trim()).filter(Boolean).slice(0, 4),
+      };
       const { ok, json } = await fetchJson(`/api/admin/companies/${companyId}/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -201,6 +211,32 @@ export default function TabBranding(props: {
 
         <Card title="Widget Theme" subtitle="Choose the base appearance of the chat window.">
           <ThemeToggle value={theme} onChange={setTheme} />
+        </Card>
+
+        <Card title="Pre-chat Options" subtitle="Show up to 4 quick-pick buttons before the chat opens. Leave blank to disable.">
+          <div style={{ display: "grid", gap: 8 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <input
+                key={i}
+                type="text"
+                value={qualifierOpts[i] || ""}
+                onChange={(e) => setQualifierOpts((prev) => { const n = [...prev]; n[i] = e.target.value; return n; })}
+                placeholder={`Option ${i + 1} (optional)`}
+                maxLength={80}
+                style={{
+                  width: "100%",
+                  background: UI.surface2,
+                  border: `1px solid ${UI.border}`,
+                  borderRadius: 10,
+                  padding: "9px 12px",
+                  fontSize: 13.5,
+                  fontFamily: "var(--font-jakarta, ui-sans-serif)",
+                  color: UI.text,
+                  outline: "none",
+                }}
+              />
+            ))}
+          </div>
         </Card>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
