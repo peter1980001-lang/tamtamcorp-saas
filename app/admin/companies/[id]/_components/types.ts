@@ -100,6 +100,7 @@ export type BrandHints = { primary: string | null; accent: string | null; logo_u
 
 export type Tab =
   | "dashboard"
+  | "getting-started"
   | "branding"
   | "knowledge"
   | "leads"

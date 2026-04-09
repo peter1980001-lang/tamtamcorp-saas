@@ -22,6 +22,7 @@ import TabDomains from "./_components/TabDomains";
 import TabEmbed from "./_components/TabEmbed";
 import TabTestChat from "./_components/TabTestChat";
 import TabIntegrations from "./_components/TabIntegrations";
+import TabGettingStarted from "./_components/TabGettingStarted";
 
 const BASE_TABS: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
@@ -50,6 +51,7 @@ const OWNER_TABS: { key: Tab; label: string }[] = [
 
 const ALL_TABS: Tab[] = [
   "dashboard",
+  "getting-started",
   "branding",
   "knowledge",
   "leads",
@@ -62,7 +64,7 @@ const ALL_TABS: Tab[] = [
   "domains",
   "embed",
   "test-chat",
-"integrations",
+  "integrations",
 ];
 
 export default function CompanyDetailPage() {
@@ -75,20 +77,28 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [showGettingStarted, setShowGettingStarted] = useState(false);
 
   const myRole = data?.my_role ?? "admin";
   const isOwner = myRole === "owner";
 
   const visibleTabs = useMemo(() => {
-    // Insert test-chat next to Leads (so admins can always find it)
     const idx = BASE_TABS.findIndex((t) => t.key === "leads");
     const basePlusTest = [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...BASE_TABS.slice(idx)];
 
-    if (!isOwner) return basePlusTest;
+    const withOwner = isOwner
+      ? [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...OWNER_TABS, ...BASE_TABS.slice(idx)]
+      : basePlusTest;
 
-    // Owner management tools placed before Leads (after test-chat)
-    return [...BASE_TABS.slice(0, idx), ...SHARED_TOOL_TABS, ...OWNER_TABS, ...BASE_TABS.slice(idx)];
-  }, [isOwner]);
+    if (!showGettingStarted) return withOwner;
+
+    // Insert "Getting Started" as second tab (after Dashboard)
+    return [
+      withOwner[0],
+      { key: "getting-started" as Tab, label: "Getting Started" },
+      ...withOwner.slice(1),
+    ];
+  }, [isOwner, showGettingStarted]);
 
   const allowedTabsSet = useMemo(() => new Set(visibleTabs.map((t) => t.key)), [visibleTabs]);
 
@@ -130,6 +140,17 @@ export default function CompanyDetailPage() {
         return;
       }
       setData(json as DetailResponse);
+      // Fetch onboarding state to decide if Getting Started tab is visible
+      try {
+        const obRes = await fetch(`/api/onboarding/state?company_id=${id}`, { cache: "no-store" });
+        if (obRes.ok) {
+          const obJson = await obRes.json();
+          const dismissed = !!obJson?.dismissed_at;
+          setShowGettingStarted(!dismissed);
+        }
+      } catch {
+        // best-effort — don't block company load
+      }
     } catch (e: any) {
       setData(null);
       setLoadError(e?.message || "network_error");
@@ -245,6 +266,16 @@ export default function CompanyDetailPage() {
         ) : (
           <>
             {tab === "dashboard" && <TabDashboard companyId={id!} data={data} setToast={setToast} />}
+            {tab === "getting-started" && (
+              <TabGettingStarted
+                companyId={id!}
+                data={data}
+                setTabAndUrl={setTabAndUrl}
+                onDismiss={() => setShowGettingStarted(false)}
+                onAllComplete={() => setShowGettingStarted(false)}
+                setToast={setToast}
+              />
+            )}
             {tab === "branding" && <TabBranding companyId={id!} data={data} setData={setData} setToast={setToast} />}
             {tab === "knowledge" && <TabKnowledge companyId={id!} data={data} setData={setData} isOwner={isOwner} setToast={setToast} />}
             {tab === "leads" && <TabLeads companyId={id!} setToast={setToast} />}

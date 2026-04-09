@@ -91,3 +91,47 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     })),
   });
 }
+
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const company_id = String(id || "").trim();
+  if (!company_id) return NextResponse.json({ error: "missing_company_id" }, { status: 400 });
+
+  const auth = await requireCompanyAccess(company_id);
+  if (!auth.ok) return NextResponse.json({ error: "forbidden" }, { status: auth.status });
+
+  const callerRole = auth.ok ? (auth as any).role : null;
+  if (callerRole === "viewer") return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  let body: Record<string, any> = {};
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+  }
+
+  const { branding_patch } = body as { branding_patch?: Record<string, any> };
+  if (!branding_patch || typeof branding_patch !== "object" || Array.isArray(branding_patch)) {
+    return NextResponse.json({ error: "branding_patch_required" }, { status: 400 });
+  }
+
+  // Load existing branding_json, shallow-merge the patch
+  const { data: existing, error: selectErr } = await supabaseServer
+    .from("company_settings")
+    .select("branding_json")
+    .eq("company_id", company_id)
+    .maybeSingle();
+
+  if (selectErr) return NextResponse.json({ error: "db_settings_failed", details: selectErr.message }, { status: 500 });
+
+  const prev = (existing?.branding_json || {}) as Record<string, any>;
+  const next = { ...prev, ...branding_patch };
+
+  const { error: uErr } = await supabaseServer
+    .from("company_settings")
+    .upsert({ company_id, branding_json: next }, { onConflict: "company_id" });
+
+  if (uErr) return NextResponse.json({ error: "db_settings_failed", details: uErr.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true, branding_json: next });
+}

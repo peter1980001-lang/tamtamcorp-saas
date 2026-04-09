@@ -52,7 +52,23 @@ export default function LoginClient(props: { next?: string }) {
       return;
     }
 
-    router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
+    // Check if the wizard has been completed for this company
+    try {
+      const stateRes = await fetch(
+        `/api/onboarding/state?company_id=${encodeURIComponent(ensured.company_id)}`
+      );
+      if (stateRes.ok) {
+        const stateJson = await stateRes.json();
+        if (!stateJson?.wizard_done) {
+          router.push(`/onboarding?company_id=${ensured.company_id}`);
+          return;
+        }
+      }
+    } catch {
+      // fall through to default redirect
+    }
+
+    router.push(`/admin/companies/${ensured.company_id}`);
   }
 
   // If already logged in, finish onboarding (and go to next if provided)

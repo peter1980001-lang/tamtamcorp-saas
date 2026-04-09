@@ -77,7 +77,7 @@ export default function SignupPage() {
 
       // Confirmation OFF -> session exists -> onboard now
       const ensured = await ensureCompany(trimmedCompany);
-      router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
+      router.push(`/onboarding?company_id=${ensured.company_id}`);
     } catch (err: any) {
       setMsg(err?.message ?? "Signup failed.");
     } finally {

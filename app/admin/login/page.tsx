@@ -51,13 +51,27 @@ export default function AdminLoginPage() {
 
   async function redirectToFirstCompanyOrOnboard() {
     const companies = await fetchMyCompanies();
-    if (companies.length > 0) {
-      router.push(`/admin/companies/${companies[0].company_id}?tab=billing`);
-      return;
+    const company_id = companies.length > 0
+      ? companies[0].company_id
+      : (await ensureCompany()).company_id;
+
+    // Check if the wizard has been completed for this company
+    try {
+      const stateRes = await fetch(
+        `/api/onboarding/state?company_id=${encodeURIComponent(company_id)}`
+      );
+      if (stateRes.ok) {
+        const stateJson = await stateRes.json();
+        if (!stateJson?.wizard_done) {
+          router.push(`/onboarding?company_id=${company_id}`);
+          return;
+        }
+      }
+    } catch {
+      // fall through to default redirect
     }
 
-    const ensured = await ensureCompany();
-    router.push(`/admin/companies/${ensured.company_id}?tab=billing`);
+    router.push(`/admin/companies/${company_id}`);
   }
 
   async function onSubmit(e: React.FormEvent) {
