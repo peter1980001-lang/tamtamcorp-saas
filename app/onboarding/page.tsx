@@ -1,7 +1,7 @@
 // app/onboarding/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
@@ -43,6 +43,14 @@ function StepLabel({ current }: { current: WizardStep }) {
 }
 
 export default function OnboardingPage() {
+  return (
+    <Suspense fallback={<div style={{ maxWidth: 560, margin: "80px auto", padding: 24, textAlign: "center" }}>Loading…</div>}>
+      <OnboardingContent />
+    </Suspense>
+  );
+}
+
+function OnboardingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => supabaseBrowser(), []);
