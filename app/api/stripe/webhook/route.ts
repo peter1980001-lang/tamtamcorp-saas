@@ -132,6 +132,48 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_signature", details: err?.message }, { status: 400 });
   }
 
+  // Idempotency: skip if already processed. Stripe retries the same event on 5xx.
+  try {
+    const { data: prior } = await supabaseServer
+      .from("stripe_webhook_events")
+      .select("status")
+      .eq("id", event.id)
+      .maybeSingle();
+
+    if (prior?.status === "completed") {
+      return NextResponse.json({ received: true, idempotent: true });
+    }
+
+    await supabaseServer
+      .from("stripe_webhook_events")
+      .upsert(
+        {
+          id: event.id,
+          type: event.type,
+          project_source: "tamtam-bot",
+          status: "processing",
+          received_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+  } catch (err: any) {
+    return NextResponse.json({ error: "event_log_failed", details: err?.message }, { status: 500 });
+  }
+
+  const markCompleted = async () => {
+    await supabaseServer
+      .from("stripe_webhook_events")
+      .update({ status: "completed", processed_at: new Date().toISOString() })
+      .eq("id", event.id);
+  };
+
+  const markFailed = async (msg: string) => {
+    await supabaseServer
+      .from("stripe_webhook_events")
+      .update({ status: "failed", error_message: msg.slice(0, 1000) })
+      .eq("id", event.id);
+  };
+
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
@@ -176,6 +218,7 @@ export async function POST(req: Request) {
         await maybeStartBookingTrial(company_id, plan_key ?? null);
       }
 
+      await markCompleted();
       return NextResponse.json({ received: true });
     }
 
@@ -216,11 +259,14 @@ export async function POST(req: Request) {
         await maybeStartBookingTrial(company_id, plan_key ?? null);
       }
 
+      await markCompleted();
       return NextResponse.json({ received: true });
     }
 
+    await markCompleted();
     return NextResponse.json({ received: true });
   } catch (err: any) {
+    await markFailed(err?.message || "unknown_error");
     return NextResponse.json({ error: "webhook_handler_failed", details: err?.message }, { status: 500 });
   }
 }
