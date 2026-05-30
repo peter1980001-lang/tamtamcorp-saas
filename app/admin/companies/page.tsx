@@ -35,9 +35,9 @@ export default function AdminCompaniesPage() {
           style={{
             padding: "10px 14px",
             borderRadius: 10,
-            border: "1px solid #C8102E",
-            background: "#C8102E",
-            color: "#fff",
+            border: "1px solid #C9A96E",
+            background: "#C9A96E",
+            color: "#0A0A0A",
             fontWeight: 600,
             textDecoration: "none",
           }}
@@ -52,7 +52,7 @@ export default function AdminCompaniesPage() {
         <p>No companies yet.</p>
       ) : (
         <div style={{ marginTop: 16, border: "1px solid rgba(10,10,10,0.08)", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, background: "#F2EFEA", fontWeight: 600, fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(10,10,10,0.55)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, background: "#F5F2EC", fontWeight: 600, fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(10,10,10,0.55)" }}>
             <div>Name</div>
             <div>Status</div>
             <div>Created</div>

@@ -4,10 +4,10 @@ import React from "react";
 import type { Tab } from "./types";
 
 export const UI = {
-  // Layout — warm white surfaces (matches seedance-studio + website voice)
+  // Layout — corporate boardroom-clean light surface
   bg: "#FAFAF7",
   surface: "#FFFFFF",
-  surface2: "#F2EFEA",
+  surface2: "#F5F2EC",
 
   // Borders — warm low-contrast
   border: "rgba(10, 10, 10, 0.08)",
@@ -18,27 +18,27 @@ export const UI = {
   text2: "rgba(10, 10, 10, 0.55)",
   text3: "rgba(10, 10, 10, 0.35)",
 
-  // Brand — racing red (operational surface)
-  accent: "#C8102E",
-  accentHover: "#8E0E22",
-  accentSoft: "rgba(200, 16, 46, 0.06)",
-  accentText: "#FFFFFF",
+  // Brand — iris gold (same accent the website uses, applied to light surface)
+  accent: "#C9A96E",
+  accentHover: "#A88A58",
+  accentSoft: "rgba(201, 169, 110, 0.10)",
+  accentText: "#0A0A0A",
 
   // States
-  danger: "#EF4444",
-  dangerSoft: "#FEF2F2",
+  danger: "#C8102E",
+  dangerSoft: "rgba(200, 16, 46, 0.06)",
   success: "#16a34a",
   successSoft: "rgba(22, 163, 74, 0.08)",
-  warning: "#F59E0B",
+  warning: "#D97706",
 
   // Elevation — softer, warmer
   shadow: "0 1px 2px rgba(10,10,10,0.04), 0 4px 12px rgba(10,10,10,0.03)",
   shadowMd: "0 4px 6px rgba(10,10,10,0.04), 0 10px 24px rgba(10,10,10,0.05)",
 
   // Shape
-  radius: 10,
-  radiusLg: 14,
-  radiusXl: 18,
+  radius: 8,
+  radiusLg: 12,
+  radiusXl: 16,
 
   // Fonts
   fontBody: "var(--font-geist), system-ui, sans-serif",

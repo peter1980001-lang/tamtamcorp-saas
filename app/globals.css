@@ -1,17 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  /* === Refined palette: warm white + racing red (matches seedance-studio) === */
+  /* === Corporate Tam Tam: warm white surface + iris-gold accent ===
+   * Light boardroom-clean surface for the operational console.
+   * Same gold the website uses on dark — keeps the brand voice consistent
+   * across light + dark contexts. Studio uses red; admin does not. */
   --bg:           #FAFAF7;
   --bg-pure:      #FFFFFF;
-  --surface:      #F2EFEA;
-  --surface-2:    #E9E5DE;
+  --surface:      #F5F2EC;
+  --surface-2:    #ECE8DF;
 
-  --red:          #C8102E;
-  --red-light:    #E63946;
-  --red-dark:     #8E0E22;
-  --red-glow:     rgba(200, 16, 46, 0.18);
-  --red-dim:      rgba(200, 16, 46, 0.06);
+  --iris:         #C9A96E;
+  --iris-light:   #D4B87A;
+  --iris-deep:    #A88A58;
+  --iris-glow:    rgba(201, 169, 110, 0.20);
+  --iris-dim:     rgba(201, 169, 110, 0.08);
 
   --text:         #0A0A0A;
   --text-2:       rgba(10, 10, 10, 0.55);
@@ -53,7 +56,7 @@ body {
   font-family: var(--font-display);
   font-style: italic;
   font-weight: 400;
-  color: var(--red);
+  color: var(--iris-deep);
 }
 
 .eyebrow {
