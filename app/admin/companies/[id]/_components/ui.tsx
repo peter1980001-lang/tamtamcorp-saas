@@ -419,52 +419,73 @@ export function TabsBar({
         </span>
       </div>
 
-      {/* Desktop: pill tabs */}
-      <div
+      {/* Desktop: vertical sidebar list — corporate restraint, scales to N tabs */}
+      <nav
         className="hidden md:block"
+        aria-label="Section navigation"
         style={{
           display: undefined,
+          padding: 6,
+          border: `1px solid ${UI.border}`,
+          background: UI.surface,
+          borderRadius: UI.radiusLg,
+          boxShadow: UI.shadow,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 4,
-            padding: 4,
-            border: `1px solid ${UI.border}`,
-            background: UI.surface,
-            borderRadius: UI.radiusLg,
-            boxShadow: UI.shadow,
-          }}
-        >
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 1 }}>
           {tabs.map((t) => {
             const isActive = active === t.key;
             return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => onChange(t.key)}
-                title={t.hint || ""}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: UI.radius,
-                  border: "none",
-                  background: isActive ? UI.accent : "transparent",
-                  color: isActive ? UI.accentText : UI.text2,
-                  fontSize: 13,
-                  fontWeight: isActive ? 600 : 500,
-                  cursor: "pointer",
-                  transition: "background 150ms, color 150ms",
-                  fontFamily: UI.fontBody,
-                }}
-              >
-                {t.label}
-              </button>
+              <li key={t.key}>
+                <button
+                  type="button"
+                  onClick={() => onChange(t.key)}
+                  title={t.hint || ""}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "9px 12px 9px 14px",
+                    borderRadius: UI.radius,
+                    border: "none",
+                    background: isActive ? UI.accentSoft : "transparent",
+                    color: isActive ? UI.text : UI.text2,
+                    fontSize: 13,
+                    fontWeight: isActive ? 600 : 500,
+                    cursor: "pointer",
+                    transition: "background 150ms, color 150ms",
+                    fontFamily: UI.fontBody,
+                    textAlign: "left",
+                    position: "relative",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) e.currentTarget.style.background = UI.borderSoft;
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  {isActive && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 6,
+                        bottom: 6,
+                        width: 3,
+                        background: UI.accent,
+                        borderRadius: 2,
+                      }}
+                    />
+                  )}
+                  {t.label}
+                </button>
+              </li>
             );
           })}
-        </div>
-      </div>
+        </ul>
+      </nav>
     </div>
   );
 }

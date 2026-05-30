@@ -250,8 +250,10 @@ export default function CompanyDetailPage() {
           </div>
         </div>
 
+        <div className="md:grid md:gap-6 md:items-start" style={{ gridTemplateColumns: "220px minmax(0, 1fr)" }}>
         <TabsBar tabs={visibleTabs} active={tab} onChange={setTabAndUrl} />
 
+        <div className="min-w-0">
         {loadError ? (
           <div style={{ background: "#fff", border: `1px solid ${UI.border}`, borderRadius: UI.radiusLg, boxShadow: UI.shadow, padding: 16 }}>
             <div style={{ fontWeight: 1000, marginBottom: 6 }}>Load failed</div>
@@ -295,6 +297,8 @@ export default function CompanyDetailPage() {
             {isOwner && tab === "embed" && <TabEmbed companyId={id!} data={data} setToast={setToast} />}
           </>
         )}
+        </div>
+        </div>
 
         {toast && (
           <div
