@@ -52,11 +52,15 @@ export async function POST(
       return NextResponse.json({ error: upErr.message }, { status: 500 });
     }
 
-    const { data: pub } = supabaseServer.storage
+    const { data: signed, error: signErr } = await supabaseServer.storage
       .from("company-assets")
-      .getPublicUrl(path);
+      .createSignedUrl(path, 31536000);
 
-    const logoUrl = pub?.publicUrl || "";
+    if (signErr) {
+      return NextResponse.json({ error: signErr.message }, { status: 500 });
+    }
+
+    const logoUrl = signed?.signedUrl || "";
 
     const { data: existing, error: sErr } = await supabaseServer
       .from("company_settings")
