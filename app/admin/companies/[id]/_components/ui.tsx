@@ -4,41 +4,45 @@ import React from "react";
 import type { Tab } from "./types";
 
 export const UI = {
-  // Layout
-  bg: "#F8FAFC",
+  // Layout — warm white surfaces (matches seedance-studio + website voice)
+  bg: "#FAFAF7",
   surface: "#FFFFFF",
-  surface2: "#F1F5F9",
+  surface2: "#F2EFEA",
 
-  // Borders
-  border: "#E2E8F0",
-  borderSoft: "#F1F5F9",
+  // Borders — warm low-contrast
+  border: "rgba(10, 10, 10, 0.08)",
+  borderSoft: "rgba(10, 10, 10, 0.04)",
 
   // Text
-  text: "#0F172A",
-  text2: "#475569",
-  text3: "#94A3B8",
+  text: "#0A0A0A",
+  text2: "rgba(10, 10, 10, 0.55)",
+  text3: "rgba(10, 10, 10, 0.35)",
 
-  // Brand
-  accent: "#0F172A",
-  accentHover: "#1E293B",
-  accentSoft: "#F1F5F9",
+  // Brand — racing red (operational surface)
+  accent: "#C8102E",
+  accentHover: "#8E0E22",
+  accentSoft: "rgba(200, 16, 46, 0.06)",
   accentText: "#FFFFFF",
 
   // States
   danger: "#EF4444",
   dangerSoft: "#FEF2F2",
-  success: "#22C55E",
-  successSoft: "#F0FDF4",
+  success: "#16a34a",
+  successSoft: "rgba(22, 163, 74, 0.08)",
   warning: "#F59E0B",
 
-  // Elevation
-  shadow: "0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.04)",
-  shadowMd: "0 4px 6px rgba(0,0,0,0.04), 0 10px 24px rgba(0,0,0,0.06)",
+  // Elevation — softer, warmer
+  shadow: "0 1px 2px rgba(10,10,10,0.04), 0 4px 12px rgba(10,10,10,0.03)",
+  shadowMd: "0 4px 6px rgba(10,10,10,0.04), 0 10px 24px rgba(10,10,10,0.05)",
 
   // Shape
   radius: 10,
   radiusLg: 14,
   radiusXl: 18,
+
+  // Fonts
+  fontBody: "var(--font-geist), system-ui, sans-serif",
+  fontDisplay: "var(--font-bodoni-moda), Georgia, serif",
 };
 
 export function Badge({
@@ -51,9 +55,9 @@ export function Badge({
   const t = tone || "neutral";
   const map: Record<string, React.CSSProperties> = {
     neutral: { background: UI.surface2, border: `1px solid ${UI.border}`, color: UI.text2 },
-    success: { background: UI.successSoft, border: "1px solid #BBF7D0", color: "#15803D" },
+    success: { background: UI.successSoft, border: `1px solid ${UI.success}33`,    color: UI.success },
     danger:  { background: UI.dangerSoft,  border: "1px solid #FECACA", color: "#B91C1C" },
-    info:    { background: "#EFF6FF",       border: "1px solid #BFDBFE", color: "#1D4ED8" },
+    info:    { background: UI.accentSoft,   border: `1px solid ${UI.accent}33`,    color: UI.accent },
     warning: { background: "#FFFBEB",       border: "1px solid #FDE68A", color: "#92400E" },
   };
   return (
@@ -66,7 +70,7 @@ export function Badge({
         fontSize: 12,
         fontWeight: 600,
         letterSpacing: "0.01em",
-        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        fontFamily: UI.fontBody,
         ...map[t],
       }}
     >
@@ -92,7 +96,7 @@ export function Card(props: {
         border: `1px solid ${UI.border}`,
         borderRadius: UI.radiusXl,
         boxShadow: UI.shadow,
-        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        fontFamily: UI.fontBody,
       }}
     >
       {props.title || props.right ? (
@@ -160,7 +164,7 @@ export function Button(props: {
         alignItems: "center",
         gap: 6,
         fontWeight: 600,
-        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        fontFamily: UI.fontBody,
         cursor: props.disabled ? "not-allowed" : "pointer",
         opacity: props.disabled ? 0.55 : 1,
         transition: "opacity 120ms, background 120ms",
@@ -193,7 +197,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { lab
           background: UI.surface,
           fontSize: 13,
           color: UI.text,
-          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+          fontFamily: UI.fontBody,
           outline: "none",
           transition: "border-color 150ms",
           boxSizing: "border-box",
@@ -231,7 +235,7 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
           background: UI.surface,
           fontSize: 13,
           color: UI.text,
-          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+          fontFamily: UI.fontBody,
           outline: "none",
           lineHeight: 1.6,
           resize: "vertical",
@@ -286,7 +290,7 @@ export function Modal(props: {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(15,23,42,0.4)",
+        background: "rgba(10,10,10,0.4)",
         display: "grid",
         placeItems: "center",
         padding: 20,
@@ -303,7 +307,7 @@ export function Modal(props: {
           borderRadius: UI.radiusXl,
           boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
           overflow: "hidden",
-          fontFamily: "var(--font-jakarta, ui-sans-serif)",
+          fontFamily: UI.fontBody,
         }}
       >
         <div
@@ -348,7 +352,7 @@ export function TabsBar({
         paddingTop: 12,
         paddingBottom: 4,
         background: UI.bg,
-        fontFamily: "var(--font-jakarta, ui-sans-serif)",
+        fontFamily: UI.fontBody,
       }}
     >
       <div
@@ -381,7 +385,7 @@ export function TabsBar({
                 fontWeight: isActive ? 600 : 500,
                 cursor: "pointer",
                 transition: "background 150ms, color 150ms",
-                fontFamily: "var(--font-jakarta, ui-sans-serif)",
+                fontFamily: UI.fontBody,
               }}
             >
               {t.label}

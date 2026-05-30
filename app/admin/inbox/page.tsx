@@ -31,7 +31,7 @@ function Card(props: { title: string; children: React.ReactNode; right?: React.R
   return (
     <div
       style={{
-        border: "1px solid #eee",
+        border: "1px solid rgba(10,10,10,0.06)",
         borderRadius: 16,
         padding: 16,
         background: "#fff",
@@ -54,8 +54,8 @@ function Chip({ text }: { text: string }) {
         display: "inline-block",
         padding: "6px 10px",
         borderRadius: 999,
-        border: "1px solid #eee",
-        background: "#fafafa",
+        border: "1px solid rgba(10,10,10,0.06)",
+        background: "#F2EFEA",
         fontSize: 12,
         marginRight: 8,
         marginBottom: 8,
@@ -145,7 +145,7 @@ export default function GlobalInboxPage() {
   }, [leads]);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f6f7f9", fontFamily: "system-ui" }}>
+    <div style={{ minHeight: "100vh", background: "#FAFAF7", fontFamily: "var(--font-geist), system-ui, sans-serif" }}>
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
           <div>
@@ -166,7 +166,7 @@ export default function GlobalInboxPage() {
             style={{
               padding: "10px 12px",
               borderRadius: 12,
-              border: "1px solid #ddd",
+              border: "1px solid rgba(10,10,10,0.08)",
               background: "#fff",
               cursor: "pointer",
               whiteSpace: "nowrap",
@@ -187,7 +187,7 @@ export default function GlobalInboxPage() {
             style={{
               padding: "10px 12px",
               borderRadius: 12,
-              border: "1px solid #ddd",
+              border: "1px solid rgba(10,10,10,0.08)",
               background: "#fff",
               width: 520,
               maxWidth: "100%",
@@ -197,7 +197,7 @@ export default function GlobalInboxPage() {
           <select
             value={band}
             onChange={(e) => setBand(e.target.value as any)}
-            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(10,10,10,0.08)", background: "#fff" }}
           >
             <option value="all">All bands</option>
             <option value="hot">Hot</option>
@@ -208,7 +208,7 @@ export default function GlobalInboxPage() {
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value as any)}
-            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(10,10,10,0.08)", background: "#fff" }}
           >
             <option value="all">All status</option>
             <option value="new">New</option>
@@ -219,7 +219,7 @@ export default function GlobalInboxPage() {
           <select
             value={String(limit)}
             onChange={(e) => setLimit(Number(e.target.value))}
-            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff" }}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(10,10,10,0.08)", background: "#fff" }}
           >
             <option value="50">Limit 50</option>
             <option value="100">Limit 100</option>
@@ -229,7 +229,7 @@ export default function GlobalInboxPage() {
 
           <button
             onClick={load}
-            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}
+            style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(10,10,10,0.08)", background: "#fff", cursor: "pointer" }}
           >
             Apply
           </button>
@@ -289,10 +289,10 @@ export default function GlobalInboxPage() {
                           display: "inline-block",
                           padding: "10px 12px",
                           borderRadius: 12,
-                          border: "1px solid #ddd",
+                          border: "1px solid rgba(10,10,10,0.08)",
                           background: "#fff",
                           textDecoration: "none",
-                          color: "#111",
+                          color: "#0A0A0A",
                         }}
                       >
                         Open conversation
@@ -304,10 +304,10 @@ export default function GlobalInboxPage() {
                           display: "inline-block",
                           padding: "10px 12px",
                           borderRadius: 12,
-                          border: "1px solid #ddd",
+                          border: "1px solid rgba(10,10,10,0.08)",
                           background: "#fff",
                           textDecoration: "none",
-                          color: "#111",
+                          color: "#0A0A0A",
                         }}
                       >
                         Company leads
@@ -327,7 +327,7 @@ export default function GlobalInboxPage() {
               bottom: 18,
               left: "50%",
               transform: "translateX(-50%)",
-              background: "#111",
+              background: "#C8102E",
               color: "#fff",
               padding: "10px 14px",
               borderRadius: 999,
