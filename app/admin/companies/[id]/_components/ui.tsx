@@ -343,6 +343,8 @@ export function TabsBar({
   active: Tab;
   onChange: (next: Tab) => void;
 }) {
+  const activeTab = tabs.find((t) => t.key === active);
+
   return (
     <div
       style={{
@@ -355,43 +357,113 @@ export function TabsBar({
         fontFamily: UI.fontBody,
       }}
     >
+      {/* Mobile: native select — calm, accessible, scales to any tab count */}
+      <div className="md:hidden" style={{ position: "relative" }}>
+        <label
+          style={{
+            position: "absolute",
+            top: 10,
+            left: 14,
+            fontSize: 10,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: UI.text3,
+            fontWeight: 600,
+            pointerEvents: "none",
+          }}
+        >
+          Section
+        </label>
+        <select
+          value={active}
+          onChange={(e) => onChange(e.target.value as Tab)}
+          style={{
+            width: "100%",
+            padding: "26px 40px 12px 14px",
+            border: `1px solid ${UI.border}`,
+            background: UI.surface,
+            borderRadius: UI.radiusLg,
+            boxShadow: UI.shadow,
+            fontSize: 15,
+            fontWeight: 600,
+            color: UI.text,
+            fontFamily: UI.fontBody,
+            appearance: "none",
+            WebkitAppearance: "none",
+            MozAppearance: "none",
+            cursor: "pointer",
+            outline: "none",
+          }}
+          aria-label={activeTab ? `Section: ${activeTab.label}` : "Section"}
+        >
+          {tabs.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: "50%",
+            right: 14,
+            transform: "translateY(-50%)",
+            color: UI.accent,
+            pointerEvents: "none",
+            fontSize: 12,
+            lineHeight: 1,
+          }}
+        >
+          ▼
+        </span>
+      </div>
+
+      {/* Desktop: pill tabs */}
       <div
+        className="hidden md:block"
         style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 4,
-          padding: 4,
-          border: `1px solid ${UI.border}`,
-          background: UI.surface,
-          borderRadius: UI.radiusLg,
-          boxShadow: UI.shadow,
+          display: undefined,
         }}
       >
-        {tabs.map((t) => {
-          const isActive = active === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => onChange(t.key)}
-              title={t.hint || ""}
-              style={{
-                padding: "8px 14px",
-                borderRadius: UI.radius,
-                border: "none",
-                background: isActive ? UI.accent : "transparent",
-                color: isActive ? UI.accentText : UI.text2,
-                fontSize: 13,
-                fontWeight: isActive ? 600 : 500,
-                cursor: "pointer",
-                transition: "background 150ms, color 150ms",
-                fontFamily: UI.fontBody,
-              }}
-            >
-              {t.label}
-            </button>
-          );
-        })}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 4,
+            padding: 4,
+            border: `1px solid ${UI.border}`,
+            background: UI.surface,
+            borderRadius: UI.radiusLg,
+            boxShadow: UI.shadow,
+          }}
+        >
+          {tabs.map((t) => {
+            const isActive = active === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => onChange(t.key)}
+                title={t.hint || ""}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: UI.radius,
+                  border: "none",
+                  background: isActive ? UI.accent : "transparent",
+                  color: isActive ? UI.accentText : UI.text2,
+                  fontSize: 13,
+                  fontWeight: isActive ? 600 : 500,
+                  cursor: "pointer",
+                  transition: "background 150ms, color 150ms",
+                  fontFamily: UI.fontBody,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
