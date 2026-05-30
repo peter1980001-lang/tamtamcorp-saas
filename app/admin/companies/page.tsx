@@ -27,7 +27,7 @@ export default function AdminCompaniesPage() {
   }, []);
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ padding: 24, fontFamily: "var(--font-geist), system-ui, sans-serif", maxWidth: 1000, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 28 }}>Companies</h1>
         <Link
@@ -35,9 +35,10 @@ export default function AdminCompaniesPage() {
           style={{
             padding: "10px 14px",
             borderRadius: 10,
-            border: "1px solid #111",
-            background: "#111",
+            border: "1px solid #C8102E",
+            background: "#C8102E",
             color: "#fff",
+            fontWeight: 600,
             textDecoration: "none",
           }}
         >
@@ -50,8 +51,8 @@ export default function AdminCompaniesPage() {
       ) : companies.length === 0 ? (
         <p>No companies yet.</p>
       ) : (
-        <div style={{ marginTop: 16, border: "1px solid #eee", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, background: "#fafafa", fontWeight: 600 }}>
+        <div style={{ marginTop: 16, border: "1px solid rgba(10,10,10,0.08)", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, background: "#F2EFEA", fontWeight: 600, fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(10,10,10,0.55)" }}>
             <div>Name</div>
             <div>Status</div>
             <div>Created</div>
@@ -59,7 +60,7 @@ export default function AdminCompaniesPage() {
           </div>
 
           {companies.map((c) => (
-            <div key={c.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, borderTop: "1px solid #eee" }}>
+            <div key={c.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 120px", padding: 12, borderTop: "1px solid rgba(10,10,10,0.06)" }}>
               <div>{c.name}</div>
               <div>{c.status}</div>
               <div>{new Date(c.created_at).toLocaleString()}</div>
