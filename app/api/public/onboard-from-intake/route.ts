@@ -48,11 +48,14 @@ export async function POST(req: Request) {
   const intake_submission_id   = body?.intake_submission_id || null;
 
   // 1) Create company
+  // NOTE: company_status enum does not include 'trial' — trial state is
+  // tracked in company_billing.status='trialing' instead. Companies start
+  // 'active' and rely on the billing check to gate paid features.
   const { data: company, error: cErr } = await supabaseServer
     .from("companies")
     .insert({
       name:   business_name,
-      status: "trial",
+      status: "active",
     } as any)
     .select("id, name, status, created_at")
     .single();
