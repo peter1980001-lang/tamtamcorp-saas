@@ -180,7 +180,83 @@ export async function POST(req: Request) {
       .eq("project_source", PROJECT);
   };
 
+  /**
+   * Bridge tamtam-bot subscriptions -> seedance-studio video credits.
+   *
+   * On every successful invoice (first + recurring monthly), look up the
+   * plan's monthly credit allowance from billing_plans.entitlements_json
+   * and grant it via the shared add_video_credits RPC. Logs to
+   * credit_transactions with type='allocation' for the audit trail
+   * surfaced in /profile.
+   *
+   * To configure per plan, set billing_plans.entitlements_json with
+   *   { "video_credits_monthly": <int> }
+   * If the value is 0 or unset, no credits are granted (silent skip).
+   */
+  async function grantMonthlyCreditsFromInvoice(invoice: Stripe.Invoice): Promise<{ credits: number; reason?: string }> {
+    const subRef = (invoice as any).subscription;
+    const subId  = typeof subRef === "string" ? subRef : subRef?.id;
+    if (!subId) return { credits: 0, reason: "no_subscription" };
+
+    const sub = await stripe.subscriptions.retrieve(subId);
+    const company_id = await findCompanyIdForSubscription(sub);
+    if (!company_id) return { credits: 0, reason: "company_id_not_resolved" };
+
+    const priceId = sub.items.data?.[0]?.price?.id ?? null;
+    if (!priceId) return { credits: 0, reason: "no_price" };
+
+    const { data: plan } = await supabaseServer
+      .from("billing_plans")
+      .select("plan_key, entitlements_json")
+      .eq("stripe_price_id", priceId)
+      .maybeSingle();
+
+    const ent = (plan as any)?.entitlements_json ?? {};
+    const monthly = Number(ent?.video_credits_monthly ?? 0);
+    if (!Number.isFinite(monthly) || monthly <= 0) {
+      return { credits: 0, reason: "no_entitlement" };
+    }
+
+    // ensure row exists
+    await supabaseServer
+      .from("video_credits")
+      .upsert({ company_id, balance: 0 } as any, { onConflict: "company_id", ignoreDuplicates: true });
+
+    const { data: newBalance, error: rpcErr } = await supabaseServer.rpc("add_video_credits", {
+      p_company_id: company_id,
+      p_amount: monthly,
+    });
+    if (rpcErr) throw new Error(`add_video_credits_failed: ${rpcErr.message}`);
+
+    const paymentIntent = typeof (invoice as any).payment_intent === "string"
+      ? (invoice as any).payment_intent
+      : null;
+
+    await supabaseServer.from("credit_transactions").insert({
+      company_id,
+      type: "allocation",
+      amount: monthly,
+      balance_after: (newBalance as number) ?? 0,
+      description: `Monthly allocation: plan ${(plan as any)?.plan_key ?? "?"} (invoice ${invoice.id})`,
+      stripe_payment_intent_id: paymentIntent,
+    } as any);
+
+    return { credits: monthly };
+  }
+
   try {
+    if (event.type === "invoice.payment_succeeded") {
+      const invoice = event.data.object as Stripe.Invoice;
+      try {
+        const r = await grantMonthlyCreditsFromInvoice(invoice);
+        await markCompleted();
+        return NextResponse.json({ received: true, credits_granted: r.credits, ...(r.reason ? { skipped: r.reason } : {}) });
+      } catch (err: any) {
+        await markFailed(err?.message || "credit_allocation_failed");
+        return NextResponse.json({ error: "credit_allocation_failed", details: err?.message }, { status: 500 });
+      }
+    }
+
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
 
