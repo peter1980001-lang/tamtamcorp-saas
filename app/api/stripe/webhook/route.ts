@@ -132,12 +132,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_signature", details: err?.message }, { status: 400 });
   }
 
-  // Idempotency: skip if already processed. Stripe retries the same event on 5xx.
+  // Idempotency: skip if THIS project has already processed this event.
+  // Key is (id, project_source) — same Stripe event id can legitimately be
+  // processed by multiple projects (e.g. tamtam-bot + seedance-studio).
+  const PROJECT = "tamtam-bot";
   try {
     const { data: prior } = await supabaseServer
       .from("stripe_webhook_events")
       .select("status")
       .eq("id", event.id)
+      .eq("project_source", PROJECT)
       .maybeSingle();
 
     if (prior?.status === "completed") {
@@ -150,11 +154,11 @@ export async function POST(req: Request) {
         {
           id: event.id,
           type: event.type,
-          project_source: "tamtam-bot",
+          project_source: PROJECT,
           status: "processing",
           received_at: new Date().toISOString(),
         },
-        { onConflict: "id" }
+        { onConflict: "id,project_source" }
       );
   } catch (err: any) {
     return NextResponse.json({ error: "event_log_failed", details: err?.message }, { status: 500 });
@@ -164,14 +168,16 @@ export async function POST(req: Request) {
     await supabaseServer
       .from("stripe_webhook_events")
       .update({ status: "completed", processed_at: new Date().toISOString() })
-      .eq("id", event.id);
+      .eq("id", event.id)
+      .eq("project_source", PROJECT);
   };
 
   const markFailed = async (msg: string) => {
     await supabaseServer
       .from("stripe_webhook_events")
       .update({ status: "failed", error_message: msg.slice(0, 1000) })
-      .eq("id", event.id);
+      .eq("id", event.id)
+      .eq("project_source", PROJECT);
   };
 
   try {
