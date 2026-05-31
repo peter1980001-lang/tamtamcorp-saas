@@ -736,6 +736,76 @@ export async function POST(req: Request) {
   }
 
   /**
+   * NEW MODE: PDF ingest.
+   *
+   * Call with either:
+   *   { company_id, pdf_url: "https://...pdf", title?: string }
+   *   { company_id, pdf_base64: "<base64>", title?: string }
+   *
+   * Extracts text via pdf-parse, chunks it like manual text, embeds, inserts.
+   */
+  if (body?.pdf_url || body?.pdf_base64) {
+    const pdfTitle = String(body?.title || "PDF Document").trim();
+    try {
+      let pdfBuffer: Buffer;
+
+      if (body.pdf_url) {
+        const u = String(body.pdf_url).trim();
+        if (!isUrl(u)) {
+          return NextResponse.json({ error: "invalid_pdf_url" }, { status: 400 });
+        }
+        const res = await fetch(u);
+        if (!res.ok) {
+          return NextResponse.json({ error: "pdf_fetch_failed", details: `HTTP ${res.status}` }, { status: 502 });
+        }
+        const ab = await res.arrayBuffer();
+        pdfBuffer = Buffer.from(ab);
+      } else {
+        try {
+          pdfBuffer = Buffer.from(String(body.pdf_base64).replace(/^data:.*;base64,/, ""), "base64");
+        } catch {
+          return NextResponse.json({ error: "invalid_pdf_base64" }, { status: 400 });
+        }
+      }
+
+      if (pdfBuffer.byteLength < 100) {
+        return NextResponse.json({ error: "pdf_too_small" }, { status: 400 });
+      }
+      if (pdfBuffer.byteLength > 20 * 1024 * 1024) {
+        return NextResponse.json({ error: "pdf_too_large", details: "max 20 MB" }, { status: 413 });
+      }
+
+      // pdf-parse import is dynamic because it does some work at module-load
+      // time that breaks Next.js edge bundling otherwise.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mod: any = await import("pdf-parse");
+      const pdfParse: (buf: Buffer | ArrayBuffer | Uint8Array) => Promise<{ text: string; numpages: number }> =
+        mod.default ?? mod;
+
+      const parsed = await pdfParse(pdfBuffer);
+      const text = cleanText(parsed.text || "");
+
+      if (!text || text.length < 30) {
+        return NextResponse.json({ error: "pdf_no_text", details: "Extracted text is too short. Is this a scanned PDF without OCR?" }, { status: 422 });
+      }
+
+      const r = await embedAndInsert(company_id, pdfTitle, text);
+
+      return NextResponse.json({
+        ok:         true,
+        mode:       "pdf",
+        company_id,
+        chunks:     r.chunks,
+        pages:      parsed.numpages,
+        text_chars: text.length,
+        title:      pdfTitle,
+      });
+    } catch (e: any) {
+      return NextResponse.json({ error: "pdf_ingest_failed", details: e?.message || "unknown" }, { status: 500 });
+    }
+  }
+
+  /**
    * Existing mode: structured crawler JSON
    */
   if (body?.crawler_data) {
